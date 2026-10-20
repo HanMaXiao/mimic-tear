@@ -211,6 +211,8 @@ export class ProjectService {
   async getOverview() {
     const snapshot = await this.snapshot();
     const inbox = await this.collectInbox(snapshot);
+    const patrolConfig = await this.getPatrolConfig();
+    const findings = this.patrol ? await this.patrol.list() : [];
     return {
       generatedAt: Date.now(),
       kpi: buildKpi(snapshot.cards, inbox),
@@ -220,6 +222,14 @@ export class ProjectService {
       attention: inbox.filter((item) => item.severity !== 'low' && !item.acknowledged),
       internalProjectCount: snapshot.internalProjectCount,
       dataWarning: snapshot.dataWarning,
+      // Whether the boss is on duty, and when it last reported.
+      duty: {
+        lastRunAt: patrolConfig.lastRunAt ?? null,
+        intervalMinutes: patrolConfig.intervalMinutes,
+        autoDispatch: patrolConfig.autoDispatch,
+        findings: findings.length,
+        openFindings: findings.filter((finding) => !finding.acknowledged).length,
+      },
     };
   }
 

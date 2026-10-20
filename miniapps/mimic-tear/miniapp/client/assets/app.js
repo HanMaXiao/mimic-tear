@@ -257,6 +257,7 @@ function renderAttention(overview) {
   const items = overview?.attention ?? [];
 
   el('attention-count').textContent = items.length ? `${items.length} 项` : '';
+  renderDutyStatus(overview?.duty);
 
   if (state.error && !items.length) {
     list.innerHTML = '<div class="state state--error">数据读取失败，请点击右上角刷新重试。</div>';
@@ -267,6 +268,24 @@ function renderAttention(overview) {
     return;
   }
   list.innerHTML = items.map(attentionItemHtml).join('');
+}
+
+/**
+ * Show whether the boss is on duty.
+ *
+ * The boss runs on its own schedule, so the board has to make its state visible: a stale
+ * "last patrol" is the difference between "nothing is wrong" and "nobody is watching".
+ */
+function renderDutyStatus(duty) {
+  const node = el('duty-status');
+  if (!duty) {
+    node.textContent = '';
+    return;
+  }
+  const since = duty.lastRunAt ? relativeTime(duty.lastRunAt) : '尚未巡检';
+  const open = duty.openFindings ?? 0;
+  node.textContent = `· 大哥值班中 · 上次巡检 ${since}`
+    + (open > 0 ? ` · ${open} 条结论待你过目` : '');
 }
 
 function projectRowHtml(project) {

@@ -102,6 +102,12 @@ test('client-contract', async (t) => {
     assert.match(css, /\.view\s*\{[^}]*min-width:\s*0/, '视图需要 min-width: 0 才能收缩');
   });
 
+  await t.test('看板显示大哥值班状态', () => {
+    assert.ok(html.includes('id="duty-status"'), '缺少值班状态位');
+    assert.ok(app.includes('function renderDutyStatus'), '缺少 renderDutyStatus');
+    assert.ok(app.includes('大哥值班中'), '缺少值班文案');
+  });
+
   await t.test('主动巡检：界面有开关、有立即巡检、API 齐全', () => {
     assert.ok(html.includes('id="patrol-enabled"'), '缺少巡检开关');
     assert.ok(html.includes('id="patrol-autodispatch"'), '缺少自动派工开关');

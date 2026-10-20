@@ -34,6 +34,7 @@ export class PatrolStore {
     this.dataDir = dataDir;
     this.findingsPath = join(dataDir, 'patrol.json');
     this.configPath = join(dataDir, 'patrol-config.json');
+    this.answeredPath = join(dataDir, 'patrol-answered.json');
   }
 
   /** @returns {Promise<PatrolFinding[]>} */
@@ -75,6 +76,42 @@ export class PatrolStore {
       await this.save(findings);
     }
     return Boolean(target);
+  }
+
+  /**
+   * Questions the boss already answered on the user's behalf.
+   *
+   * The runtime does not always flip a questionnaire's status when the answer is delivered as
+   * a message, so the board needs its own record to avoid asking the same question twice.
+   *
+   * @returns {Promise<{ requestId: string, sessionId: string, answeredAt: number, answer: string, rationale: string }[]>}
+   */
+  async listAnswered() {
+    const value = await readJson(this.answeredPath, []);
+    return Array.isArray(value) ? value : [];
+  }
+
+  /**
+   * @param {{ requestId: string, sessionId: string, answer: string, rationale?: string }} entry
+   */
+  async markAnswered(entry) {
+    const answered = await this.listAnswered();
+    if (answered.some((item) => item.requestId === entry.requestId)) return answered;
+    answered.unshift({
+      requestId: entry.requestId,
+      sessionId: entry.sessionId,
+      answeredAt: Date.now(),
+      answer: entry.answer ?? '',
+      rationale: entry.rationale ?? '',
+    });
+    await writeJson(this.answeredPath, answered.slice(0, 200));
+    return answered;
+  }
+
+  /** @param {string} requestId */
+  async isAnswered(requestId) {
+    const answered = await this.listAnswered();
+    return answered.some((item) => item.requestId === requestId);
   }
 
   /** @returns {Promise<PatrolConfig>} */
