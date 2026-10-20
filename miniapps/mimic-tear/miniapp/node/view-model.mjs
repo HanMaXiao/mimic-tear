@@ -40,7 +40,7 @@
  * @typedef {{ lastRunAt:number|null, intervalMinutes:number, dutyIntervalMinutes:number,
  *             autoDispatch:boolean, findings:number, openFindings:number,
  *             staleAfterMinutes:number, stale:boolean, neverRan:boolean,
- *             ageMinutes:number|null }} DutyStatus
+ *             ageMinutes:number|null, missedRounds:number|null }} DutyStatus
  */
 
 /** Inbox severities, ordered from most to least urgent. */
@@ -392,6 +392,10 @@ export function buildDutyStatus(input) {
     stale: lastRunAt === null || ageMinutes > staleAfterMinutes,
     neverRan: lastRunAt === null,
     ageMinutes,
+    // How many duty rounds were missed since the last handover. 0 means "on time".
+    // This is what tells the boss that its previous round never landed, so it can
+    // report the gap instead of silently carrying on as if nothing happened.
+    missedRounds: ageMinutes === null ? null : Math.max(0, Math.ceil(ageMinutes / dutyIntervalMinutes) - 1),
   };
 }
 

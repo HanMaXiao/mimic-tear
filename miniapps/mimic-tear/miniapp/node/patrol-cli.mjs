@@ -22,7 +22,7 @@ import { join, resolve } from 'node:path';
 
 import { RuntimeStore } from './runtime-store.mjs';
 import { readPlan } from './plan-store.mjs';
-import { buildInbox, buildOrgTree, buildPatrolBrief, buildProjectCards } from './view-model.mjs';
+import { buildDutyStatus, buildInbox, buildOrgTree, buildPatrolBrief, buildProjectCards } from './view-model.mjs';
 import { PatrolStore } from './patrol-store.mjs';
 
 const args = process.argv.slice(2);
@@ -66,6 +66,7 @@ if (command === 'facts') {
   const runtimeItems = buildInbox({ projects, sessions, goals, questionnaires, plans }, new Set());
   const answered = await patrol.listAnswered();
   const answeredIds = new Set(answered.map((item) => item.requestId));
+  const previousFindings = await patrol.list();
 
   const sessionById = new Map(sessions.map((s) => [s.id, s]));
   const projectById = new Map(projects.map((p) => [p.id, p]));
@@ -145,7 +146,7 @@ if (command === 'facts') {
     },
     // What the boss already filed in earlier runs. Without this it would re-report the
     // same stuck project on every tick.
-    alreadyReported: (await patrol.list()).map((finding) => ({
+    alreadyReported: previousFindings.map((finding) => ({
       id: finding.id,
       projectId: finding.projectId,
       projectName: finding.projectName,
@@ -154,6 +155,14 @@ if (command === 'facts') {
       createdAt: finding.createdAt,
       acknowledged: finding.acknowledged,
     })),
+    // The boss's own duty state. `missedRounds` is how the boss learns that its previous
+    // round never landed — the board can see a stale duty line, but only the boss can
+    // report what it was in the middle of doing when it dropped.
+    duty: buildDutyStatus({
+      config: await patrol.getConfig(),
+      findings: previousFindings,
+      now: Date.now(),
+    }),
     alreadyAnswered: answered.map((item) => ({
       requestId: item.requestId,
       sessionId: item.sessionId,

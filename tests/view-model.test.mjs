@@ -260,17 +260,41 @@ test('view-model', async (t) => {
   });
 
   await t.test('大哥很久没交班时，看板必须能说出「可能掉线」', () => {
-    const config = { lastRunAt: NOW - 60 * 60_000, intervalMinutes: 15, autoDispatch: false };
+    const config = { lastRunAt: NOW - 60 * 60_000, intervalMinutes: 15, dutyIntervalMinutes: 30, autoDispatch: false };
 
     const fresh = buildDutyStatus({ config: { ...config, lastRunAt: NOW - 5 * 60_000 }, findings: [], now: NOW });
     assert.equal(fresh.stale, false, '刚交过班不算掉线');
     assert.equal(fresh.neverRan, false);
     assert.equal(fresh.ageMinutes, 5);
+    assert.equal(fresh.missedRounds, 0, '刚交过班就不算漏轮');
 
     const silent = buildDutyStatus({ config, findings: [], now: NOW });
     assert.equal(silent.stale, true, '一小时没有交班必须判定掉线');
     assert.equal(silent.neverRan, false);
     assert.equal(silent.staleAfterMinutes, 45);
+    assert.equal(silent.missedRounds, 1, '60 分钟里漏掉了一轮');
+  });
+
+  await t.test('漏了几轮要算得准：这是大哥自检「上一轮有没有交班」的依据', () => {
+    const at = (ageMinutes) => buildDutyStatus({
+      config: { lastRunAt: NOW - ageMinutes * 60_000, intervalMinutes: 15, dutyIntervalMinutes: 30, autoDispatch: false },
+      findings: [],
+      now: NOW,
+    });
+
+    assert.equal(at(0).missedRounds, 0);
+    assert.equal(at(29).missedRounds, 0, '还没到下一轮');
+    assert.equal(at(31).missedRounds, 1, '过了一轮没交班');
+    assert.equal(at(60).missedRounds, 1);
+    assert.equal(at(61).missedRounds, 2, '连着两轮都没交班');
+    assert.equal(at(150).missedRounds, 4);
+
+    const never = buildDutyStatus({
+      config: { lastRunAt: null, intervalMinutes: 15, dutyIntervalMinutes: 30, autoDispatch: false },
+      findings: [],
+      now: NOW,
+    });
+    assert.equal(never.missedRounds, null, '从没交过班不算「漏了几轮」，那是另一回事');
   });
 
   await t.test('大哥从没交过班，也算掉线（而不是安静）', () => {

@@ -1,12 +1,32 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { PatrolStore } from '../miniapps/mimic-tear/miniapp/node/patrol-store.mjs';
 import { ProjectService, DomainError } from '../miniapps/mimic-tear/miniapp/node/project-service.mjs';
 import { buildPatrolBrief, parsePatrolReport } from '../miniapps/mimic-tear/miniapp/node/view-model.mjs';
 import { RuntimeStore } from '../miniapps/mimic-tear/miniapp/node/runtime-store.mjs';
 import { makeRuntimeDb, tmpDir, cleanupDir } from './helpers/fixture.mjs';
+
+const CLI_PATH = fileURLToPath(new URL('../miniapps/mimic-tear/miniapp/node/patrol-cli.mjs', import.meta.url));
+
+/**
+ * Run the real CLI against an isolated database and data directory.
+ *
+ * The boss reaches this CLI from a cron, so a unit test on the store is not enough:
+ * the facts sheet has to actually carry the duty state when the boss reads it.
+ */
+function runCli(dbPath, dataDir, args = ['facts']) {
+  const stdout = execFileSync(
+    process.execPath,
+    [CLI_PATH, ...args, '--db', dbPath, '--data-dir', dataDir],
+    { encoding: 'utf8' },
+  );
+  return JSON.parse(stdout);
+}
 
 function makeService(bossOverrides = {}) {
   const dir = tmpDir();
@@ -174,6 +194,43 @@ test('patrol', async (t) => {
       assert.equal(outcome.findings.length, 1);
       assert.match(outcome.findings[0].body, /完全不符合格式/);
       store.close();
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  await t.test('CLI 的 facts 带出值班状态：大哥能看出上一轮有没有交班', () => {
+    const dir = tmpDir();
+    const dbPath = makeRuntimeDb(dir);
+    const dataDir = join(dir, 'data');
+    try {
+      // A board nobody has ever handed over on.
+      const fresh = runCli(dbPath, dataDir);
+      assert.equal(fresh.duty.neverRan, true, '没交过班要看得出来');
+      assert.equal(fresh.duty.missedRounds, null);
+      assert.equal(fresh.duty.stale, true);
+      assert.equal(fresh.duty.dutyIntervalMinutes, 30, '事实表要带上值班周期');
+
+      // The boss hands over: the duty state goes green.
+      const reportFile = join(dir, 'report.json');
+      writeFileSync(reportFile, JSON.stringify({ findings: [], answered: [] }), 'utf8');
+      runCli(dbPath, dataDir, ['report', '--file', reportFile]);
+
+      const handed = runCli(dbPath, dataDir);
+      assert.equal(handed.duty.neverRan, false);
+      assert.equal(handed.duty.missedRounds, 0, '刚交过班就不算漏');
+      assert.equal(handed.duty.stale, false);
+      assert.ok(handed.duty.lastRunAt > 0, '交班时间戳必须落盘');
+
+      // Now age the clock: a round was interrupted and never handed over.
+      const configPath = join(dataDir, 'patrol-config.json');
+      const aged = JSON.parse(readFileSync(configPath, 'utf8'));
+      aged.lastRunAt = Date.now() - 70 * 60_000;
+      writeFileSync(configPath, JSON.stringify(aged), 'utf8');
+
+      const gapped = runCli(dbPath, dataDir);
+      assert.ok(gapped.duty.missedRounds >= 1, '漏了一轮以上，大哥必须能从事实表里看出来');
+      assert.equal(gapped.duty.stale, true, '超过阈值就该被判掉线');
     } finally {
       cleanupDir(dir);
     }
