@@ -207,6 +207,40 @@ test('audit regressions', async (t) => {
     }
   });
 
+  await t.test('大哥巡检发现的缺陷：计划任务状态必须带年龄', () => {
+    const sessions = [sessionRow('lead', 1)];
+    const projects = [{
+      id: 1,
+      kind: 'workspace',
+      workspaceDir: 'D:/projects/alpha',
+      pinned: false,
+      hidden: false,
+      orderIndex: 0,
+      recentAt: null,
+      latestActivityAt: 100,
+      sessionCount: 1,
+    }];
+    const stalePlan = {
+      source: '.mavis/plans/status1.log',
+      updatedAt: Date.now() - 120 * 86_400_000,
+      tasks: [{ id: 't1', title: '旧任务', state: 'blocked', assignedTo: 'coder' }],
+    };
+
+    const cards = buildProjectCards({
+      projects,
+      sessions,
+      goals: [],
+      questionnaires: [],
+      plans: new Map([[1, stalePlan]]),
+    });
+
+    assert.equal(
+      cards[0].planUpdatedAt,
+      stalePlan.updatedAt,
+      '项目卡必须带上计划状态的写入时间，否则看板无法区分"当前阻塞"和"四个月前的快照"',
+    );
+  });
+
   await t.test('M2：server 路由接的是真实 ProjectService 时，非法派工返回 400', async () => {
     const dir = tmpDir();
     try {

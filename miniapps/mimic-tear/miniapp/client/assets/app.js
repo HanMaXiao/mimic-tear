@@ -81,6 +81,21 @@ const STATE_LABEL = {
 
 const SEVERITY_LABEL = { high: '高', medium: '中', low: '低' };
 
+/**
+ * Label for how old a plan state snapshot is.
+ *
+ * A Goal-mode plan log is only rewritten when the plan runs, so a plan can be months old.
+ * Showing its age keeps a stale task state from being read as a live signal.
+ */
+function planAgeLabel(updatedAt) {
+  if (!updatedAt) return '';
+  const days = Math.floor((Date.now() - updatedAt) / 86_400_000);
+  if (days <= 0) return '· 状态为今日';
+  if (days === 1) return '· 状态为 1 天前';
+  if (days < 30) return `· 状态为 ${days} 天前`;
+  return `· 状态为 ${Math.floor(days / 30)} 个月前`;
+}
+
 /** Human-readable waiting time, so a three-week-old item does not read as "20140 分钟". */
 function waitingLabel(timestamp) {
   if (!timestamp) return '时间未知';
@@ -404,7 +419,9 @@ function renderProject() {
     : '<div class="empty">该项目没有进行中的 Goal。</div>';
 
   const planTasks = detail.plan?.tasks ?? [];
-  el('plan-count').textContent = planTasks.length ? `${planTasks.length} 个任务` : '';
+  el('plan-count').textContent = planTasks.length
+    ? `${planTasks.length} 个任务${planAgeLabel(detail.project.planUpdatedAt)}`
+    : '';
   el('plan-list').innerHTML = planTasks.length
     ? planTasks
         .map(

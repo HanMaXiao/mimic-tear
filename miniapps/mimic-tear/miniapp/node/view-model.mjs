@@ -124,6 +124,9 @@ export function buildProjectCards(input) {
       pendingQuestions: pendingQuestions.length,
       goals: projectGoals,
       planTasks,
+      // When the plan state was last written. A plan log can be months old, and a task
+      // state that old is a historical fact, not a live signal — the board must say so.
+      planUpdatedAt: plan?.updatedAt ?? null,
     };
   });
 }
