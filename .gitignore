@@ -1,0 +1,29 @@
+# Dependencies / build state
+node_modules/
+dist/
+build/
+.vendor/
+
+# MiniMax Code runtime artifacts
+Saved/
+Intermediate/
+Binaries/
+DerivedDataCache/
+*.tmp
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Local env
+.env
+.env.*
+!.env.example
