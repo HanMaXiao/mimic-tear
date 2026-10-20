@@ -1138,3 +1138,85 @@ Windows 计划任务（每 5 分钟）
 - **不做云端大哥**：那是"应用关着也能值班"的另一条路，成本高得多。
 - **不让 watchdog 能派工、能改看板数据**：它只读一个时间戳、发一条通知。**任何能写回去的看门狗都是新的故障源。**
 - **不用运行时 cron 做这件事**：运行时 cron 属于应用进程，应用一关它也没了——正好是 watchdog 要覆盖的场景。
+
+## 18. 宿主侧栏：复用 MiniMax Code 自己的对话框（2026-10-20 追加）
+
+### 18.1 缺口：对话面板是自己重写的
+
+大老板的原话是「跟大哥的对话跟平常我跟 MiniMax 的 Agent 对话差不多，**复用 minimax 的 Agent 对话就好了**」。§16 落实了一半——**后端**确实复用了运行时的 agent 能力（`context.agent.run` 的流式事件、SSE 转发、问卷内联渲染），但**前端的对话框是自己重写的**。
+
+自己重写的代价：
+
+| 自己写的 | 宿主本来就有的 |
+| --- | --- |
+| 逐字流式渲染 | 同上，且处理过各种边角 |
+| 工具调用芯片 | 同上，且有完整的状态机 |
+| 权限审批弹窗 | 同上 |
+| 问卷渲染与续跑 | 同上 |
+| 消息排版、代码块、折叠 | 同上 |
+
+每一项都是一次「再实现一遍」，每一项都可能做得不如宿主。而宿主的对话框是用户**每天在用**的那个——一致性本身就是价值。
+
+### 18.2 宿主提供的官方能力：`agent.open(sessionId)`
+
+实测 MiniMax Code 的客户端 API（`window.mcode.miniapp.agent`）有这些方法：
+
+| 方法 | 作用 |
+| --- | --- |
+| `run({text, sessionId}, {onEvent})` | 跑一轮，流式事件 |
+| `answer({sessionId, questionId, answers})` | 回答问卷并续跑 |
+| `reply({sessionId, requestId, decision})` | 回答权限请求 |
+| **`open(sessionId)`** | **把本插件的会话显示在宿主聊天侧栏** |
+| `models()` / `agents()` / `create()` | 模型 / agent 目录 / 建会话 |
+
+运行时自带的 `miniapp-creator` 技能文档 `references/agent-interaction.md` 明确写着：
+
+> **Page:** feature-detect `window.mcode?.miniapp?.agent`. Render approvals and questionnaires, **or offer `open(sessionId)` so the user can interact in the Host chat side panel.**
+
+而且给了标准接法（`buttons.open`）。**这是官方推荐的做法**，不是野路子。
+
+### 18.3 归属校验：`open` 只对本插件的根会话有效
+
+运行时 `gateway.ts` 的 `openSession` 有两道硬校验（实测源码）：
+
+```js
+// Any root session this plugin owns may be shown in the caller's host chat side panel,
+// whichever chat or Node run created it; a delegated child never qualifies.
+if (root?.rootSessionId !== sessionId || root.pluginId !== caller.pluginId) {
+  throw reject(..., new MiniAppAgentError('SESSION_NOT_FOUND', ...));
+}
+```
+
+本项目的大哥会话满足这两条（实测运行时库）：
+
+| 条件 | 大哥会话的值 | 结论 |
+| --- | --- | --- |
+| `rootSessionId === sessionId` | `parent_session_id = null`，是根会话 | ✓ |
+| `root.pluginId === caller.pluginId` | `purpose = miniapp:mimic-tear` → pluginId `mimic-tear` | ✓ |
+
+**但 cron 值班那条会话不满足**：`mvs_aaec5980d…` 的 `purpose = cron:boss:大哥值班巡检`，归属不是本插件。所以侧栏能打开的是**对话那条**大哥会话（`mvs_90f86d83…`），不是值班那条——这与 §15.11 记的「两个大哥会话」是同一件事的另一面。
+
+### 18.4 落地形态：并排，不取代
+
+**不把 Mini App 里的对话面板删掉换成宿主侧栏**，理由：
+
+1. Mini App 可以**独立于任何聊天**打开（独立窗口、浏览器标签）。那时没有宿主侧栏可挂，对话面板是唯一的入口。
+2. 侧栏是**同一个会话的另一个视图**，不是更好的视图。用户在大纲里能一眼看到「大哥正在跟谁派工」；在侧栏里能拿到宿主级的渲染。两者服务不同的需要。
+3. 值班轮次跑在 cron 的固定会话上（§15.11），侧栏看不到它。
+
+所以对话区多一个「**在侧栏打开**」按钮：
+
+- 点击 → 拿大哥会话 id → `window.mcode.miniapp.agent.open(sessionId)`
+- **能力探测**：宿主没提供 `open`（旧版本宿主 / 非聊天上下文）→ 明确提示「这个窗口没有可用的宿主侧栏（Mini App 需要开在聊天里）」，**不静默失败**
+- **失败可见**：宿主拒绝（会话过期、无权限）→ toast 报出原因
+
+### 18.5 服务端要给出会话 id
+
+客户端不该自己猜会话 id。服务端新增两个出口：
+
+| 接口 | 用途 |
+| --- | --- |
+| `GET /api/chat/session` | 取大哥会话 id（`{bossSessionId, agent}`）——第一次发消息之前也能用 |
+| `POST /api/chat` 的 202 响应 | 带上 `bossSessionId`——发完消息立刻就能开侧栏 |
+
+会话 id 来自 `boss-session.json`（`persistence.getBossSession()`），与大哥实际跑在哪个会话上是同一个来源，不会出现「侧栏开了另一个会话」。
