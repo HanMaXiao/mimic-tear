@@ -1,0 +1,225 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { join } from 'node:path';
+
+import { PatrolStore } from '../miniapps/mimic-tear/miniapp/node/patrol-store.mjs';
+import { ProjectService, DomainError } from '../miniapps/mimic-tear/miniapp/node/project-service.mjs';
+import { buildPatrolBrief, parsePatrolReport } from '../miniapps/mimic-tear/miniapp/node/view-model.mjs';
+import { RuntimeStore } from '../miniapps/mimic-tear/miniapp/node/runtime-store.mjs';
+import { makeRuntimeDb, tmpDir, cleanupDir } from './helpers/fixture.mjs';
+
+function makeService(bossOverrides = {}) {
+  const dir = tmpDir();
+  const dbPath = makeRuntimeDb(dir);
+  const store = RuntimeStore.open(dbPath);
+  const patrol = new PatrolStore(join(dir, 'data'));
+
+  const calls = { dispatch: [], patrol: [] };
+  const boss = {
+    async dispatch(input) {
+      calls.dispatch.push(input);
+      return { bossSessionId: 'b1', status: 'finished', text: '投递状态：已投递', error: null, delivered: true };
+    },
+    async patrol(input) {
+      calls.patrol.push(input);
+      return {
+        bossSessionId: 'b1',
+        status: 'finished',
+        text: bossOverrides.text ?? [
+          '巡检结论：有 1 项需要大老板处理',
+          '- 项目: alpha | 级别: high | 摘要: alpha 的会话持续报错，建议先确认网络',
+          '我已派工：',
+          '- beta: 补一个冒烟测试',
+          '巡检状态：已完成',
+        ].join('\n'),
+        error: null,
+      };
+    },
+  };
+
+  const service = new ProjectService({
+    store,
+    readPlan: async () => null,
+    skills: { skills: [], failures: [] },
+    domains: [],
+    persistence: new PersistenceStub(join(dir, 'data')),
+    boss,
+    patrol,
+  });
+
+  return { service, store, patrol, calls, dir };
+}
+
+class PersistenceStub {
+  constructor(dir) {
+    this.dir = dir;
+    this.acks = new Set();
+  }
+  async listAcks() {
+    return [...this.acks];
+  }
+  async addAck(id) {
+    this.acks.add(id);
+  }
+  async findDispatchByKey() {
+    return null;
+  }
+  async saveDispatch() {}
+  async listDispatches() {
+    return [];
+  }
+  async getBossSession() {
+    return null;
+  }
+  async setBossSession() {}
+}
+
+test('patrol', async (t) => {
+  await t.test('默认关闭，间隔 15 分钟', async () => {
+    const { service, patrol, store, dir } = makeService();
+    try {
+      const config = await service.getPatrolConfig();
+      assert.equal(config.enabled, false);
+      assert.equal(config.intervalMinutes, 15);
+      assert.equal(config.autoDispatch, false);
+      void patrol;
+      store.close();
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  await t.test('开启设置可持久化，间隔被夹在 5~240 分钟', async () => {
+    const { service, store, dir } = makeService();
+    try {
+      await service.setPatrolConfig({ enabled: true, intervalMinutes: 1 });
+      assert.equal((await service.getPatrolConfig()).intervalMinutes, 5);
+
+      await service.setPatrolConfig({ intervalMinutes: 9999 });
+      assert.equal((await service.getPatrolConfig()).intervalMinutes, 240);
+
+      await service.setPatrolConfig({ enabled: true });
+      const reloaded = await service.getPatrolConfig();
+      assert.equal(reloaded.enabled, true);
+      store.close();
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  await t.test('巡检跑完，结论落成收件箱条目', async () => {
+    const { service, calls, store, dir } = makeService();
+    try {
+      const outcome = await service.runPatrol();
+
+      assert.equal(calls.patrol.length, 1, '应调用一次大哥巡检');
+      assert.equal(outcome.conclusion, '有 1 项需要大老板处理');
+      assert.equal(outcome.dispatches.length, 1);
+      assert.equal(outcome.dispatches[0].projectName, 'beta');
+      assert.equal(outcome.findings.length, 1);
+      assert.equal(outcome.findings[0].severity, 'high');
+
+      const inbox = await service.getInbox();
+      const patrolItem = inbox.items.find((item) => item.kind === 'patrol');
+      assert.ok(patrolItem, '收件箱应包含巡检条目');
+      assert.equal(patrolItem.projectName, 'alpha');
+      assert.match(patrolItem.body, /持续报错/);
+      store.close();
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  await t.test('巡检条目可被确认', async () => {
+    const { service, store, dir } = makeService();
+    try {
+      const outcome = await service.runPatrol();
+      const inbox = await service.getInbox();
+      const item = inbox.items.find((i) => i.kind === 'patrol');
+      assert.equal(item.acknowledged, false);
+
+      await service.ack(item.id);
+      const after = await service.getInbox();
+      const acked = after.items.find((i) => i.kind === 'patrol');
+      assert.equal(acked.acknowledged, true);
+      void outcome;
+      store.close();
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  await t.test('巡检的事实简报包含项目、待决策项与计划任务', async () => {
+    const { service, store, dir } = makeService();
+    try {
+      const snapshot = await service.snapshot();
+      const brief = buildPatrolBrief(snapshot);
+
+      assert.match(brief, /## 项目总览/);
+      assert.match(brief, /alpha/);
+      assert.match(brief, /## 待决策项/);
+      store.close();
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  await t.test('大哥回复无法解析时也不静默', async () => {
+    const { service, store, dir } = makeService({ text: '完全不符合格式的一段话' });
+    try {
+      const outcome = await service.runPatrol();
+      assert.equal(outcome.findings.length, 1);
+      assert.match(outcome.findings[0].body, /完全不符合格式/);
+      store.close();
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  await t.test('报告解析：容忍格式偏差', () => {
+    const parsed = parsePatrolReport([
+      '巡检结论：两件事',
+      '- 项目: alpha | 级别: medium | 摘要: 需要你决定用哪个方案',
+      '我已派工：',
+      '- gamma: 修好了空指针',
+    ].join('\n'));
+
+    assert.equal(parsed.conclusion, '两件事');
+    assert.equal(parsed.items.length, 1);
+    assert.equal(parsed.items[0].projectName, 'alpha');
+    assert.equal(parsed.items[0].severity, 'medium');
+    assert.equal(parsed.dispatches.length, 1);
+    assert.equal(parsed.dispatches[0].projectName, 'gamma');
+  });
+
+  await t.test('没有开启巡检时，巡检条目不出现', async () => {
+    const { service, store, dir } = makeService();
+    try {
+      const inbox = await service.getInbox();
+      assert.equal(inbox.items.filter((i) => i.kind === 'patrol').length, 0);
+      store.close();
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  await t.test('没有 patrol 存储时给出明确错误', async () => {
+    const dir = tmpDir();
+    try {
+      const service = new ProjectService({
+        store: RuntimeStore.open(makeRuntimeDb(dir)),
+        readPlan: async () => null,
+        skills: { skills: [], failures: [] },
+        domains: [],
+        persistence: new PersistenceStub(dir),
+        boss: { dispatch: async () => ({}), patrol: async () => ({}) },
+      });
+      await assert.rejects(
+        () => service.runPatrol(),
+        (error) => error instanceof DomainError && error.code === 'patrol_unavailable',
+      );
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+});

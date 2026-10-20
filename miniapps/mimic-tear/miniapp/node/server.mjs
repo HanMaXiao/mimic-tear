@@ -12,6 +12,9 @@ import { extname, join, normalize, resolve, sep } from 'node:path';
 
 const POLL_INTERVAL_MS = 3000;
 
+/** How often the server checks whether the boss's patrol is due. */
+const PATROL_CHECK_INTERVAL_MS = 30_000;
+
 const CONTENT_TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -219,6 +222,40 @@ export function createApp(deps) {
         return;
       }
 
+      if (pathname === '/api/patrol' && method === 'GET') {
+        sendJson(response, 200, {
+          config: await service.getPatrolConfig(),
+          findings: service.patrol ? await service.patrol.list() : [],
+        });
+        return;
+      }
+
+      if (pathname === '/api/patrol/config' && method === 'POST') {
+        const body = await readBody(request);
+        const config = await service.setPatrolConfig({
+          enabled: body?.enabled,
+          intervalMinutes: body?.intervalMinutes,
+          autoDispatch: body?.autoDispatch,
+        });
+        sendJson(response, 200, config);
+        return;
+      }
+
+      if (pathname === '/api/patrol/run' && method === 'POST') {
+        // A patrol turn can take minutes, so it must not hold the HTTP request open.
+        sendJson(response, 202, { status: 'started' });
+        void service.runPatrol()
+          .then((outcome) => {
+            app.broadcast('patrol', outcome);
+            return service.getOverview();
+          })
+          .then((overview) => app.broadcast('update', overview))
+          .catch((error) => {
+            app.broadcast('patrol', { error: error?.message ?? String(error), findings: [] });
+          });
+        return;
+      }
+
       if (pathname.startsWith('/api/permissions/') && method === 'POST') {
         const requestId = pathname.slice('/api/permissions/'.length);
         const body = await readBody(request);
@@ -322,6 +359,7 @@ export async function start(context) {
   const { Persistence } = await import('./persistence.mjs');
   const { ProjectService } = await import('./project-service.mjs');
   const { BossBridge } = await import('./boss-bridge.mjs');
+  const { PatrolStore } = await import('./patrol-store.mjs');
 
   const { homedir } = await import('node:os');
 
@@ -335,11 +373,13 @@ export async function start(context) {
     { label: '内置技能', source: 'builtin', dir: join(homedir(), '.minimax', '.builtin-skills') },
   ];
   const skillScan = await scanSkills(skillRoots);
+  const refreshSkills = () => scanSkills(skillRoots);
 
   const domainsModule = await import('./domains.json', { with: { type: 'json' } });
   const domains = domainsModule.default?.domains ?? domainsModule.domains ?? [];
 
   const persistence = new Persistence(context.dataDir);
+  const patrol = new PatrolStore(context.dataDir);
 
   const app = createApp({
     service: null,
@@ -361,6 +401,8 @@ export async function start(context) {
     domains,
     persistence,
     boss,
+    patrol,
+    refreshSkills,
   });
 
   // The app needs the service, and the boss needs the app's permission channel.
@@ -398,12 +440,44 @@ export async function start(context) {
   }, POLL_INTERVAL_MS);
   timer.unref?.();
 
+  // The boss's proactive patrol. It only runs when the board is open, and only when the
+  // decision-relevant state actually changed since the last run — a patrol that has nothing
+  // new to look at must not spend a turn or a notification.
+  const patrolTimer = setInterval(() => {
+    void (async () => {
+      try {
+        const config = await service.getPatrolConfig();
+        if (!config.enabled) return;
+
+        const since = config.lastRunAt ?? 0;
+        const due = Date.now() - since >= config.intervalMinutes * 60_000;
+        if (!due) return;
+
+        const snapshot = await service.snapshot();
+        if (config.lastSignature && service.inboxSignature(snapshot) === config.lastSignature) {
+          // Nothing changed: just move the clock so the next check is not immediately due.
+          await patrol.setConfig({ lastRunAt: Date.now() });
+          return;
+        }
+
+        const outcome = await service.runPatrol();
+        app.broadcast('patrol', outcome);
+        const overview = await service.getOverview();
+        app.broadcast('update', overview);
+      } catch (error) {
+        context.logger.warn('mimic-tear.patrol.failed', { message: error?.message });
+      }
+    })();
+  }, PATROL_CHECK_INTERVAL_MS);
+  patrolTimer.unref?.();
+
   let disposed = false;
   const dispose = async () => {
     if (disposed) return;
     disposed = true;
     context.signal.removeEventListener('abort', onAbort);
     clearInterval(timer);
+    clearInterval(patrolTimer);
     for (const stream of app.streams) {
       try {
         stream.end();

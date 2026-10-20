@@ -15,6 +15,9 @@ const API = {
   dispatch: '/api/dispatch',
   ack: '/api/inbox/ack',
   permission: (requestId) => `/api/permissions/${requestId}`,
+  patrol: '/api/patrol',
+  patrolConfig: '/api/patrol/config',
+  patrolRun: '/api/patrol/run',
   stream: '/api/stream',
 };
 
@@ -29,6 +32,10 @@ const state = {
   pendingOnly: true,
   loading: false,
   error: null,
+  // The project and session the dispatch dialog is currently aimed at. The dialog must
+  // remember its own target: deriving it from the current route silently sends the
+  // instruction to whichever project was opened last.
+  dispatchTarget: { projectId: null, sessionId: null },
 };
 
 const el = (id) => document.getElementById(id);
@@ -90,6 +97,7 @@ const KIND_LABEL = {
   'goal-paused': 'Goal 暂停',
   'session-error': '会话异常',
   'plan-blocked': '计划阻塞',
+  patrol: '大哥巡检',
 };
 
 function toast(message, kind = 'info') {
@@ -186,17 +194,36 @@ function renderKpi(overview) {
   badge.hidden = kpi.pendingDecisions === 0;
 }
 
-function attentionItemHtml(item) {
-  const actions = [
-    item.sessionId
-      ? `<button type="button" class="btn btn--small" data-action="open-session" data-session="${escapeHtml(item.sessionId)}">去回答</button>`
-      : '',
-    `<button type="button" class="btn btn--small" data-action="dispatch" data-project="${item.projectId}">下达指令</button>`,
-    item.acknowledged
-      ? ''
-      : `<button type="button" class="btn btn--small btn--text" data-action="ack" data-item="${escapeHtml(item.id)}">标记已知</button>`,
-  ].join('');
+/**
+ * The action buttons of an inbox item.
+ *
+ * A patrol finding may not resolve to a project (the boss named a project that is not on
+ * the board), so it gets no dispatch button — a button with project 0 would only produce
+ * a confusing 404.
+ */
+function itemActionsHtml(item) {
+  const actions = [];
+  if (item.sessionId) {
+    actions.push(
+      `<button type="button" class="btn btn--small" data-action="open-session"`
+      + ` data-project="${item.projectId}" data-session="${escapeHtml(item.sessionId)}"`
+      + ` data-body="${escapeHtml(item.body)}">去回答</button>`,
+    );
+  }
+  if (item.projectId) {
+    actions.push(
+      `<button type="button" class="btn btn--small" data-action="dispatch" data-project="${item.projectId}">下达指令</button>`,
+    );
+  }
+  if (!item.acknowledged) {
+    actions.push(
+      `<button type="button" class="btn btn--small btn--text" data-action="ack" data-item="${escapeHtml(item.id)}">标记已知</button>`,
+    );
+  }
+  return actions.join('');
+}
 
+function attentionItemHtml(item) {
   return `
     <div class="item${item.acknowledged ? ' item--acknowledged' : ''}">
       <div class="item__head">
@@ -206,7 +233,7 @@ function attentionItemHtml(item) {
         <span class="item__meta">${escapeHtml(item.projectName)} · ${waitingLabel(item.createdAt)}</span>
       </div>
       <p class="item__body">${escapeHtml(item.body)}</p>
-      <div class="item__actions">${actions}</div>
+      <div class="item__actions">${itemActionsHtml(item)}</div>
     </div>`;
 }
 
@@ -269,16 +296,6 @@ function renderProjects(overview) {
 }
 
 function inboxItemHtml(item) {
-  const actions = [
-    item.sessionId
-      ? `<button type="button" class="btn btn--small" data-action="open-session" data-session="${escapeHtml(item.sessionId)}">去回答</button>`
-      : '',
-    `<button type="button" class="btn btn--small" data-action="dispatch" data-project="${item.projectId}">下达指令</button>`,
-    item.acknowledged
-      ? ''
-      : `<button type="button" class="btn btn--small btn--text" data-action="ack" data-item="${escapeHtml(item.id)}">标记已知</button>`,
-  ].join('');
-
   return `
     <div class="item${item.acknowledged ? ' item--acknowledged' : ''}">
       <div class="item__head">
@@ -288,7 +305,7 @@ function inboxItemHtml(item) {
         <span class="item__meta">${escapeHtml(item.projectName)} · ${relativeTime(item.createdAt)}</span>
       </div>
       <p class="item__body">${escapeHtml(item.body)}</p>
-      <div class="item__actions">${actions}</div>
+      <div class="item__actions">${itemActionsHtml(item)}</div>
     </div>`;
 }
 
@@ -432,7 +449,8 @@ function renderSkills() {
     return;
   }
 
-  el('skills-count').textContent = `${scan.total} 个技能 · ${scan.unmapped.length} 个未归类`;
+  el('skills-count').textContent = `${scan.total} 个技能 · ${scan.unmapped.length} 个未归类`
+    + (scan.failures ? ` · ${scan.failures} 个目录扫描失败` : '');
 
   const domains = [
     ...scan.groups.map((group) => ({ key: group.key, label: group.label, count: group.skills.length, skills: group.skills })),
@@ -506,6 +524,13 @@ function showView(name) {
 async function renderRoute() {
   const route = currentRoute();
   showView(route.name);
+
+  if (route.name !== 'project') {
+    // Leaving the project view drops its cached detail, so coming back always re-fetches
+    // instead of showing a stale team tree.
+    state.projectId = null;
+    state.project = null;
+  }
 
   // The overview feeds the KPI, the badge and the project lookup used by the dispatch
   // dialog, so it is loaded on every route — not only on the overview.
@@ -589,6 +614,7 @@ function connectStream() {
       renderAttention(state.overview);
       renderProjects(state.overview);
     }
+    renderWarning(state.overview.dataWarning);
     setStatus('实时同步中', 'live');
   });
 
@@ -599,7 +625,21 @@ function connectStream() {
       renderAttention(state.overview);
       renderProjects(state.overview);
     }
+    renderWarning(state.overview.dataWarning);
     void refreshInbox();
+    // The project detail shows the live team structure; it must follow the same stream.
+    void refreshProjectIfVisible();
+  });
+
+  eventSource.addEventListener('patrol', (event) => {
+    const payload = JSON.parse(event.data);
+    if (payload.error) {
+      toast(`巡检失败：${payload.error}`, 'error');
+    } else {
+      const count = payload.findings?.length ?? 0;
+      toast(count > 0 ? `大哥巡检完成，${count} 条结论` : '大哥巡检完成');
+    }
+    void refresh();
   });
 
   eventSource.addEventListener('dispatch', (event) => {
@@ -633,6 +673,23 @@ async function refreshInbox() {
   }
 }
 
+/**
+ * Re-fetch the open project detail.
+ *
+ * The detail view is the one place where live structure matters (the team tree changes as
+ * agents spawn), so it follows the same stream as the overview.
+ */
+async function refreshProjectIfVisible() {
+  const route = currentRoute();
+  if (route.name !== 'project') return;
+  try {
+    state.project = await request(API.project(route.param));
+    renderProject();
+  } catch {
+    // Keep the last good view rather than blanking the page.
+  }
+}
+
 /* --------------------------------------------------------------- dispatch */
 
 /**
@@ -648,25 +705,37 @@ function findProject(projectId) {
   return null;
 }
 
-function openDispatchDialog(projectId) {
+/**
+ * Open the dispatch dialog, aimed at a specific project and optionally a specific session.
+ *
+ * @param {number} projectId
+ * @param {{ sessionId?: string|null, instruction?: string }} [options]
+ */
+function openDispatchDialog(projectId, options = {}) {
   const project = findProject(projectId);
   if (!project) {
     toast('找不到该项目', 'error');
     return;
   }
 
+  // Remember the target here. It must not be derived from the current route: doing so
+  // silently sends the instruction to whichever project was opened last.
+  state.dispatchTarget = { projectId: project.id, sessionId: options.sessionId ?? null };
+
   el('dispatch-target').textContent = `目标项目：${project.name}（${project.path}）`;
   el('dispatch-error').hidden = true;
-  el('dispatch-instruction').value = '';
+  el('dispatch-instruction').value = options.instruction ?? '';
 
   const sessionSelect = el('dispatch-session');
-  const sessions = state.project && state.projectId === projectId
+  const sessions = state.project && state.projectId === project.id
     ? collectSessions(state.project.orgTree)
-    : [];  sessionSelect.innerHTML =
+    : [];
+  sessionSelect.innerHTML =
     '<option value="">由大哥自行选择</option>' +
     sessions
       .map((session) => `<option value="${escapeHtml(session.id)}">${escapeHtml(session.title)} · ${escapeHtml(session.agentName)}</option>`)
       .join('');
+  sessionSelect.value = state.dispatchTarget.sessionId ?? '';
 
   const dialog = el('dispatch-dialog');
   if (typeof dialog.showModal === 'function') dialog.showModal();
@@ -686,9 +755,12 @@ async function submitDispatch(event) {
   event.preventDefault();
 
   const instruction = el('dispatch-instruction').value.trim();
-  const sessionId = el('dispatch-session').value;
-  const projectId = state.projectId ?? currentProjectIdFromContext();
+  const target = state.dispatchTarget;
 
+  if (!target.projectId) {
+    showDispatchError('没有确定目标项目，请重新选择');
+    return;
+  }
   if (!instruction) {
     showDispatchError('指令内容不能为空');
     return;
@@ -702,8 +774,8 @@ async function submitDispatch(event) {
     await request(API.dispatch, {
       method: 'POST',
       body: JSON.stringify({
-        projectId,
-        sessionId: sessionId || null,
+        projectId: target.projectId,
+        sessionId: el('dispatch-session').value || target.sessionId || null,
         instruction,
         idempotencyKey: crypto.randomUUID(),
       }),
@@ -724,11 +796,6 @@ function showDispatchError(message) {
   node.textContent = message;
 }
 
-function currentProjectIdFromContext() {
-  const route = currentRoute();
-  if (route.name === 'project') return route.param;
-  return null;
-}
 
 /* ---------------------------------------------------------------- actions */
 
@@ -757,7 +824,15 @@ document.addEventListener('click', (event) => {
   }
   if (action === 'open-session') {
     event.preventDefault();
-    toast('请在右侧聊天面板中打开该会话回答问题');
+    // The Mini App cannot open a session it does not own, so the answer is delivered
+    // through the verified dispatch path: it reaches the very session that asked.
+    const projectId = Number(target.dataset.project);
+    const sessionId = target.dataset.session || null;
+    const body = target.dataset.body || '';
+    openDispatchDialog(projectId, {
+      sessionId,
+      instruction: `回复你之前的提问：${body}`,
+    });
     return;
   }
 });
@@ -783,8 +858,63 @@ el('refresh-button').addEventListener('click', () => {
   void refresh();
 });
 
+/* --------------------------------------------------------------- patrol */
+
+async function loadPatrolConfig() {
+  try {
+    const payload = await request(API.patrol);
+    el('patrol-enabled').checked = Boolean(payload.config?.enabled);
+    el('patrol-autodispatch').checked = Boolean(payload.config?.autoDispatch);
+  } catch {
+    // The patrol is optional; a board without it still works.
+  }
+}
+
+async function savePatrolConfig() {
+  try {
+    await request(API.patrolConfig, {
+      method: 'POST',
+      body: JSON.stringify({
+        enabled: el('patrol-enabled').checked,
+        autoDispatch: el('patrol-autodispatch').checked,
+      }),
+    });
+    toast('巡检设置已保存');
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+}
+
+el('patrol-enabled').addEventListener('change', () => {
+  void savePatrolConfig();
+});
+
+el('patrol-autodispatch').addEventListener('change', () => {
+  void savePatrolConfig();
+});
+
+el('patrol-run-button').addEventListener('click', () => {
+  const button = el('patrol-run-button');
+  button.disabled = true;
+  button.textContent = '巡检中…';
+  request(API.patrolRun, { method: 'POST' })
+    .then((outcome) => {
+      toast(outcome.error ? `巡检失败：${outcome.error}` : '巡检完成');
+      void refresh();
+    })
+    .catch((error) => toast(error.message, 'error'))
+    .finally(() => {
+      button.disabled = false;
+      button.textContent = '巡检';
+    });
+});
+
 el('project-dispatch-button').addEventListener('click', () => {
   openDispatchDialog(state.projectId);
+});
+
+el('dispatch-session').addEventListener('change', (event) => {
+  state.dispatchTarget.sessionId = event.target.value || null;
 });
 
 el('project-back-button').addEventListener('click', () => {
@@ -803,4 +933,5 @@ window.addEventListener('hashchange', () => {
 
 setStatus('正在连接…', 'idle');
 void renderRoute();
+void loadPatrolConfig();
 connectStream();

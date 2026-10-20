@@ -68,12 +68,13 @@ test('boss-bridge', async (t) => {
     assert.equal(result.bossSessionId, 'boss-1');
     assert.equal(agent.calls.run.length, 1);
     assert.equal(agent.calls.run[0].input.agent, 'boss', 'boss agent 存在时应指名使用');
-    assert.equal(persistence.bossSessionId, 'boss-1');
+    assert.equal(persistence.bossSession.sessionId, 'boss-1');
+    assert.equal(persistence.bossSession.agent, 'boss');
   });
 
   await t.test('后续派工复用同一个大哥会话', async () => {
     const persistence = makePersistence();
-    persistence.bossSessionId = 'boss-existing';
+    persistence.bossSession = { sessionId: 'boss-existing', agent: 'boss' };
     const agent = makeAgent();
     const bridge = new BossBridge({ agent, persistence });
 
@@ -224,12 +225,12 @@ test('boss-bridge', async (t) => {
 
 function makePersistence() {
   return {
-    bossSessionId: null,
-    async getBossSessionId() {
-      return this.bossSessionId;
+    bossSession: null,
+    async getBossSession() {
+      return this.bossSession;
     },
-    async setBossSessionId(id) {
-      this.bossSessionId = id;
+    async setBossSession(session) {
+      this.bossSession = session;
     },
   };
 }

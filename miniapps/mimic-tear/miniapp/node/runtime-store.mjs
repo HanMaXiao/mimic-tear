@@ -54,7 +54,9 @@ const REVISION_SQL = `
     (SELECT COALESCE(MAX(created_at), 0) FROM questionnaire_requests) AS question_max,
     (SELECT COUNT(*) FROM local_runtime_thread_goals) AS goal_count,
     (SELECT COALESCE(MAX(updated_at_ms), 0) FROM local_runtime_thread_goals) AS goal_max,
-    (SELECT COUNT(*) FROM local_runtime_background_tasks WHERE status NOT IN ('succeeded', 'failed', 'canceled')) AS active_tasks
+    (SELECT COUNT(*) FROM local_runtime_background_tasks WHERE status NOT IN ('succeeded', 'failed', 'canceled')) AS active_tasks,
+    (SELECT COUNT(*) FROM local_runtime_projects WHERE workspace_dir IS NOT NULL AND hidden = 0) AS project_count,
+    (SELECT COALESCE(MAX(latest_activity_at_ms), 0) FROM local_runtime_projects) AS project_max
 `;
 
 export class RuntimeStore {
@@ -111,6 +113,7 @@ export class RuntimeStore {
       return [
         row.session_count, row.running_sessions, row.errored_sessions, row.session_max,
         row.pending_questions, row.question_max, row.goal_count, row.goal_max, row.active_tasks,
+        row.project_count, row.project_max,
       ].join('.');
     } catch (error) {
       this.#error = `读取运行时状态失败：${error?.message ?? String(error)}`;

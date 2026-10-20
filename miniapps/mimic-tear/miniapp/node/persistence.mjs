@@ -61,16 +61,29 @@ export class Persistence {
     return acks;
   }
 
-  /** @returns {Promise<string | null>} */
-  async getBossSessionId() {
+  /**
+   * The boss session, with the agent that owns it.
+   *
+   * The agent matters: a fallback turn runs as the primary agent, and persisting that
+   * session as "the boss session" would make every later dispatch run on the primary
+   * agent forever. A bare string is accepted for files written by earlier versions.
+   *
+   * @returns {Promise<{ sessionId: string, agent: string } | null>}
+   */
+  async getBossSession() {
     const value = await readJson(this.bossSessionPath, null);
-    return typeof value === 'string' ? value : null;
+    if (!value) return null;
+    if (typeof value === 'string') return { sessionId: value, agent: 'boss' };
+    if (typeof value.sessionId !== 'string') return null;
+    return { sessionId: value.sessionId, agent: typeof value.agent === 'string' ? value.agent : 'boss' };
   }
 
-  /** @param {string} id */
-  async setBossSessionId(id) {
-    await writeJson(this.bossSessionPath, id);
-    return id;
+  /**
+   * @param {{ sessionId: string, agent: string }} session
+   */
+  async setBossSession(session) {
+    await writeJson(this.bossSessionPath, session);
+    return session;
   }
 }
 

@@ -2,7 +2,9 @@ import {
   buildInbox,
   buildKpi,
   buildOrgTree,
+  buildPatrolBrief,
   buildProjectCards,
+  parsePatrolReport,
 } from './view-model.mjs';
 
 /**
@@ -13,8 +15,10 @@ import {
  * where a business mutation is validated, committed and handed back for broadcast.
  */
 
-/** A business error with an HTTP status and a stable machine code. */
-export class DomainError extends Error {
+/** How often the skill library is re-scanned so newly installed skills show up. */
+const SKILL_REFRESH_MS = 10 * 60 * 1000;
+
+/** A business error with an HTTP status and a stable machine code. */export class DomainError extends Error {
   /**
    * @param {string} code
    * @param {string} message
@@ -54,7 +58,9 @@ export class ProjectService {
    *   skills: { skills: any[], failures: any[] },
    *   domains: any[],
    *   persistence: import('./persistence.mjs').Persistence,
-   *   boss: { dispatch: (input: any) => Promise<any> },
+   *   boss: { dispatch: (input: any) => Promise<any>, patrol: (input: any) => Promise<any> },
+   *   patrol?: import('./patrol-store.mjs').PatrolStore,
+   *   refreshSkills?: () => Promise<{ skills: any[], failures: any[] }>,
    * }} deps
    */
   constructor(deps) {
@@ -64,9 +70,138 @@ export class ProjectService {
     this.domains = deps.domains;
     this.persistence = deps.persistence;
     this.boss = deps.boss;
+    this.patrol = deps.patrol ?? null;
+    this.refreshSkills = deps.refreshSkills ?? null;
+    this.skillsScannedAt = Date.now();
 
     /** Cached aggregate, invalidated by the runtime revision. */
     this.cache = null;
+  }
+
+  /**
+   * The boss's proactive patrol settings.
+   * @returns {Promise<any>}
+   */
+  async getPatrolConfig() {
+    if (!this.patrol) {
+      return { enabled: false, intervalMinutes: 15, autoDispatch: false, lastRunAt: null, lastSignature: null };
+    }
+    return this.patrol.getConfig();
+  }
+
+  /**
+   * Update the boss's proactive patrol settings.
+   * @param {{ enabled?: boolean, intervalMinutes?: number, autoDispatch?: boolean }} patch
+   */
+  async setPatrolConfig(patch) {
+    if (!this.patrol) {
+      throw new DomainError('patrol_unavailable', '当前部署不支持主动巡检', 501);
+    }
+    return this.patrol.setConfig(patch ?? {});
+  }
+
+  /**
+   * Run one proactive patrol and record what the boss found.
+   *
+   * The board supplies the facts; the boss supplies the judgment. Findings are persisted so
+   * a patrol that ran while the board was closed still shows up when it reopens.
+   */
+  async runPatrol() {
+    if (!this.patrol) {
+      throw new DomainError('patrol_unavailable', '当前部署不支持主动巡检', 501);
+    }
+
+    const snapshot = await this.snapshot();
+    const brief = buildPatrolBrief(snapshot);
+    const config = await this.patrol.getConfig();
+
+    // Unique per run, so a repeated patrol never re-delivers the same proposal.
+    this.patrolRunKey = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+    const outcome = await this.boss.patrol({ brief, autoDispatch: Boolean(config.autoDispatch) });
+
+    const report = parsePatrolReport(outcome.text);
+    /** @type {any[]} */
+    const findings = [];
+
+    for (const item of report.items) {
+      const card = snapshot.cards.find((c) => c.name === item.projectName);
+      findings.push({
+        projectId: card?.id ?? null,
+        projectName: item.projectName,
+        severity: item.severity,
+        title: item.summary.length > 60 ? `${item.summary.slice(0, 60)}…` : item.summary,
+        body: item.summary,
+      });
+    }
+
+    if (findings.length === 0) {
+      // Nothing parsed: keep the raw reply as a single finding so the patrol is never silent.
+      findings.push({
+        projectId: null,
+        projectName: null,
+        severity: 'medium',
+        title: report.conclusion || '大哥巡检结论',
+        body: outcome.text || outcome.error || '本轮巡检没有产生结论。',
+      });
+    }
+
+    const created = [];
+    for (const finding of findings) {
+      created.push(await this.patrol.add(finding));
+    }
+
+    // The boss proposes; the board dispatches. Proposals go through the same validated
+    // path as a manual dispatch, so a project or session the boss named wrongly is
+    // rejected here instead of being delivered.
+    const executed = [];
+    if (config.autoDispatch) {
+      for (const [index, proposal] of report.proposals.entries()) {
+        const card = snapshot.cards.find((c) => c.name === proposal.projectName);
+        if (!card) {
+          executed.push({ proposal, ok: false, error: `找不到项目 ${proposal.projectName}` });
+          continue;
+        }
+        try {
+          const { record } = await this.prepareDispatch({
+            projectId: card.id,
+            sessionId: proposal.sessionId,
+            instruction: proposal.instruction,
+            idempotencyKey: `patrol:${this.patrolRunKey}:${index}`,
+          });
+          const result = await this.runDispatch(record);
+          executed.push({ proposal, ok: result.delivered, error: result.error });
+        } catch (error) {
+          executed.push({ proposal, ok: false, error: error?.message ?? String(error) });
+        }
+      }
+    }
+
+    await this.patrol.setConfig({
+      lastRunAt: Date.now(),
+      lastSignature: this.inboxSignature(snapshot),
+    });
+
+    return {
+      runAt: Date.now(),
+      conclusion: report.conclusion,
+      dispatches: report.dispatches,
+      proposals: report.proposals,
+      executed,
+      findings: created,
+      error: outcome.error,
+    };
+  }
+
+  /**
+   * A cheap signature of the decision-relevant state, used to decide whether a patrol run
+   * would have anything new to look at.
+   * @param {any} [snapshot]
+   */
+  inboxSignature(snapshot) {
+    const state = snapshot ?? this.cache;
+    if (!state) return 'empty';
+    return JSON.stringify(state.inbox.map((item) => [item.id, item.severity, item.title]));
   }
 
   /**
@@ -75,22 +210,65 @@ export class ProjectService {
    */
   async getOverview() {
     const snapshot = await this.snapshot();
+    const inbox = await this.collectInbox(snapshot);
     return {
       generatedAt: Date.now(),
-      kpi: buildKpi(snapshot.cards, snapshot.inbox),
+      kpi: buildKpi(snapshot.cards, inbox),
       projects: snapshot.cards,
       // Acknowledged items are known already: showing them here would make the count
       // disagree with the KPI and the inbox badge.
-      attention: snapshot.inbox.filter((item) => item.severity !== 'low' && !item.acknowledged),
+      attention: inbox.filter((item) => item.severity !== 'low' && !item.acknowledged),
       internalProjectCount: snapshot.internalProjectCount,
       dataWarning: snapshot.dataWarning,
     };
   }
 
-  /** @returns {Promise<{ items: any[] }>} */
+  /**
+   * The decision inbox: runtime items plus whatever the boss's patrol found.
+   *
+   * The overview and the inbox page must read from the SAME list, otherwise the badge
+   * count and the page content disagree.
+   *
+   * @param {any} snapshot
+   * @returns {Promise<any[]>}
+   */
+  async collectInbox(snapshot) {
+    const runtimeItems = snapshot.inbox;
+
+    const patrolItems = this.patrol
+      ? (await this.patrol.list()).map((finding) => ({
+        id: `patrol:${finding.id}`,
+        kind: 'patrol',
+        severity: finding.severity,
+        projectId: finding.projectId ?? 0,
+        projectName: finding.projectName ?? '全局',
+        sessionId: null,
+        sessionTitle: null,
+        title: finding.title,
+        body: finding.body,
+        createdAt: finding.createdAt,
+        ageMinutes: ageInMinutes(finding.createdAt),
+        acknowledged: finding.acknowledged,
+      }))
+      : [];
+
+    const items = [...patrolItems, ...runtimeItems];
+    items.sort((a, b) => {
+      const order = { high: 0, medium: 1, low: 2 };
+      const bySeverity = order[a.severity] - order[b.severity];
+      if (bySeverity !== 0) return bySeverity;
+      return b.createdAt - a.createdAt;
+    });
+    return items;
+  }
+
+  /**
+   * The decision inbox.
+   * @returns {Promise<{ items: any[] }>}
+   */
   async getInbox() {
     const snapshot = await this.snapshot();
-    return { items: snapshot.inbox };
+    return { items: await this.collectInbox(snapshot) };
   }
 
   /** @returns {Promise<{ projects: any[] }>} */
@@ -127,17 +305,34 @@ export class ProjectService {
 
   /**
    * The capability library: what the boss knows and can schedule.
-   * @returns {Promise<{ groups: any[], unmapped: any[], total: number, failures: number }>}
+   *
+   * The scan is refreshed periodically — a snapshot taken at startup would never show a skill
+   * installed later, and the boss's knowledge is exactly what changes when you install one.
+   *
+   * @returns {Promise<{ groups: any[], unmapped: any[], total: number, failures: number, scannedAt: number }>}
    */
   async getSkills() {
     const { classify } = await import('./skill-catalog.mjs');
+    await this.#refreshSkillsIfStale();
     const { groups, unmapped } = classify(this.skillScan.skills, this.domains);
     return {
       groups,
       unmapped,
       total: this.skillScan.skills.length,
       failures: this.skillScan.failures.length,
+      scannedAt: this.skillsScannedAt,
     };
+  }
+
+  /**
+   * Re-scan the skill libraries when the snapshot is older than the refresh window.
+   */
+  async #refreshSkillsIfStale() {
+    if (!this.refreshSkills) return;
+    const age = Date.now() - (this.skillsScannedAt ?? 0);
+    if (age < SKILL_REFRESH_MS) return;
+    this.skillScan = await this.refreshSkills();
+    this.skillsScannedAt = Date.now();
   }
 
   /**
@@ -148,6 +343,14 @@ export class ProjectService {
   async ack(itemId) {
     if (!itemId || typeof itemId !== 'string') {
       throw new DomainError('invalid_item_id', '缺少收件箱条目 ID');
+    }
+    if (itemId.startsWith('patrol:')) {
+      if (!this.patrol) {
+        throw new DomainError('patrol_unavailable', '当前部署不支持主动巡检', 501);
+      }
+      const found = await this.patrol.ack(itemId.slice('patrol:'.length));
+      this.cache = null;
+      return { ok: found };
     }
     await this.persistence.addAck(itemId);
     this.cache = null;
@@ -360,4 +563,9 @@ export class ProjectService {
     };
     return this.cache;
   }
+}
+
+function ageInMinutes(timestamp) {
+  if (!timestamp) return 0;
+  return Math.max(0, Math.round((Date.now() - timestamp) / 60000));
 }

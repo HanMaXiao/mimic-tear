@@ -19,6 +19,8 @@
  *             updatedAt:number, tokensUsed:number, timeUsedSeconds:number,
  *             statusReason:string|null, lastVerification:string|null,
  *             dismissedAt:number|null }} GoalRow
+ * @typedef {{ id:string, ownerSessionId:string, kind:string, status:string, createdAt:number,
+ *             updatedAt:number, endedAt:number|null }} TaskRow
  * @typedef {{ id:string, sessionId:string, agentName:string, requestJson:string,
  *             status:string, createdAt:number }} QuestionnaireRow
  * @typedef {{ id:string|null, title:string, state:string, assignedTo:string|null }} PlanTask
@@ -27,7 +29,7 @@
  *             lastActivityAt:number|null, health:Health, activeSessions:number,
  *             erroredSessions:number, pendingQuestions:number,
  *             goals:GoalRow[], planTasks:PlanTask[] }} ProjectCard
- * @typedef {{ id:string, kind:'questionnaire'|'goal-paused'|'session-error'|'plan-blocked',
+ * @typedef {{ id:string, kind:'questionnaire'|'goal-paused'|'session-error'|'plan-blocked'|'patrol',
  *             severity:'high'|'medium'|'low', projectId:number, projectName:string,
  *             sessionId:string|null, sessionTitle:string|null, title:string, body:string,
  *             createdAt:number, ageMinutes:number, acknowledged:boolean }} InboxItem
@@ -68,7 +70,8 @@ export function computeHealth(input) {
  * Build the project cards shown on the overview.
  *
  * @param {{ projects: ProjectRow[], sessions: SessionRow[], goals: GoalRow[],
- *           questionnaires: QuestionnaireRow[], plans: Map<number, PlanSnapshot|null> }} input
+ *           questionnaires: QuestionnaireRow[], tasks?: TaskRow[],
+ *           plans: Map<number, PlanSnapshot|null> }} input
  * @returns {ProjectCard[]}
  */
 export function buildProjectCards(input) {
@@ -76,15 +79,16 @@ export function buildProjectCards(input) {
   const sessions = input.sessions ?? [];
   const goals = input.goals ?? [];
   const questionnaires = input.questionnaires ?? [];
+  const tasks = input.tasks ?? [];
   const plans = input.plans ?? new Map();
 
   const sessionsByProject = groupBy(sessions, (s) => s.projectId);
   const goalsBySession = groupBy(goals, (g) => g.sessionId);
   const questionsBySession = groupBy(questionnaires, (q) => q.sessionId);
+  const tasksByOwner = groupBy(tasks, (t) => t.ownerSessionId);
 
   return projects.map((project) => {
     const projectSessions = sessionsByProject.get(project.id) ?? [];
-    const sessionIds = new Set(projectSessions.map((s) => s.id));
 
     const projectGoals = projectSessions.flatMap((s) => goalsBySession.get(s.id) ?? []);
     const projectQuestions = projectSessions.flatMap((s) => questionsBySession.get(s.id) ?? []);
@@ -93,22 +97,29 @@ export function buildProjectCards(input) {
     const plan = plans.get(project.id) ?? null;
     const planTasks = plan?.tasks ?? [];
 
-    const activeTasks = projectSessions.filter((s) => s.status === 'started').length;
+    // A running background task is in-flight work even when no session is marked started.
+    const runningTasks = projectSessions
+      .flatMap((s) => tasksByOwner.get(s.id) ?? [])
+      .filter((t) => t.status !== 'succeeded' && t.status !== 'failed' && t.status !== 'canceled').length;
+
+    const activeSessions = projectSessions.filter((s) => s.status === 'started').length;
 
     return {
       id: project.id,
       name: projectName(project.workspaceDir),
       path: project.workspaceDir,
-      sessionCount: project.sessionCount || projectSessions.length,
+      // The denormalised `session_count` on the project row counts root sessions only, while
+      // the org tree shows every session. Using the real count keeps the two views consistent.
+      sessionCount: projectSessions.length,
       lastActivityAt: project.latestActivityAt ?? projectSessions[0]?.updatedAt ?? null,
       health: computeHealth({
         sessions: projectSessions,
         pendingQuestions: pendingQuestions.length,
         goals: projectGoals,
         planTasks,
-        activeTasks,
+        activeTasks: runningTasks,
       }),
-      activeSessions: activeTasks,
+      activeSessions,
       erroredSessions: projectSessions.filter((s) => s.status === 'error' || s.errorCode != null).length,
       pendingQuestions: pendingQuestions.length,
       goals: projectGoals,
@@ -313,6 +324,122 @@ export function buildKpi(cards, inbox) {
     pendingDecisions: items.filter((i) => !i.acknowledged && i.severity !== 'low').length,
     errors: projectCards.filter((c) => c.health === 'error').length,
   };
+}
+
+/**
+ * Build the fact sheet the boss reasons over during a proactive patrol.
+ *
+ * The board owns the facts; the boss owns the judgment. This keeps the split honest — the
+ * Mini App never decides what matters, it only reports what is true.
+ *
+ * @param {any} snapshot
+ * @returns {string}
+ */
+export function buildPatrolBrief(snapshot) {
+  const cards = snapshot?.cards ?? [];
+  const inbox = snapshot?.inbox ?? [];
+  const lines = [];
+
+  lines.push('## 项目总览');
+  if (cards.length === 0) lines.push('（没有可见项目）');
+  for (const card of cards) {
+    const active = card.goals.filter((g) => g.status === 'active').length;
+    lines.push(
+      `- ${card.name} | 状态 ${card.health} | 会话 ${card.sessionCount} | Goal ${active}/${card.goals.length}`
+      + ` | 待决策 ${card.pendingQuestions} | 计划任务 ${card.planTasks.length}`,
+    );
+  }
+
+  lines.push('');
+  lines.push('## 待决策项');
+  if (inbox.length === 0) lines.push('（没有待决策项）');
+  for (const item of inbox) {
+    lines.push(`- [${item.severity}] ${item.kind} | ${item.projectName} | ${item.title} | ${item.body}`);
+  }
+
+  const planLines = [];
+  for (const card of cards) {
+    for (const task of card.planTasks) {
+      planLines.push(`- ${card.name} | ${task.state} | ${task.title} | 负责 ${task.assignedTo ?? '未指派'}`);
+    }
+  }
+  if (planLines.length > 0) {
+    lines.push('');
+    lines.push('## 计划任务');
+    lines.push(...planLines);
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * Parse the boss's patrol report.
+ *
+ * The format is a convention, not a contract, so parsing is deliberately tolerant: an
+ * unparseable reply still becomes one finding carrying the raw text.
+ *
+ * @param {string} text
+ * @returns {{ conclusion: string, items: { projectName: string, severity: 'high'|'medium'|'low', summary: string }[],
+ *             dispatches: { projectName: string, instruction: string }[],
+ *             proposals: { projectName: string, sessionId: string|null, instruction: string }[] }}
+ */
+export function parsePatrolReport(text) {
+  const result = { conclusion: '', items: [], dispatches: [], proposals: [] };
+  if (!text) return result;
+
+  let section = 'report';
+  for (const raw of String(text).split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+
+    const conclusion = /^巡检结论\s*[:：]\s*(.+)$/.exec(line);
+    if (conclusion) {
+      result.conclusion = conclusion[1].trim();
+      continue;
+    }
+    if (/^(我已派工|已派工|已投递)\s*[:：]?$/.test(line)) {
+      section = 'dispatch';
+      continue;
+    }
+    if (/^(我建议派工|建议派工|待派工)\s*[:：]?$/.test(line)) {
+      section = 'proposal';
+      continue;
+    }
+    if (/^(需要大老板决策|待大老板决策|需你决策)\s*[:：]?$/.test(line)) {
+      section = 'report';
+      continue;
+    }
+
+    const item = /^-\s*项目\s*[:：]\s*(.+?)\s*\|\s*级别\s*[:：]\s*(high|medium|low)\s*\|\s*摘要\s*[:：]\s*(.+)$/.exec(line);
+    if (item) {
+      result.items.push({
+        projectName: item[1].trim(),
+        severity: /** @type {'high'|'medium'|'low'} */ (item[2]),
+        summary: item[3].trim(),
+      });
+      continue;
+    }
+
+    const proposal = /^-\s*项目\s*[:：]\s*(.+?)\s*\|\s*会话\s*[:：]\s*(.+?)\s*\|\s*指令\s*[:：]\s*(.+)$/.exec(line);
+    if (proposal) {
+      const session = proposal[2].trim();
+      result.proposals.push({
+        projectName: proposal[1].trim(),
+        sessionId: session && session !== '无' && session !== '-' ? session : null,
+        instruction: proposal[3].trim(),
+      });
+      continue;
+    }
+
+    if (section === 'dispatch') {
+      const dispatch = /^-\s*(.+?)\s*[:：]\s*(.+)$/.exec(line);
+      if (dispatch) {
+        result.dispatches.push({ projectName: dispatch[1].trim(), instruction: dispatch[2].trim() });
+      }
+    }
+  }
+
+  return result;
 }
 
 /**
