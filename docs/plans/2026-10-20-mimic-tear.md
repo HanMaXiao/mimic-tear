@@ -733,10 +733,65 @@ git commit -m "feat(mimic-tear): 发布并通过 Host 验收"
 
 ---
 
+## Task 13: 本机告警通道（进程外看门狗）
+
+> 规格 §17。大老板的决定：**先本机试水**，效果好再考虑外部渠道或云端大哥。
+
+**Files:**
+- Create: `miniapps/mimic-tear/miniapp/node/watchdog-rules.mjs` — 判定与去重的纯函数
+- Create: `miniapps/mimic-tear/miniapp/node/toast.mjs` — Windows 桌面通知
+- Create: `miniapps/mimic-tear/miniapp/node/watchdog.mjs` — 主程序（只读交班时间戳）
+- Create: `miniapps/mimic-tear/miniapp/node/install-watchdog-task.mjs` — 计划任务注册/卸载
+- Create: `tests/watchdog.test.mjs`
+- Modify: `docs/specs/2026-10-20-mimic-tear-design.md`（新增 §17）
+
+**Interfaces:**
+- Consumes: `view-model.mjs` 的 `buildDutyStatus`（判定唯一来源）
+- Produces: Windows 计划任务 `MimicTear-DutyWatchdog`；数据目录新增 `watchdog-state.json` / `watchdog-alert.log`
+
+- [x] **Step 1: 写规格 §17**
+
+  三条硬约束：判定复用 `buildDutyStatus`（不自己写阈值）、只在状态翻转时通知、watchdog 只读不写看板数据。
+
+- [x] **Step 2: TDD——先写测试**
+
+  17 条：判定复用、阈值一致、首次运行的两种极端、健康/掉线/恢复的翻转、投递失败不推进状态、通知文案含分钟数、toast XML 转义、两条端到端。
+
+- [x] **Step 3: 实现三个模块**
+
+  `watchdog-rules.mjs` 的状态模型用**两个字段**表达"事实"与"已告知"（`observedStale` / `notifiedStale`）——合成一个字段时，"投递失败"无法既记住事实又不谎报已告知。
+
+- [x] **Step 4: 变异验证——证明测试真的会红**
+
+  四个断点逐个打坏：`stale` 翻转判定 → 3 条红；投递失败也推进状态 → 2 条红；`neverRan` 当掉线 → 2 条红；通知文案丢分钟数 → 1 条红。全部还原后复跑全绿。
+
+- [x] **Step 5: 实机验证 toast 真能送达**
+
+  读 Windows 通知中心库 `%LOCALAPPDATA%\Microsoft\Windows\Notifications\wpndatabase.db` 的 `Notification` 表，确认通知**真的进了操作中心**（不是"脚本没报错"）。
+  坑：该库 `ArrivalTime` 是 FILETIME 大整数，`node:sqlite` 默认按 number 读会溢出，需 `setReadBigInts(true)`；`Payload` 是 UTF-8（按 UTF-16 解会得到乱码）。
+
+- [x] **Step 6: publish 并注册计划任务**
+
+  计划任务指向**发布副本**（`~/.minimax/plugins/mimic-tear/...`）而非仓库——仓库可能移动，发布副本路径稳定。
+  `/sc minute /mo 5` + `/it`（仅在用户登录时运行：没有桌面会话时 toast 投不出去）。
+
+- [x] **Step 7: 端到端实测四种行为**
+
+  | 场景 | 预期 | 实测 |
+  | --- | --- | --- |
+  | 大哥健康 | 不打扰 | ✓ 状态 `notifiedStale:false`，通知中心无新记录 |
+  | 大哥掉线 60 分钟 | 弹一条「大哥掉线」 | ✓ 通知中心 21:51:07 收到 |
+  | 持续掉线 | **不重复弹** | ✓ 再触发一次 `lastNotifiedAt` 未变、通知中心无新记录 |
+  | 恢复 | 弹一条「大哥已归位」 | ✓ 通知中心 21:51:55 收到「掉线持续约 61 分钟」 |
+
+  真实配置在实测后已还原（`lastRunAt` 回到 21:40:15，15 条 signature 中文完好，JSON 合法）。
+
+---
+
 ## 执行顺序
 
-`Task 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12`
+`Task 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13`
 
-Task 2/3/4/5 彼此独立，可并行推进；Task 6 依赖 2/3/4/5；Task 7 依赖 6 的接口；Task 8 依赖 6/7；Task 9 依赖 8 的接口；Task 10 依赖 1–9；Task 11 独立于 1–10；Task 12 依赖 10。
+Task 2/3/4/5 彼此独立，可并行推进；Task 6 依赖 2/3/4/5；Task 7 依赖 6 的接口；Task 8 依赖 6/7；Task 9 依赖 8 的接口；Task 10 依赖 1–9；Task 11 独立于 1–10；Task 12 依赖 10；Task 13 依赖 6（复用 `buildDutyStatus`）与 10（发布副本）。
 
-**统一验证命令**：`node --test tests/`
+**统一验证命令**：`node --test --test-timeout=20000 tests/*.test.mjs`
