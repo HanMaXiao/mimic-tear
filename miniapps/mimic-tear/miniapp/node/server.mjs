@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 
 import { boardPatrolAction, isPatrolDue, stampBoardPatrol } from './patrol-scheduler.mjs';
+import { dutyAnnouncementNeeded } from './duty-announce.mjs';
 
 /**
  * The Mini App's HTTP surface: a small REST API plus one SSE stream, and the static Client.
@@ -257,6 +258,14 @@ export function createApp(deps) {
           .catch((error) => {
             broadcast('patrol', { error: error?.message ?? String(error), findings: [] });
           });
+        return;
+      }
+
+      if (pathname === '/api/chat/duty' && method === 'GET') {
+        // The duty rounds, grouped. The Host chat side panel shows one session, so it
+        // never shows the rounds — and the rounds are the user seeing the boss work.
+        const rounds = await service.getDutyRounds();
+        sendJson(response, 200, { rounds });
         return;
       }
 
@@ -548,10 +557,19 @@ export async function start(context) {
   // The boss's proactive patrol. It only runs when the board is open, and only when the
   // decision-relevant state actually changed since the last run — a patrol that has nothing
   // new to look at must not spend a turn or a notification.
+  //
+  // The same tick also watches the duty handover stamp. The duty boss runs in its own
+  // process, so a duty round is invisible to the runtime revision this loop watches; without
+  // this the conversation would only show the rounds that happened before it was opened.
+  let lastDutyRunAt = null;
   const patrolTimer = setInterval(() => {
     void (async () => {
       try {
         const config = await service.getPatrolConfig();
+        if (dutyAnnouncementNeeded(config, lastDutyRunAt).changed) {
+          lastDutyRunAt = config.lastRunAt;
+          broadcast('duty', { rounds: await service.getDutyRounds() });
+        }
         // Cheap early-outs before the (expensive) snapshot.
         if (!config.enabled) return;
         if (!isPatrolDue(config)) return;

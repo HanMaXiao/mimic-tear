@@ -782,6 +782,33 @@ test('client behavior (DOM shim)', async (t) => {
     assert.match(shown, /侧栏/, '应该告诉用户为什么打不开');
   });
 
+  await t.test('值班交班汇报渲染在对话上方，且与大哥的对话区分得开', async () => {
+    const client = await loadClient();
+    await client.settle();
+
+    // The rounds arrive over SSE: the duty boss runs in its own process, so the board only
+    // learns about a round when the server tells it.
+    client.fireSse('duty', {
+      rounds: [{
+        startedAt: 1792507304400,
+        findings: [{ id: 'p1', severity: 'high', title: 'Dungeon-Chesser 的派系轴交付了', projectName: 'Dungeon-Chesser', acknowledged: false, acknowledgedBy: null }],
+        counts: { high: 1, medium: 0, low: 0 },
+      }],
+    });
+    await client.settle();
+
+    const duty = client.element('chat-duty');
+    assert.ok(duty, '交班汇报区要存在');
+    const html = duty.innerHTML;
+    assert.match(html, /派系轴交付了/, '交班结论要渲染出来');
+    assert.match(html, /Dungeon-Chesser/, '要标出是哪个项目');
+    assert.match(html, /chat__duty/, '交班汇报要有自己的样式类（不能混进对话气泡）');
+
+    // And it must not be a chat bubble: a duty round is something the boss did on its own.
+    const log = client.element('chat-log');
+    assert.doesNotMatch(log.innerHTML, /派系轴交付了/, '交班汇报不该混进对话记录');
+  });
+
   await t.test('?theme=light 能强制浅色主题（发布出去的 CSS 本来就有这个钩子）', async () => {    const client = await loadClient({ search: '?theme=light' });
     await client.settle();
 

@@ -928,6 +928,89 @@ th.numeric {
   padding: 0 8px 4px;
 }
 
+/* ---------- duty rounds ---------- */
+
+/*
+ * The boss's own reports. They sit above the conversation because they are what
+ * happened whether or not anyone was talking: a duty round is not something the
+ * boss said to you, and it must not be mistaken for a reply.
+ */
+.chat__duty:empty {
+  display: none;
+}
+
+.chat__duty {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 34vh;
+  overflow-y: auto;
+  padding: 8px 8px 0;
+}
+
+.chat__duty-title {
+  font-size: 12px;
+  color: var(--mcode-text-muted);
+}
+
+.chat__duty-round {
+  padding: 8px 10px;
+  border: 1px solid var(--mcode-border);
+  border-radius: 8px;
+  background: var(--mcode-surface);
+}
+
+.chat__duty-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.chat__duty-when {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.chat__duty-counts {
+  font-size: 12px;
+  color: var(--mcode-text-muted);
+}
+
+.chat__duty-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.chat__duty-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--mcode-text-muted);
+}
+
+.chat__duty-title {
+  color: var(--mcode-text);
+}
+
+.chat__duty-project,
+.chat__duty-tag {
+  flex: none;
+  font-size: 11px;
+  color: var(--mcode-text-muted);
+}
+
+.chat__duty-item--high .chat__duty-title {
+  color: var(--mcode-danger);
+}
+
 .chat__composer textarea {
   flex: 1;
   min-width: 0;

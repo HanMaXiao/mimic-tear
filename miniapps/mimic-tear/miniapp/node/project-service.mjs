@@ -8,6 +8,7 @@ import {
   parsePatrolReport,
   questionnaireShape,
 } from './view-model.mjs';
+import { buildDutyRounds } from './duty-rounds.mjs';
 
 /**
  * The single domain service of the Mini App.
@@ -96,6 +97,21 @@ export class ProjectService {
       };
     }
     return this.patrol.getConfig();
+  }
+
+  /**
+   * The duty rounds, grouped for the conversation.
+   *
+   * The duty boss runs on its own cron session, so the Host chat side panel (which shows
+   * one session) never shows the rounds. These are the rounds the user wants to see.
+   *
+   * @param {{ limit?:number }} [options]
+   * @returns {Promise<import('./duty-rounds.mjs').DutyRound[]>}
+   */
+  async getDutyRounds(options = {}) {
+    if (!this.patrol) return [];
+    const findings = await this.patrol.list();
+    return buildDutyRounds(findings, { limit: options.limit ?? 20 });
   }
 
   /**

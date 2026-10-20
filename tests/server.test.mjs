@@ -70,6 +70,13 @@ function makeFakeService() {
       onEvent?.({ type: 'tool.started', name: 'bash' });
       return { bossSessionId: 'b1', status: 'finished', text: '收到', error: null, request: null };
     },
+    async getDutyRounds() {
+      return [{
+        startedAt: 1792507304400,
+        findings: [{ id: 'p1', severity: 'high', title: '一条交班结论', projectName: 'alpha', acknowledged: false, acknowledgedBy: null }],
+        counts: { high: 1, medium: 0, low: 0 },
+      }];
+    },
   };
 }
 
@@ -287,6 +294,20 @@ test('server', async (t) => {
       // "app is not defined"，页面会永远卡在"巡检中…"。
       assert.match(received, /event: patrol/, '巡检跑完必须广播，否则页面永远等不到结果');
       controller.abort();
+    } finally {
+      await server.close();
+    }
+  });
+
+  await t.test('值班交班汇报：接口能拿到轮次', async () => {
+    const server = await startTestServer();
+    try {
+      const response = await get(server.port, '/api/chat/duty');
+      assert.equal(response.status, 200);
+      const payload = await response.json();
+      assert.ok(Array.isArray(payload.rounds), '要返回轮次数组');
+      assert.equal(payload.rounds.length, 1);
+      assert.equal(payload.rounds[0].findings[0].title, '一条交班结论');
     } finally {
       await server.close();
     }

@@ -21,6 +21,7 @@ const API = {
   chat: '/api/chat',
   chatAnswer: '/api/chat/answer',
   chatSession: '/api/chat/session',
+  chatDuty: '/api/chat/duty',
   stream: '/api/stream',
 };
 
@@ -43,7 +44,7 @@ const state = {
   // being written right now; `question` is the questionnaire the boss is waiting on.
   // `bossSessionId` is the boss's own session, needed to open the same conversation in the
   // Host's chat side panel.
-  chat: { messages: [], streaming: null, tools: [], question: null, answers: {}, bossSessionId: null },
+  chat: { messages: [], streaming: null, tools: [], question: null, answers: {}, bossSessionId: null, duty: [] },
 };
 
 const el = (id) => document.getElementById(id);
@@ -625,6 +626,61 @@ function renderSkills() {
 /* -------------------------------------------------------------------- chat */
 
 /**
+ * The duty rounds, rendered as the boss's own reports.
+ *
+ * The duty boss runs on its own cron session, so the Host chat side panel (one session)
+ * never shows the rounds. The rounds are the user seeing the boss walk between projects,
+ * so they belong here too — as reports, not as chat messages: a duty round is something
+ * the boss did on its own, and it must not look like something it said to you.
+ *
+ * @param {Array<{startedAt:number, findings:Array<{id:string,severity:string,title:string,
+ *                projectName:string|null,acknowledged:boolean,acknowledgedBy:string|null}>,
+ *                counts:{high:number,medium:number,low:number}}>} rounds
+ * @returns {string}
+ */
+function dutyRoundsHtml(rounds) {
+  if (!rounds || !rounds.length) return '';
+  const items = rounds.map((round) => {
+    const parts = [];
+    if (round.counts.high) parts.push(`${round.counts.high} 项高`);
+    if (round.counts.medium) parts.push(`${round.counts.medium} 项中`);
+    if (round.counts.low) parts.push(`${round.counts.low} 项低`);
+    const lines = round.findings.map((f) => `
+      <li class="chat__duty-item chat__duty-item--${escapeHtml(f.severity)}">
+        <span class="chat__duty-title">${escapeHtml(f.title)}</span>
+        ${f.projectName ? `<span class="chat__duty-project">${escapeHtml(f.projectName)}</span>` : ''}
+        ${f.acknowledgedBy === 'boss' ? '<span class="chat__duty-tag">已撤回</span>' : ''}
+      </li>`).join('');
+    return `
+      <article class="chat__duty-round">
+        <header class="chat__duty-head">
+          <span class="chat__duty-when">${escapeHtml(dutyRoundTime(round.startedAt))}</span>
+          <span class="chat__duty-counts">交班 ${parts.join(' / ') || '无结论'}</span>
+        </header>
+        <ul class="chat__duty-list">${lines}</ul>
+      </article>`;
+  }).join('');
+  return `<div class="chat__duty-title">大哥的值班交班</div>${items}`;
+}
+
+/**
+ * Format a round's start time as "今天 21:07" or "昨天 21:07".
+ *
+ * @param {number} ms
+ * @returns {string}
+ */
+function dutyRoundTime(ms) {
+  const date = new Date(Number(ms) || 0);
+  const now = new Date();
+  const sameDay = date.toDateString() === now.toDateString();
+  const yesterday = new Date(now.getTime() - 86400_000).toDateString() === date.toDateString();
+  const time = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+  if (sameDay) return `今天 ${time}`;
+  if (yesterday) return `昨天 ${time}`;
+  return `${date.getMonth() + 1}月${date.getDate()}日 ${time}`;
+}
+
+/**
  * One line of the conversation.
  *
  * @param {{role:'user'|'boss', text:string, tools?:Array<{name:string, ok?:boolean|null}>}} message
@@ -726,6 +782,27 @@ function renderChat() {
   html += chatQuestionHtml();
   log.innerHTML = html;
   log.scrollTop = log.scrollHeight;
+
+  // The duty rounds live above the conversation: they are the boss's own reports, and
+  // they happened whether or not anyone was talking to it.
+  const duty = el('chat-duty');
+  if (duty) duty.innerHTML = dutyRoundsHtml(state.chat.duty);
+}
+
+/**
+ * Load the duty rounds.
+ *
+ * A failure here must not take the conversation down: the rounds are an extra view of
+ * the boss's work, and losing them is much less bad than losing the ability to talk.
+ */
+async function loadDutyRounds() {
+  try {
+    const payload = await request(API.chatDuty);
+    state.chat.duty = Array.isArray(payload?.rounds) ? payload.rounds : [];
+  } catch {
+    state.chat.duty = [];
+  }
+  renderChat();
 }
 
 /**
@@ -996,6 +1073,14 @@ function connectStream() {
     void refreshInbox();
     // The project detail shows the live team structure; it must follow the same stream.
     void refreshProjectIfVisible();
+  });
+
+  eventSource.addEventListener('duty', (event) => {
+    // A duty round happened while the board was open. The rounds are the user seeing the
+    // boss walk between projects, so they belong in the conversation, not only in the inbox.
+    const payload = JSON.parse(event.data);
+    state.chat.duty = Array.isArray(payload?.rounds) ? payload.rounds : [];
+    renderChat();
   });
 
   eventSource.addEventListener('patrol', (event) => {
@@ -1388,4 +1473,5 @@ setStatus('正在连接…', 'idle');
 renderChat();
 void renderRoute();
 void loadPatrolConfig();
+void loadDutyRounds();
 connectStream();
