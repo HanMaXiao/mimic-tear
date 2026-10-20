@@ -25,8 +25,9 @@
 - **视觉基线**：`minimax-code-visual-ui.md`。`--mcode-*` CSS 变量；浅色/深色随 `prefers-color-scheme`；卡片 12px 圆角、控件 8px、1px 边框；**禁止 emoji、远程字体、远程图片、CDN、渐变、霓虹**；中文文案。
 - **可访问性**：语义化 HTML（`header`/`nav`/`main`/`section`/`table`）、连续标题层级、每个可交互元素有可见文字或 `aria-label`、键盘可达、`role="status"`/`role="alert"`、`prefers-reduced-motion` 降级。
 - **四态齐备**：加载 / 空 / 错误 / 工作中，错误时保留页面结构。
-- **测试位置**：单测放仓库根 `tests/`（不放进 Mini App 包内，避免污染发布负载）；用 `node --test tests/`。
+- **测试位置**：单测放仓库根 `tests/`（不放进 Mini App 包内，避免污染发布负载）；用 `node --test tests/*.test.mjs`。
 - **提交粒度**：一个意图一个 commit，`git add -- <显式路径>`，禁止 `git add -A`。
+- **运行时产物编码不统一**（实测结论）：`.mavis/plans/*.log` 可能是 **UTF-16LE+BOM**，`.mavis/plans/*.yaml` 是 **UTF-8**，且日志里的中文是 **UTF-8 被当成 GBK 解码**后的乱码。读取必须按 BOM 判定编码；标题取自干净的 YAML，状态取自日志，两者按任务编码（`V1.4-A`）匹配。
 
 ---
 
@@ -69,6 +70,7 @@ D:\Project\AppProject\Mimic Tear\
         │   ├── miniapp-api.ts                       # Host 注入类型声明（从参考拷贝）
         │   ├── runtime-store.mjs                    # node:sqlite 只读读模型
         │   ├── plan-store.mjs                       # .mavis/plans 状态解析
+        │   ├── text-repair.mjs                      # GBK 乱码还原（零依赖）
         │   ├── skill-catalog.mjs                    # skill 扫描 + 领域归类
         │   ├── view-model.mjs                       # 纯函数：健康度/卡片/收件箱/组织树
         │   ├── project-service.mjs                  # 唯一领域服务（读写都在这）
@@ -111,10 +113,11 @@ D:\Project\AppProject\Mimic Tear\
 
   源：`C:\Users\12391\.minimax\.builtin-skills\miniapp-creator\references\miniapp-api.ts`。
 
-- [ ] **Step 5: 验证骨架可被 Host 识别**
+- [ ] **Step 5: 校验 manifest 符合 package-contract**
 
-  Run: `miniapp` 工具 `{ action: "inspect", pluginId: "mimic-tear" }`
-  Expected: 返回包元数据，未报结构错误（此时尚未 publish，inspect 只做识别）。
+  `miniapp` 工具的 `inspect` 只覆盖**已发布/已安装**的 Mini App，对工作区草稿会返回 `NOT_FOUND`——因此本步改为直接校验清单：
+  Run: `node -e "const m=require('./miniapps/mimic-tear/miniapp/miniapp.json'); const p=require('./miniapps/mimic-tear/.minimax-plugin/plugin.json'); console.assert(m.schemaVersion===1,'miniapp schemaVersion'); console.assert(m.artifacts.client.length&&m.artifacts.node.length,'payload roots'); console.assert(m.runtime.entry.endsWith('.mjs'),'entry'); console.assert(m.surface.path.startsWith('/'),'surface'); console.assert(m.agentAccess.includes('session.run'),'agentAccess'); console.assert(p.displayName&&p.description&&p.author&&p.exampleQueries.every(q=>q.trim()),'plugin fields'); console.log('manifest OK')"`
+  Expected: 输出 `manifest OK`，无 `Assertion failed`。
 
 - [ ] **Step 6: Commit**
 
@@ -192,48 +195,66 @@ git commit -m "feat(mimic-tear): 运行时只读读模型 RuntimeStore"
 
 ---
 
-### Task 3: PlanStore（.mavis/plans 状态解析）
+### Task 3: PlanStore（.mavis/plans 状态解析）+ text-repair（乱码还原）
 
 **Files:**
 - Create: `miniapps/mimic-tear/miniapp/node/plan-store.mjs`
-- Test: `tests/plan-store.test.mjs`
+- Create: `miniapps/mimic-tear/miniapp/node/text-repair.mjs`
+- Test: `tests/plan-store.test.mjs`、`tests/text-repair.test.mjs`
 
 **Interfaces:**
 - Consumes: 无
 - Produces:
   ```ts
-  function readPlan(projectDir: string): PlanSnapshot | null
+  function readPlan(projectDir: string): Promise<PlanSnapshot | null>
+  function decodeText(buffer: Buffer): string
+  function repairMojibake(text: string, vocabulary?: Set<string>): string
+  function buildVocabulary(text: string): Set<string>
   interface PlanSnapshot { source: string; updatedAt: number; tasks: PlanTask[] }
-  interface PlanTask { id: string|null; title: string; state: 'producing'|'ready'|'blocked'|'done'|'unknown'; assignedTo: string|null }
+  interface PlanTask { id: string|null; title: string; state: 'producing'|'ready'|'blocked'|'done'|'failed'|'unknown'; assignedTo: string|null }
   ```
 
 - [ ] **Step 1: 写失败的测试 `tests/plan-store.test.mjs`**
 
   fixture 目录内造 `<tmp>/.mavis/plans/`：一个 `status1.log`（含 `Tasks:` 段与 `✦ 任务A [producing]  verify=on` 这类行）、一个 `plan.yaml`（含 `tasks:` 列表，每项 `id`/`title`/`assigned_to`）、一个更新的 `status2.log`。断言：
-  - `readPlan()` 返回最新日志对应的 snapshot
-  - `tasks[].state` 正确解析出 `producing` / `ready` / `blocked`
-  - `tasks[].id` / `assignedTo` 从 yaml 补齐（按标题匹配）
+  - **标题取自 yaml，状态取自日志**——两者按任务编码（`V1.4-A`）匹配，轨道级状态覆盖轨道下所有任务（`V1.4-A` → `V1.4-A1` / `V1.4-A2`）
+  - `V1.4`（收口）不被 `V1.4-A`（另一轨道）误伤
+  - yaml 里没有的任务仍保留（用日志标题），状态来自日志
+  - **编码**：UTF-16LE+BOM 的日志与 yaml 都能解析；无 BOM 的 UTF-16 也能识别
   - **Review Focus 2**：目录不存在 / 空目录 / 含乱码文件 → 返回 `null`，**不抛错**
+  - 路径含空格与中文时正常工作
 
 - [ ] **Step 2: 运行测试确认失败**
 
   Run: `node --test tests/plan-store.test.mjs`
   Expected: FAIL — module not found
 
-- [ ] **Step 3: 实现 `plan-store.mjs`**
+- [ ] **Step 3: 实现 `text-repair.mjs`**
 
-  用 `node:fs` 读 `.mavis/plans/`：按 mtime 选最新的 `status*.log`；用行扫描解析 `Tasks:` 之后的 `[state]` 标记与标题（容忍全角/半角符号与 `✦`/`✔` 等前缀）；用**行扫描**（非完整 YAML 解析器）从最新 `*-plan*.yaml` 提取 `id`/`title`/`assigned_to` 三元组，按标题匹配回填。`id`/`title`/`assigned_to` 在 yaml 中的缩进与引号形式需容忍多种写法。
+  运行时会把 UTF-8 字节当成 GBK 解码后再写成 UTF-16LE，日志里的中文因此是乱码。还原链路：
+  `utf8_bytes --GBK-decode--> mojibake --GBK-encode--> utf8_bytes --utf8-decode--> 原文`。
+  Node 只有 GBK 解码器没有编码器，因此**在运行时用解码器反推编码表**（把全部合法双字节序列一次解码后取逆）。
+  丢失的字节（GBK 无法配对的奇数长度 UTF-8 段）以 `?` 或 U+FFFD 形式出现，用「补全被中断的 UTF-8 序列 + 同族干净文本词表」还原。
+  **只在还原结果是严格合法 UTF-8 时才采纳**——这让检测自证：真乱码能还原成原文，普通中文重新编码成 GBK 字节后几乎不可能是合法 UTF-8。
 
-- [ ] **Step 4: 运行测试确认通过**
+- [ ] **Step 4: 实现 `plan-store.mjs`**
 
-  Run: `node --test tests/plan-store.test.mjs`
+  用 `node:fs` 读 `.mavis/plans/`：按 mtime 选最新的 `status*.log`；用行扫描解析 `Tasks:` 之后的 `[state]` 标记与标题（容忍全角/半角符号与 `✦`/`✔` 等前缀）；用**行扫描**（非完整 YAML 解析器）从最新 `*-plan*.yaml` 提取 `id`/`title`/`assigned_to` 三元组，跳过 `prompt: |` 块内的伪字段。读取时按 BOM 判定编码（UTF-16LE / UTF-16BE / UTF-8），并对日志做乱码还原。
+
+- [ ] **Step 5: 运行测试确认通过**
+
+  Run: `node --test tests/plan-store.test.mjs tests/text-repair.test.mjs`
   Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: 对真实项目验证**
+
+  Run: 对 `D:\Project\AppProject\DevelopmentEnvironmentHealthDashboard` 调用 `readPlan()`，确认标题是干净中文、状态正确（`V1.4-A1`→producing、`V1.4-B1`→ready、`V1.4-C`→blocked）。
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add miniapps/mimic-tear/miniapp/node/plan-store.mjs tests/plan-store.test.mjs
-git commit -m "feat(mimic-tear): 解析 .mavis/plans 任务状态机"
+git add miniapps/mimic-tear/miniapp/node/plan-store.mjs miniapps/mimic-tear/miniapp/node/text-repair.mjs tests/plan-store.test.mjs tests/text-repair.test.mjs
+git commit -m "feat(mimic-tear): 解析 .mavis/plans 任务状态机并还原 GBK 乱码"
 ```
 
 ---

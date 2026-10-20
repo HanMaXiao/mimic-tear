@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "name": "mimic-tear",
+  "displayName": "仿身泪滴",
+  "version": "1.0.0",
+  "description": "多智能体项目管理指挥部：聚合全部项目的 Goal 进度、待决策问题与团队层级，并把指令投递给项目负责人会话。",
+  "author": "极简主义",
+  "icon": "icon.png",
+  "category": "Productivity",
+  "exampleQueries": [
+    "打开仿身泪滴，看我所有项目现在什么状态。",
+    "有哪些 agent 正在等我回答问题？",
+    "把这条指令下发给 GenericGameTemplate 的负责人。"
+  ],
+  "apps": [],
+  "mcpServers": [],
+  "skills": []
+}
