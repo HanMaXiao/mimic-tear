@@ -27,7 +27,7 @@ const writeQueues = new Map();
 /**
  * @typedef {{ id:string, createdAt:number, projectId:number|null, projectName:string|null,
  *             severity:'high'|'medium'|'low', title:string, body:string,
- *             acknowledged:boolean }} PatrolFinding
+ *             acknowledged:boolean, acknowledgedBy:'user'|'boss'|null, note:string }} PatrolFinding
  * @typedef {{ enabled:boolean, intervalMinutes:number, autoDispatch:boolean,
  *             dutyIntervalMinutes:number,
  *             lastRunAt:number|null, lastBoardPatrolAt:number|null,
@@ -100,6 +100,8 @@ export class PatrolStore {
         id: `patrol_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
         createdAt: Date.now(),
         acknowledged: false,
+        acknowledgedBy: null,
+        note: '',
         ...input,
       };
       findings.unshift(finding);
@@ -109,17 +111,43 @@ export class PatrolStore {
     });
   }
 
-  /** @param {string} id */
-  async ack(id) {
+  /**
+   * Take a finding off the user's desk.
+   *
+   * `by: 'user'` is the board's 标记已知 — the user has seen it. `by: 'boss'` is the boss
+   * withdrawing a conclusion of its own that turned out to be wrong (a stale fact, a duplicate,
+   * an alarm that was not real). The boss needs that: without it, a finding that turned out to
+   * be obsolete would sit in the inbox forever, and the list the user sees stops being a
+   * screened list.
+   *
+   * @param {string} id
+   * @param {'user'|'boss'} [by]
+   * @param {string} [note]
+   * @returns {Promise<boolean>}
+   */
+  async ack(id, by = 'user', note = '') {
     return this.enqueue(async () => {
       const findings = await this.list();
       const target = findings.find((f) => f.id === id);
       if (target) {
         target.acknowledged = true;
+        target.acknowledgedBy = by;
+        target.note = note;
         await this.save(findings);
       }
       return Boolean(target);
     });
+  }
+
+  /**
+   * The boss retracting one of its own conclusions.
+   *
+   * @param {string} id
+   * @param {string} reason why it no longer applies
+   * @returns {Promise<boolean>}
+   */
+  async withdraw(id, reason) {
+    return this.ack(id, 'boss', reason);
   }
 
   /**

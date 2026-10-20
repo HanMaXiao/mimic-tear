@@ -199,6 +199,8 @@ const OVERVIEW = {
 
 // Lets a test drive the overview payload (for example a duty state that is stale).
 let overviewOverride = null;
+// Lets a test drive the inbox payload.
+let inboxOverride = null;
 
 const PROJECT_DETAIL = {
   project: PROJECTS[0],
@@ -264,7 +266,7 @@ async function loadClient(options = {}) {
     const path = String(url);
     let payload = {};
     if (path.startsWith('/api/overview')) payload = overviewOverride ?? OVERVIEW;
-    else if (path.startsWith('/api/inbox')) payload = { items: [] };
+    else if (path.startsWith('/api/inbox')) payload = inboxOverride ?? { items: [] };
     else if (path.startsWith('/api/skills')) payload = { groups: [], unmapped: [], total: 0, failures: 0 };
     else if (path.startsWith('/api/patrol')) payload = { config: { enabled: false }, findings: [] };
     else if (path.startsWith('/api/projects/')) payload = PROJECT_DETAIL;
@@ -508,8 +510,100 @@ test('client behavior (DOM shim)', async (t) => {
     }
   });
 
-  await t.test('?theme=light 能强制浅色主题（发布出去的 CSS 本来就有这个钩子）', async () => {
-    const client = await loadClient({ search: '?theme=light' });
+  await t.test('大哥撤回过结论时，值班行要说出来', async () => {
+    overviewOverride = {
+      ...OVERVIEW,
+      duty: {
+        lastRunAt: Date.now() - 5 * 60_000,
+        intervalMinutes: 15,
+        dutyIntervalMinutes: 30,
+        autoDispatch: false,
+        findings: 12,
+        openFindings: 9,
+        withdrawn: 2,
+        staleAfterMinutes: 45,
+        stale: false,
+        neverRan: false,
+        ageMinutes: 5,
+        missedRounds: 0,
+      },
+    };
+    try {
+      const client = await loadClient();
+      await client.settle();
+
+      const duty = client.element('duty-status');
+      assert.match(duty.textContent, /9 条结论待你过目/);
+      assert.match(duty.textContent, /2 条已由大哥撤回/, '大哥撤回过结论必须让大老板知道');
+    } finally {
+      overviewOverride = null;
+    }
+  });
+
+  await t.test('大哥撤回自己的结论时，收件箱要说明为什么', async () => {
+    inboxOverride = {
+      items: [
+        {
+          id: 'patrol:patrol_old_1',
+          kind: 'patrol',
+          severity: 'high',
+          projectId: 10,
+          projectName: 'Contra-Survivor',
+          sessionId: null,
+          sessionTitle: null,
+          title: '4 个会话全部以 2056 额度上限中断',
+          body: '需要你升级 Token Plan 套餐。',
+          createdAt: Date.now() - 3600_000,
+          ageMinutes: 60,
+          acknowledged: true,
+          acknowledgedBy: 'boss',
+          note: '账号并未被额度卡住，这条结论已过期',
+        },
+        {
+          id: 'patrol:patrol_old_2',
+          kind: 'patrol',
+          severity: 'medium',
+          projectId: 3,
+          projectName: 'Mimic Tear',
+          sessionId: null,
+          sessionTitle: null,
+          title: '需要你定的是巡检的定位',
+          body: '巡检要不要升格为正式派工通道。',
+          createdAt: Date.now() - 7200_000,
+          ageMinutes: 120,
+          acknowledged: true,
+          acknowledgedBy: 'user',
+          note: '',
+        },
+      ],
+    };
+    try {
+      const client = await loadClient();
+      await client.navigate('#/inbox');
+      await client.settle();
+
+      // "只看未确认" is on by default, so a retracted item is hidden — that is the point.
+      assert.equal(
+        client.element('inbox-list').innerHTML.includes('大哥已撤回'),
+        false,
+        '默认视图不该出现已确认的条目',
+      );
+
+      // Turn it off: now the reason must be visible, and it must say WHO closed it.
+      const toggle = client.element('inbox-pending-only');
+      toggle.checked = false;
+      toggle.dispatchEvent({ type: 'change' });
+      await client.settle();
+
+      const html = client.element('inbox-list').innerHTML;
+      assert.match(html, /大哥已撤回：账号并未被额度卡住/, '撤回必须写清理由');
+      assert.match(html, /你已标记已知/, '大老板自己确认的要和大哥撤回的区分开');
+    } finally {
+      inboxOverride = null;
+    }
+  });
+
+  await t.test('?theme=light 能强制浅色主题（发布出去的 CSS 本来就有这个钩子）', async () => {    const client = await loadClient({ search: '?theme=light' });
     await client.settle();
 
     assert.equal(

@@ -503,6 +503,12 @@ th.numeric {
   font-size: 13px;
 }
 
+/* Why an item left the desk: you marked it known, or the boss withdrew it. */
+.item__note {
+  color: var(--mcode-text-subtle);
+  font-size: 12px;
+}
+
 .item__meta {
   color: var(--mcode-text-subtle);
   font-size: 12px;

@@ -36,6 +36,23 @@ const dataDir = resolve(flag('data-dir', join(homedir(), '.minimax', 'v2', 'plug
 const dbPath = resolve(flag('db', process.env.MIMIC_RUNTIME_DB
   ?? join(homedir(), '.minimax', 'v2', 'sqlite', 'runtime-state.sqlite')));
 
+/** Flags that take a value; the value must not be mistaken for a positional argument. */
+const VALUE_FLAGS = new Set(['--data-dir', '--db', '--file']);
+
+/**
+ * The positional arguments only.
+ *
+ * "Does not start with `--`" is not enough: the *value* of `--data-dir` is a path, and a
+ * path does not start with `--` either. Without this, a flag value silently becomes part of
+ * the command's arguments.
+ */
+function positionalArgs() {
+  return args.filter((arg, index) => {
+    if (arg.startsWith('--')) return false;
+    return !VALUE_FLAGS.has(args[index - 1]);
+  });
+}
+
 const store = RuntimeStore.open(dbPath);
 const patrol = new PatrolStore(dataDir);
 
@@ -154,6 +171,9 @@ if (command === 'facts') {
       title: finding.title,
       createdAt: finding.createdAt,
       acknowledged: finding.acknowledged,
+      // 'user' = 大老板已确认；'boss' = 大哥自己撤回（结论已不适用）。
+      acknowledgedBy: finding.acknowledgedBy ?? null,
+      note: finding.note ?? '',
     })),
     // The boss's own duty state. `missedRounds` is how the boss learns that its previous
     // round never landed — the board can see a stale duty line, but only the boss can
@@ -207,7 +227,7 @@ if (command === 'report') {
   const fileIndex = args.indexOf('--file');
   const file = fileIndex !== -1
     ? args[fileIndex + 1]
-    : args.find((arg) => arg.endsWith('.json'));
+    : positionalArgs().find((arg) => arg.endsWith('.json'));
   if (!file) {
     process.stderr.write('report 需要一个 JSON 文件参数（--file <路径> 或直接给 .json 路径）\n');
     process.exit(2);
@@ -242,7 +262,25 @@ if (command === 'report') {
   process.exit(0);
 }
 
-process.stderr.write(`未知命令：${command}\n可用：facts / report / paths\n`);
+if (command === 'withdraw') {
+  // The boss retracting a conclusion of its own that turned out to be wrong — a stale fact, a
+  // duplicate, an alarm that was not real. The reason is mandatory on purpose: a retraction
+  // without a reason is just a quieter kind of noise.
+  const positional = positionalArgs();
+  const [, id, ...reasonParts] = positional;
+  const reason = reasonParts.join(' ').trim();
+  if (!id || !reason) {
+    process.stderr.write('用法：withdraw <结论id> <撤回理由>\n');
+    store.close();
+    process.exit(2);
+  }
+  const ok = await patrol.withdraw(id, reason);
+  print({ ok, id, reason, acknowledgedBy: 'boss' });
+  store.close();
+  process.exit(ok ? 0 : 1);
+}
+
+process.stderr.write(`未知命令：${command}\n可用：facts / report / withdraw / paths\n`);
 store.close();
 process.exit(2);
 

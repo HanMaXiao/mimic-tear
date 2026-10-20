@@ -259,6 +259,28 @@ test('view-model', async (t) => {
     assert.equal(kpi.pendingDecisions, 2, 'low 优先级与已确认项都不计入');
   });
 
+  await t.test('大哥撤回的结论要单独计数——看板不能替它悄悄清场', () => {
+    const duty = buildDutyStatus({
+      config: {
+        lastRunAt: NOW - 5 * 60_000,
+        intervalMinutes: 15,
+        dutyIntervalMinutes: 30,
+        autoDispatch: false,
+      },
+      findings: [
+        { acknowledged: false },
+        { acknowledged: false },
+        { acknowledged: true, acknowledgedBy: 'boss' },
+        { acknowledged: true, acknowledgedBy: 'user' },
+      ],
+      now: NOW,
+    });
+
+    assert.equal(duty.findings, 4);
+    assert.equal(duty.openFindings, 2, '已确认的和已撤回的都不该再占着待办');
+    assert.equal(duty.withdrawn, 1, '大哥撤回的要单独计数——否则它能悄悄清空你的桌面');
+  });
+
   await t.test('大哥很久没交班时，看板必须能说出「可能掉线」', () => {
     const config = { lastRunAt: NOW - 60 * 60_000, intervalMinutes: 15, dutyIntervalMinutes: 30, autoDispatch: false };
 

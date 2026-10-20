@@ -38,7 +38,7 @@
  *             children:OrgNode[] }} OrgNode
  * @typedef {{ projects:number, active:number, pendingDecisions:number, errors:number }} Kpi
  * @typedef {{ lastRunAt:number|null, intervalMinutes:number, dutyIntervalMinutes:number,
- *             autoDispatch:boolean, findings:number, openFindings:number,
+ *             autoDispatch:boolean, findings:number, openFindings:number, withdrawn:number,
  *             staleAfterMinutes:number, stale:boolean, neverRan:boolean,
  *             ageMinutes:number|null, missedRounds:number|null }} DutyStatus
  */
@@ -388,6 +388,9 @@ export function buildDutyStatus(input) {
     autoDispatch: Boolean(config.autoDispatch),
     findings: findings.length,
     openFindings: findings.filter((finding) => !finding.acknowledged).length,
+    // Conclusions the boss retracted itself. They leave the attention list, so the board has
+    // to say how many were withdrawn — otherwise the boss could quietly clear your desk.
+    withdrawn: findings.filter((finding) => finding.acknowledgedBy === 'boss').length,
     staleAfterMinutes,
     stale: lastRunAt === null || ageMinutes > staleAfterMinutes,
     neverRan: lastRunAt === null,

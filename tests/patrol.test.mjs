@@ -280,6 +280,51 @@ test('patrol', async (t) => {
     }
   });
 
+  await t.test('CLI 的 withdraw 能撤回大哥自己那条已不适用的结论', () => {
+    const dir = tmpDir();
+    const dbPath = makeRuntimeDb(dir);
+    const dataDir = join(dir, 'data');
+    try {
+      // The boss files a conclusion...
+      const reportFile = join(dir, 'report.json');
+      writeFileSync(reportFile, JSON.stringify({
+        findings: [{
+          projectId: 10,
+          projectName: 'Contra-Survivor',
+          severity: 'high',
+          title: '需要你加额度',
+          body: '4 个会话以 2056 额度上限中断',
+        }],
+        answered: [],
+      }), 'utf8');
+      runCli(dbPath, dataDir, ['report', '--file', reportFile]);
+
+      const filed = runCli(dbPath, dataDir).alreadyReported[0];
+      assert.equal(filed.acknowledged, false);
+
+      // ...and later finds out it no longer applies, so it withdraws it with a reason.
+      const result = runCli(dbPath, dataDir, ['withdraw', filed.id, '账号并未被额度卡住，这条结论已过期']);
+      assert.equal(result.ok, true);
+      assert.equal(result.acknowledgedBy, 'boss');
+
+      const after = runCli(dbPath, dataDir).alreadyReported[0];
+      assert.equal(after.acknowledged, true, '撤回后这条不该再占用大老板的收件箱');
+      assert.equal(after.acknowledgedBy, 'boss');
+      assert.match(after.note, /过期/);
+
+      // No reason means no withdrawal: a retraction without a reason is just quieter noise.
+      let rejected = false;
+      try {
+        runCli(dbPath, dataDir, ['withdraw', filed.id]);
+      } catch (error) {
+        rejected = error.status === 2;
+      }
+      assert.equal(rejected, true, '没有撤回理由必须被拒绝');
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
   await t.test('大哥回复无法解析时也不静默', async () => {
     const { service, store, dir } = makeService({ text: '完全不符合格式的一段话' });
     try {

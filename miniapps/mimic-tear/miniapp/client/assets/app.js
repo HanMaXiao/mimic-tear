@@ -216,6 +216,25 @@ function renderKpi(overview) {
  * the board), so it gets no dispatch button — a button with project 0 would only produce
  * a confusing 404.
  */
+/**
+ * Why an item is no longer on your desk.
+ *
+ * `user` means you marked it known. `boss` means the boss withdrew a conclusion of its own
+ * that turned out not to apply — a stale fact, a duplicate, an alarm that was not real.
+ * The reason is always shown, because a retraction that leaves no trace is just a quieter
+ * kind of noise.
+ *
+ * @param {any} item
+ * @returns {string}
+ */
+function acknowledgedNoteHtml(item) {
+  if (!item?.acknowledged) return '';
+  if (item.acknowledgedBy === 'boss') {
+    return `<p class="item__note">大哥已撤回：${escapeHtml(item.note || '这条结论已不适用')}</p>`;
+  }
+  return '<p class="item__note">你已标记已知</p>';
+}
+
 function itemActionsHtml(item) {
   const actions = [];
   if (item.kind === 'questionnaire' && item.recommendation) {
@@ -297,6 +316,7 @@ function attentionItemHtml(item) {
         <span class="item__meta">${escapeHtml(item.projectName)} · ${waitingLabel(item.createdAt)}</span>
       </div>
       <p class="item__body">${escapeHtml(item.body)}</p>
+      ${acknowledgedNoteHtml(item)}
       <div class="item__actions">${itemActionsHtml(item)}</div>
     </div>`;
 }
@@ -336,7 +356,9 @@ function renderDutyStatus(duty) {
   }
   const since = duty.lastRunAt ? relativeTime(duty.lastRunAt) : '尚未巡检';
   const open = duty.openFindings ?? 0;
-  const tail = open > 0 ? ` · ${open} 条结论待你过目` : '';
+  const withdrawn = duty.withdrawn ?? 0;
+  const tail = (open > 0 ? ` · ${open} 条结论待你过目` : '')
+    + (withdrawn > 0 ? ` · ${withdrawn} 条已由大哥撤回` : '');
 
   if (duty.stale) {
     node.textContent = duty.neverRan
@@ -401,6 +423,7 @@ function inboxItemHtml(item) {
         <span class="item__meta">${escapeHtml(item.projectName)} · ${relativeTime(item.createdAt)}</span>
       </div>
       <p class="item__body">${escapeHtml(item.body)}</p>
+      ${acknowledgedNoteHtml(item)}
       <div class="item__actions">${itemActionsHtml(item)}</div>
     </div>`;
 }

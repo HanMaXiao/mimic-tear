@@ -270,6 +270,9 @@ export class ProjectService {
         createdAt: finding.createdAt,
         ageMinutes: ageInMinutes(finding.createdAt),
         acknowledged: finding.acknowledged,
+        // 'user' = 大老板点过「标记已知」；'boss' = 大哥撤回了自己的结论（已不适用）。
+        acknowledgedBy: finding.acknowledgedBy ?? null,
+        note: finding.note ?? '',
       }))
       : [];
 
