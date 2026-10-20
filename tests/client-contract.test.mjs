@@ -102,6 +102,16 @@ test('client-contract', async (t) => {
     assert.match(css, /\.view\s*\{[^}]*min-width:\s*0/, '视图需要 min-width: 0 才能收缩');
   });
 
+  await t.test('主动巡检：界面有开关、有立即巡检、API 齐全', () => {
+    assert.ok(html.includes('id="patrol-enabled"'), '缺少巡检开关');
+    assert.ok(html.includes('id="patrol-autodispatch"'), '缺少自动派工开关');
+    assert.ok(html.includes('id="patrol-run-button"'), '缺少立即巡检按钮');
+    for (const path of ['/api/patrol', '/api/patrol/config', '/api/patrol/run']) {
+      assert.ok(app.includes(path), `app.js 未引用 ${path}`);
+    }
+    assert.ok(app.includes("patrol: '大哥巡检'"), '收件箱缺少巡检类型标签');
+  });
+
   await t.test('浅色与深色主题定义同一套变量', () => {
     const light = css.slice(css.indexOf("[data-theme='light']"), css.indexOf("[data-theme='dark']"));
     const dark = css.slice(css.indexOf("[data-theme='dark']"), css.indexOf('@media (prefers-color-scheme: dark)'));
