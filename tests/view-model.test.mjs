@@ -7,6 +7,8 @@ import {
   buildInbox,
   buildOrgTree,
   buildKpi,
+  buildDutyStatus,
+  dutyStaleAfterMinutes,
   questionnaireBody,
   projectName,
   sessionErrorBody,
@@ -255,6 +257,53 @@ test('view-model', async (t) => {
     assert.equal(kpi.active, 1);
     assert.equal(kpi.errors, 1);
     assert.equal(kpi.pendingDecisions, 2, 'low 优先级与已确认项都不计入');
+  });
+
+  await t.test('大哥很久没交班时，看板必须能说出「可能掉线」', () => {
+    const config = { lastRunAt: NOW - 60 * 60_000, intervalMinutes: 15, autoDispatch: false };
+
+    const fresh = buildDutyStatus({ config: { ...config, lastRunAt: NOW - 5 * 60_000 }, findings: [], now: NOW });
+    assert.equal(fresh.stale, false, '刚交过班不算掉线');
+    assert.equal(fresh.neverRan, false);
+    assert.equal(fresh.ageMinutes, 5);
+
+    const silent = buildDutyStatus({ config, findings: [], now: NOW });
+    assert.equal(silent.stale, true, '一小时没有交班必须判定掉线');
+    assert.equal(silent.neverRan, false);
+    assert.equal(silent.staleAfterMinutes, 45);
+  });
+
+  await t.test('大哥从没交过班，也算掉线（而不是安静）', () => {
+    const duty = buildDutyStatus({
+      config: { lastRunAt: null, intervalMinutes: 15, autoDispatch: false },
+      findings: [],
+      now: NOW,
+    });
+
+    assert.equal(duty.stale, true, '没交过班和「没事可报」必须区分开');
+    assert.equal(duty.neverRan, true);
+    assert.equal(duty.ageMinutes, null);
+  });
+
+  await t.test('交班时间戳只看交班本身，不受结论条数影响', () => {
+    const findings = [{ acknowledged: false }, { acknowledged: true }];
+    const duty = buildDutyStatus({
+      config: { lastRunAt: NOW - 10 * 60_000, intervalMinutes: 15, autoDispatch: false },
+      findings,
+      now: NOW,
+    });
+
+    assert.equal(duty.findings, 2);
+    assert.equal(duty.openFindings, 1);
+    assert.equal(duty.stale, false);
+  });
+
+  await t.test('掉线阈值：三个间隔，且不低于 45 分钟', () => {
+    assert.equal(dutyStaleAfterMinutes(15), 45);
+    assert.equal(dutyStaleAfterMinutes(30), 90);
+    assert.equal(dutyStaleAfterMinutes(5), 45, '间隔很短时也要留出最低观察窗');
+    assert.equal(dutyStaleAfterMinutes(0), 45, '非法间隔退回默认值');
+    assert.equal(dutyStaleAfterMinutes(Number.NaN), 45);
   });
 
   await t.test('会话异常没有消息也没有错误码时，不显示 null', () => {

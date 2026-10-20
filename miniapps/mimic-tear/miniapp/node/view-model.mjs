@@ -37,6 +37,9 @@
  *             role:'lead'|'member', purpose:string|null, error:string|null,
  *             children:OrgNode[] }} OrgNode
  * @typedef {{ projects:number, active:number, pendingDecisions:number, errors:number }} Kpi
+ * @typedef {{ lastRunAt:number|null, intervalMinutes:number, autoDispatch:boolean,
+ *             findings:number, openFindings:number, staleAfterMinutes:number,
+ *             stale:boolean, neverRan:boolean, ageMinutes:number|null }} DutyStatus
  */
 
 /** Inbox severities, ordered from most to least urgent. */
@@ -328,6 +331,57 @@ export function buildKpi(cards, inbox) {
     active: projectCards.filter((c) => c.health === 'active').length,
     pendingDecisions: items.filter((i) => !i.acknowledged && i.severity !== 'low').length,
     errors: projectCards.filter((c) => c.health === 'error').length,
+  };
+}
+
+/**
+ * How long the board waits before it declares the boss missing.
+ *
+ * The boss is on a schedule of its own (a cron round, or the board's own patrol loop while
+ * the board is open). One missed round is not news; three intervals of silence is.
+ *
+ * @param {number} intervalMinutes
+ * @returns {number} minutes
+ */
+export function dutyStaleAfterMinutes(intervalMinutes) {
+  const minutes = Number(intervalMinutes);
+  if (!Number.isFinite(minutes) || minutes <= 0) return 45;
+  return Math.max(3 * minutes, 45);
+}
+
+/**
+ * Whether the boss is actually watching, and what to say about it.
+ *
+ * A board that only prints "last patrol: 4 hours ago" cannot tell "nothing is wrong" from
+ * "nobody is watching" — and those two look identical until you know the boss died. So the
+ * duty state carries its own liveness verdict: a boss that has not filed a round in time is
+ * `stale`, and the client says so in words instead of a timestamp.
+ *
+ * @param {{config:{lastRunAt:number|null,intervalMinutes:number,autoDispatch:boolean},
+ *          findings:Array<{acknowledged:boolean}>, now?:number}} input
+ * @returns {{lastRunAt:number|null, intervalMinutes:number, autoDispatch:boolean,
+ *            findings:number, openFindings:number, staleAfterMinutes:number,
+ *            stale:boolean, neverRan:boolean, ageMinutes:number|null}}
+ */
+export function buildDutyStatus(input) {
+  const config = input?.config ?? {};
+  const findings = input?.findings ?? [];
+  const now = input?.now ?? Date.now();
+  const intervalMinutes = Number(config.intervalMinutes) > 0 ? Number(config.intervalMinutes) : 15;
+  const staleAfterMinutes = dutyStaleAfterMinutes(intervalMinutes);
+  const lastRunAt = typeof config.lastRunAt === 'number' ? config.lastRunAt : null;
+  const ageMinutes = lastRunAt === null ? null : Math.floor((now - lastRunAt) / 60_000);
+
+  return {
+    lastRunAt,
+    intervalMinutes,
+    autoDispatch: Boolean(config.autoDispatch),
+    findings: findings.length,
+    openFindings: findings.filter((finding) => !finding.acknowledged).length,
+    staleAfterMinutes,
+    stale: lastRunAt === null || ageMinutes > staleAfterMinutes,
+    neverRan: lastRunAt === null,
+    ageMinutes,
   };
 }
 

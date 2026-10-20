@@ -195,6 +195,9 @@ const OVERVIEW = {
   dataWarning: null,
 };
 
+// Lets a test drive the overview payload (for example a duty state that is stale).
+let overviewOverride = null;
+
 const PROJECT_DETAIL = {
   project: PROJECTS[0],
   orgTree: [{
@@ -254,7 +257,7 @@ async function loadClient() {
     calls.push({ method: options.method ?? 'GET', url, body: options.body ? JSON.parse(options.body) : null });
     const path = String(url);
     let payload = {};
-    if (path.startsWith('/api/overview')) payload = OVERVIEW;
+    if (path.startsWith('/api/overview')) payload = overviewOverride ?? OVERVIEW;
     else if (path.startsWith('/api/inbox')) payload = { items: [] };
     else if (path.startsWith('/api/skills')) payload = { groups: [], unmapped: [], total: 0, failures: 0 };
     else if (path.startsWith('/api/patrol')) payload = { config: { enabled: false }, findings: [] };
@@ -413,5 +416,89 @@ test('client behavior (DOM shim)', async (t) => {
 
     assert.match(client.element('dispatch-target').textContent, /alpha/);
     assert.match(client.element('dispatch-instruction').value, /是否继续？/);
+  });
+
+  await t.test('大哥正常交班时，看板说「值班中」', async () => {
+    overviewOverride = {
+      ...OVERVIEW,
+      duty: {
+        lastRunAt: Date.now() - 5 * 60_000,
+        intervalMinutes: 15,
+        autoDispatch: false,
+        findings: 0,
+        openFindings: 0,
+        staleAfterMinutes: 45,
+        stale: false,
+        neverRan: false,
+        ageMinutes: 5,
+      },
+    };
+    try {
+      const client = await loadClient();
+      await client.settle();
+
+      const duty = client.element('duty-status');
+      assert.match(duty.textContent, /大哥值班中/, '正常交班应显示值班中');
+      assert.match(duty.textContent, /上次巡检/);
+      assert.equal(duty.getAttribute('data-duty-state'), null, '正常状态不应标成掉线');
+    } finally {
+      overviewOverride = null;
+    }
+  });
+
+  await t.test('大哥长时间没交班时，看板明说「可能掉线」', async () => {
+    overviewOverride = {
+      ...OVERVIEW,
+      duty: {
+        lastRunAt: Date.now() - 4 * 60 * 60_000,
+        intervalMinutes: 15,
+        autoDispatch: false,
+        findings: 2,
+        openFindings: 1,
+        staleAfterMinutes: 45,
+        stale: true,
+        neverRan: false,
+        ageMinutes: 240,
+      },
+    };
+    try {
+      const client = await loadClient();
+      await client.settle();
+
+      const duty = client.element('duty-status');
+      assert.match(duty.textContent, /大哥可能掉线/, '掉线必须写成人话，而不是只给时间戳');
+      assert.match(duty.textContent, /1 条结论待你过目/, '掉线时未过目的结论仍然要显示');
+      assert.equal(duty.getAttribute('data-duty-state'), 'stale');
+    } finally {
+      overviewOverride = null;
+    }
+  });
+
+  await t.test('大哥从没交过班时，看板说「尚未巡检」而不是「值班中」', async () => {
+    overviewOverride = {
+      ...OVERVIEW,
+      duty: {
+        lastRunAt: null,
+        intervalMinutes: 15,
+        autoDispatch: false,
+        findings: 0,
+        openFindings: 0,
+        staleAfterMinutes: 45,
+        stale: true,
+        neverRan: true,
+        ageMinutes: null,
+      },
+    };
+    try {
+      const client = await loadClient();
+      await client.settle();
+
+      const duty = client.element('duty-status');
+      assert.match(duty.textContent, /尚未巡检/);
+      assert.doesNotMatch(duty.textContent, /大哥值班中/, '没交过班不能说成值班中');
+      assert.equal(duty.getAttribute('data-duty-state'), 'stale');
+    } finally {
+      overviewOverride = null;
+    }
   });
 });

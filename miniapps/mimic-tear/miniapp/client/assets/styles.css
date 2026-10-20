@@ -276,6 +276,12 @@ main {
   font-size: 12px;
 }
 
+/* The boss went quiet. This is the one line on the board that must be noticed. */
+.section__head .count[data-duty-state='stale'] {
+  color: var(--mcode-warning);
+  font-weight: 500;
+}
+
 .section__actions {
   margin-left: auto;
   display: flex;

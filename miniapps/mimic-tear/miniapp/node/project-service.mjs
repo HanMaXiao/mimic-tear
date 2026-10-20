@@ -1,4 +1,5 @@
 import {
+  buildDutyStatus,
   buildInbox,
   buildKpi,
   buildOrgTree,
@@ -223,14 +224,12 @@ export class ProjectService {
       attention: inbox.filter((item) => item.severity !== 'low' && !item.acknowledged),
       internalProjectCount: snapshot.internalProjectCount,
       dataWarning: snapshot.dataWarning,
-      // Whether the boss is on duty, and when it last reported.
-      duty: {
-        lastRunAt: patrolConfig.lastRunAt ?? null,
-        intervalMinutes: patrolConfig.intervalMinutes,
-        autoDispatch: patrolConfig.autoDispatch,
-        findings: findings.length,
-        openFindings: findings.filter((finding) => !finding.acknowledged).length,
-      },
+      // Whether the boss is on duty, when it last reported, and whether it has gone quiet.
+      duty: buildDutyStatus({
+        config: patrolConfig,
+        findings,
+        now: Date.now(),
+      }),
     };
   }
 

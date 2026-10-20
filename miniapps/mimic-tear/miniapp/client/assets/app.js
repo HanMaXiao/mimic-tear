@@ -324,17 +324,30 @@ function renderAttention(overview) {
  *
  * The boss runs on its own schedule, so the board has to make its state visible: a stale
  * "last patrol" is the difference between "nothing is wrong" and "nobody is watching".
+ * A boss that has gone quiet is therefore announced in words, not left to be inferred
+ * from a timestamp nobody reads twice.
  */
 function renderDutyStatus(duty) {
   const node = el('duty-status');
   if (!duty) {
     node.textContent = '';
+    node.removeAttribute('data-duty-state');
     return;
   }
   const since = duty.lastRunAt ? relativeTime(duty.lastRunAt) : '尚未巡检';
   const open = duty.openFindings ?? 0;
-  node.textContent = `· 大哥值班中 · 上次巡检 ${since}`
-    + (open > 0 ? ` · ${open} 条结论待你过目` : '');
+  const tail = open > 0 ? ` · ${open} 条结论待你过目` : '';
+
+  if (duty.stale) {
+    node.textContent = duty.neverRan
+      ? `· 大哥尚未巡检 · 值班可能没启动${tail}`
+      : `· 大哥可能掉线 · 上次巡检 ${since}${tail}`;
+    node.setAttribute('data-duty-state', 'stale');
+    return;
+  }
+
+  node.removeAttribute('data-duty-state');
+  node.textContent = `· 大哥值班中 · 上次巡检 ${since}${tail}`;
 }
 
 function projectRowHtml(project) {
