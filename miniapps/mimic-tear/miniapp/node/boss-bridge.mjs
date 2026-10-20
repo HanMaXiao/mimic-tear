@@ -92,7 +92,11 @@ export class BossBridge {
       }
     };
 
+    /** @type {any} */
     let result;
+    /** @type {'boss' | 'primary'} */
+    let usedAgent = 'boss';
+
     try {
       if (existingSessionId) {
         result = await this.agent.run({ text: prompt, sessionId: existingSessionId }, { onEvent });
@@ -102,15 +106,21 @@ export class BossBridge {
           agentName ? { text: prompt, agent: agentName } : { text: prompt },
           { onEvent },
         );
+        usedAgent = agentName ? 'boss' : 'primary';
       }
     } catch (error) {
-      return {
-        bossSessionId: existingSessionId ?? '',
-        status: 'error',
-        text: '',
-        error: error?.message ?? String(error),
-        delivered: false,
-      };
+      result = { sessionId: existingSessionId ?? '', status: 'error', error: { message: error?.message ?? String(error) } };
+    }
+
+    // Fallback chain: the dedicated boss agent may exist but lack the tool needed to deliver.
+    // A failed turn delivered nothing, so retrying with the primary agent is safe.
+    if (result?.status === 'error' && usedAgent === 'boss') {
+      try {
+        result = await this.agent.run({ text: prompt }, { onEvent });
+        usedAgent = 'primary';
+      } catch (error) {
+        result = { sessionId: existingSessionId ?? '', status: 'error', error: { message: error?.message ?? String(error) } };
+      }
     }
 
     const text = typeof result?.text === 'string' ? result.text : '';
@@ -126,6 +136,7 @@ export class BossBridge {
       text,
       error: result?.status === 'finished' ? null : (result?.error?.message ?? '大哥未完成本轮派工'),
       delivered,
+      usedAgent,
     };
   }
 

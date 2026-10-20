@@ -507,6 +507,10 @@ async function renderRoute() {
   const route = currentRoute();
   showView(route.name);
 
+  // The overview feeds the KPI, the badge and the project lookup used by the dispatch
+  // dialog, so it is loaded on every route — not only on the overview.
+  const overviewPromise = state.overview ? Promise.resolve() : refresh();
+
   if (route.name === 'project') {
     if (state.projectId !== route.param) {
       state.projectId = route.param;
@@ -516,10 +520,12 @@ async function renderRoute() {
         state.project = await request(API.project(route.param));
       } catch (error) {
         el('org-tree').innerHTML = `<div class="state state--error">${escapeHtml(error.message)}</div>`;
+        await overviewPromise;
         return;
       }
     }
     renderProject();
+    await overviewPromise;
     return;
   }
 
@@ -529,14 +535,16 @@ async function renderRoute() {
         state.skills = await request(API.skills);
       } catch (error) {
         el('skill-list').innerHTML = `<div class="state state--error">${escapeHtml(error.message)}</div>`;
+        await overviewPromise;
         return;
       }
     }
     renderSkills();
+    await overviewPromise;
     return;
   }
 
-  await refresh();
+  await overviewPromise;
 }
 
 async function refresh() {
@@ -627,8 +635,21 @@ async function refreshInbox() {
 
 /* --------------------------------------------------------------- dispatch */
 
+/**
+ * Resolve a project by id.
+ *
+ * The overview list is the usual source, but a deep link straight to a project
+ * (`/?project=32`) never loads the overview — the loaded project detail is the fallback.
+ */
+function findProject(projectId) {
+  const fromOverview = (state.overview?.projects ?? []).find((item) => item.id === projectId);
+  if (fromOverview) return fromOverview;
+  if (state.project && state.project.project?.id === projectId) return state.project.project;
+  return null;
+}
+
 function openDispatchDialog(projectId) {
-  const project = (state.overview?.projects ?? []).find((item) => item.id === projectId);
+  const project = findProject(projectId);
   if (!project) {
     toast('找不到该项目', 'error');
     return;
@@ -641,8 +662,7 @@ function openDispatchDialog(projectId) {
   const sessionSelect = el('dispatch-session');
   const sessions = state.project && state.projectId === projectId
     ? collectSessions(state.project.orgTree)
-    : [];
-  sessionSelect.innerHTML =
+    : [];  sessionSelect.innerHTML =
     '<option value="">由大哥自行选择</option>' +
     sessions
       .map((session) => `<option value="${escapeHtml(session.id)}">${escapeHtml(session.title)} · ${escapeHtml(session.agentName)}</option>`)

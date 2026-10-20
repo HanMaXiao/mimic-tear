@@ -144,6 +144,36 @@ test('boss-bridge', async (t) => {
     assert.equal(result.status, 'finished');
   });
 
+  await t.test('降级链：boss agent 报错时改由主 agent 重试一次', async () => {
+    const agent = makeAgent();
+    const original = agent.run.bind(agent);
+    agent.run = async (input, options) => {
+      agent.calls.run.push({ input, options });
+      if (input.agent === 'boss') throw new Error('boss 缺少投递工具');
+      return { sessionId: 'primary-1', status: 'finished', text: '投递状态：已投递' };
+    };
+    void original;
+
+    const bridge = new BossBridge({ agent, persistence: makePersistence() });
+
+    const result = await bridge.dispatch(INPUT);
+
+    assert.equal(result.delivered, true);
+    assert.equal(result.usedAgent, 'primary');
+    assert.equal(agent.calls.run.length, 2, 'boss 失败后应重试一次');
+    assert.equal(agent.calls.run[0].input.agent, 'boss');
+    assert.equal(agent.calls.run[1].input.agent, undefined, '重试应走默认 agent');
+  });
+
+  await t.test('降级链：boss 成功时不再重试', async () => {
+    const agent = makeAgent();
+    const bridge = new BossBridge({ agent, persistence: makePersistence() });
+
+    const result = await bridge.dispatch(INPUT);
+    assert.equal(result.usedAgent, 'boss');
+    assert.equal(agent.calls.run.length, 1);
+  });
+
   await t.test('权限请求：没有 handler 时一律拒绝', async () => {
     const agent = makeAgent({
       async run(input, options) {

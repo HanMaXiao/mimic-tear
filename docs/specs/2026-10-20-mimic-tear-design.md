@@ -465,6 +465,25 @@ Node 侧每 3 秒计算一次**廉价修订号**（`max(updated_at_ms)` + 各表
 
 ---
 
+## 9.1 派工链路实测结果（2026-10-20）
+
+目标：MagicMaze&Line 项目负责人会话 `mvs_6e11ce0e58104e059dc82ec2b16e413f`（「接手开发任务 5：集成与视觉打磨」）。
+
+链路逐段实测通过：
+
+| 环节 | 证据 |
+| --- | --- |
+| Mini App 页面下达 | `dispatches.json` 出现记录 `dsp_mvgccr92_0shuhe`，status `done` |
+| 领域服务校验与提交 | 记录含项目、会话、指令原文、幂等键，状态先 `running` 后 `done` |
+| 大哥 agent 接管 | 大哥会话 `mvs_90f86d83cfff4dda97990ba7cda16eb0`，`agentName = boss`、`purpose = miniapp:mimic-tear`——**首选路径生效，未走降级** |
+| 投递 | 目标会话出现 `role=user, source=communication` 的指令原文，**一字未改** |
+| 对方接手 | 目标会话回「收到，仿身泪滴派工链路正常」，未启动任何开发工作 |
+| 结果可验证 | 大哥回复以「投递状态：已投递」收尾，Mini App 据此判定 `delivered=true` |
+
+派工指令**原样送达**，没有经过任何改写。
+
+---
+
 ## 10. 明确不做（YAGNI）
 
 - 不做鉴权与多用户（单机单用户场景）

@@ -71,6 +71,12 @@ test('client-contract', async (t) => {
     assert.match(css, /border:\s*1px solid var\(--mcode-border\)/, '描边应为 1px');
   });
 
+  await t.test('深链直达项目时也能找到项目（总览未加载的兜底）', () => {
+    assert.ok(app.includes('function findProject'), '缺少 findProject 兜底查找');
+    assert.ok(app.includes('state.project.project'), '兜底应使用已加载的项目详情');
+    assert.ok(app.includes('const overviewPromise = state.overview ?'), '任何路由都应加载总览');
+  });
+
   await t.test('支持 /?project=N 深链（Host 的 open API 不接受 fragment）', () => {
     assert.ok(app.includes("get('project')"), '缺少 query 深链解析');
     assert.ok(app.includes('location.search'), '缺少 location.search 读取');
