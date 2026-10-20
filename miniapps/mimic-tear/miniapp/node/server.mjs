@@ -449,14 +449,16 @@ export async function start(context) {
         const config = await service.getPatrolConfig();
         if (!config.enabled) return;
 
-        const since = config.lastRunAt ?? 0;
+        // The board's own loop keeps its own clock: lastRunAt belongs to the duty path,
+        // and borrowing it here would make the board look like it had covered for the boss.
+        const since = config.lastBoardPatrolAt ?? 0;
         const due = Date.now() - since >= config.intervalMinutes * 60_000;
         if (!due) return;
 
         const snapshot = await service.snapshot();
         if (config.lastSignature && service.inboxSignature(snapshot) === config.lastSignature) {
           // Nothing changed: just move the clock so the next check is not immediately due.
-          await patrol.setConfig({ lastRunAt: Date.now() });
+          await patrol.setConfig({ lastBoardPatrolAt: Date.now() });
           return;
         }
 

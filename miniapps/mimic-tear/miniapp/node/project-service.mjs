@@ -186,8 +186,11 @@ export class ProjectService {
       }
     }
 
+    // The board's own patrol stamp. Deliberately NOT lastRunAt: that one means "the duty
+    // boss handed over", and a board-triggered patrol must never be able to refresh it —
+    // otherwise a dead duty boss still shows as "on duty" for another threshold window.
     await this.patrol.setConfig({
-      lastRunAt: Date.now(),
+      lastBoardPatrolAt: Date.now(),
       lastSignature: this.inboxSignature(snapshot),
     });
 

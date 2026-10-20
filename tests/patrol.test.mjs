@@ -187,6 +187,31 @@ test('patrol', async (t) => {
     }
   });
 
+  await t.test('看板自己巡检不会刷新值班交班时间（否则会掩盖值班大哥掉线）', async () => {
+    const { service, store, dir } = makeService();
+    try {
+      // The duty boss has never handed over.
+      const before = await service.getPatrolConfig();
+      assert.equal(before.lastRunAt, null);
+
+      await service.runPatrol();
+
+      const after = await service.getPatrolConfig();
+      assert.equal(
+        after.lastRunAt,
+        null,
+        '看板触发的巡检绝不能刷新 lastRunAt——那会让一个已经掉线的值班大哥继续显示「值班中」',
+      );
+      assert.ok(
+        after.lastBoardPatrolAt > 0,
+        '看板自己的巡检要写自己的时间戳，否则看板的下一次巡检会被无限触发',
+      );
+      store.close();
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
   await t.test('大哥回复无法解析时也不静默', async () => {
     const { service, store, dir } = makeService({ text: '完全不符合格式的一段话' });
     try {
