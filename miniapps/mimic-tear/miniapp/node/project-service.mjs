@@ -5,6 +5,7 @@ import {
   buildPatrolBrief,
   buildProjectCards,
   parsePatrolReport,
+  questionnaireShape,
 } from './view-model.mjs';
 
 /**
@@ -262,7 +263,31 @@ export class ProjectService {
       }))
       : [];
 
-    const items = [...patrolItems, ...runtimeItems];
+    // A pending question carries its answerable shape plus whatever the boss already decided,
+    // so the page can offer "answer with the boss's choice" instead of a bare toast.
+    const answered = this.patrol ? await this.patrol.listAnswered() : [];
+    const answeredByRequest = new Map(answered.map((entry) => [entry.requestId, entry]));
+
+    const items = [...patrolItems, ...runtimeItems].map((item) => {
+      if (item.kind !== 'questionnaire') return item;
+      const shape = questionnaireShape(item.requestJson ?? '');
+      const decision = answeredByRequest.get(item.requestId);
+      return {
+        ...item,
+        requestId: item.requestId,
+        stepIds: shape.stepIds,
+        options: shape.options,
+        recommendation: decision
+          ? {
+            optionIds: decision.optionIds ?? [],
+            answer: decision.answer ?? '',
+            rationale: decision.rationale ?? '',
+            decidedAt: decision.answeredAt,
+          }
+          : null,
+      };
+    });
+
     items.sort((a, b) => {
       const order = { high: 0, medium: 1, low: 2 };
       const bySeverity = order[a.severity] - order[b.severity];

@@ -103,6 +103,7 @@ export class PatrolStore {
       answeredAt: Date.now(),
       answer: entry.answer ?? '',
       rationale: entry.rationale ?? '',
+      optionIds: entry.optionIds ?? [],
     });
     await writeJson(this.answeredPath, answered.slice(0, 200));
     return answered;

@@ -83,6 +83,7 @@ if (command === 'facts') {
         projectName: project ? project.workspaceDir.split(/[\\/]/).pop() : null,
         createdAt: q.createdAt,
         question: extractQuestion(q.requestJson),
+        stepIds: extractSteps(q.requestJson),
         options: extractOptions(q.requestJson),
       };
     });
@@ -194,9 +195,12 @@ if (command === 'facts') {
 }
 
 if (command === 'report') {
-  const file = args[args.indexOf('--file') + 1] ?? args.find((arg) => arg.endsWith('.json'));
+  const fileIndex = args.indexOf('--file');
+  const file = fileIndex !== -1
+    ? args[fileIndex + 1]
+    : args.find((arg) => arg.endsWith('.json'));
   if (!file) {
-    process.stderr.write('report 需要一个 JSON 文件参数\n');
+    process.stderr.write('report 需要一个 JSON 文件参数（--file <路径> 或直接给 .json 路径）\n');
     process.exit(2);
   }
   const payload = JSON.parse(await readFile(resolve(file), 'utf8'));
@@ -218,6 +222,7 @@ if (command === 'report') {
       sessionId: entry.sessionId ?? '',
       answer: entry.answer ?? '',
       rationale: entry.rationale ?? '',
+      optionIds: entry.optionIds ?? [],
     });
   }
 
@@ -249,12 +254,26 @@ function extractQuestion(requestJson) {
   }
 }
 
-function extractOptions(requestJson) {
+function extractSteps(requestJson) {
   try {
     const parsed = JSON.parse(requestJson);
     const steps = Array.isArray(parsed?.steps) ? parsed.steps : [];
+    return steps.map((step) => step?.id).filter((id) => typeof id === 'string');
+  } catch {
+    return [];
+  }
+}
+
+function extractOptions(requestJson) {  try {
+    const parsed = JSON.parse(requestJson);
+    const steps = Array.isArray(parsed?.steps) ? parsed.steps : [];
     return steps.flatMap((step) => (Array.isArray(step?.options) ? step.options : []))
-      .map((option) => ({ id: option?.id ?? '', label: option?.label ?? '' }))
+      .map((option) => ({
+        id: option?.id ?? '',
+        label: option?.label ?? '',
+        // The payload marks the recommended option; the boss should prefer it.
+        recommended: option?.recommended === true,
+      }))
       .filter((option) => option.id);
   } catch {
     return [];

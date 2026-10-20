@@ -218,6 +218,12 @@ function renderKpi(overview) {
  */
 function itemActionsHtml(item) {
   const actions = [];
+  if (item.kind === 'questionnaire' && item.recommendation) {
+    actions.push(
+      `<button type="button" class="btn btn--small btn--primary" data-action="apply-recommendation"`
+      + ` data-item="${escapeHtml(item.id)}">按大哥的建议回复</button>`,
+    );
+  }
   if (item.sessionId) {
     actions.push(
       `<button type="button" class="btn btn--small" data-action="open-session"`
@@ -236,6 +242,49 @@ function itemActionsHtml(item) {
     );
   }
   return actions.join('');
+}
+
+/**
+ * Answer a pending question with the boss's decision.
+ *
+ * The board asks the Host to answer the questionnaire on the blocked session. If the Host
+ * will not answer a session this Mini App does not own, the decision is delivered as a
+ * message instead, so the answer still reaches the project lead.
+ */
+async function applyRecommendation(item) {
+  const recommendation = item.recommendation;
+  if (!recommendation) {
+    toast('大哥还没有给出建议', 'error');
+    return;
+  }
+
+  const agent = window.mcode?.miniapp?.agent;
+  if (agent?.answer) {
+    try {
+      await agent.answer({
+        sessionId: item.sessionId,
+        questionId: item.requestId,
+        answers: [{
+          stepId: item.stepIds?.[0] ?? '',
+          selectedOptionIds: recommendation.optionIds ?? [],
+          selectedOther: false,
+        }],
+      });
+      toast('已按大哥的建议回复');
+      void refresh();
+      return;
+    } catch (error) {
+      // Fall through to the message path.
+      console.warn('mimic-tear: direct answer failed', error);
+    }
+  }
+
+  openDispatchDialog(item.projectId, {
+    sessionId: item.sessionId,
+    instruction: `回复你的提问「${item.body}」。大哥的建议：${recommendation.answer}`
+      + (recommendation.rationale ? `（理由：${recommendation.rationale}）` : ''),
+  });
+  toast('此 Host 无法直接代答，已把建议内容投递给该会话');
 }
 
 function attentionItemHtml(item) {
@@ -869,6 +918,16 @@ document.addEventListener('click', (event) => {
       sessionId,
       instruction: `回复你之前的提问：${body}`,
     });
+    return;
+  }
+  if (action === 'apply-recommendation') {
+    event.preventDefault();
+    const item = (state.inbox ?? []).find((entry) => entry.id === target.dataset.item);
+    if (!item) {
+      toast('找不到这条待答问题', 'error');
+      return;
+    }
+    void applyRecommendation(item);
     return;
   }
 });

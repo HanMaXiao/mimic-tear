@@ -193,6 +193,8 @@ export function buildInbox(input, acked) {
       sessionTitle: session?.title ?? null,
       title: 'agent 请求你确认',
       body: questionnaireBody(questionnaire.requestJson),
+      requestId: questionnaire.id,
+      requestJson: questionnaire.requestJson,
       createdAt: questionnaire.createdAt,
       ageMinutes: ageMinutes(questionnaire.createdAt, now),
     });
@@ -458,6 +460,35 @@ export function sessionErrorBody(session) {
   if (session.errorMessage && session.errorMessage.trim()) return session.errorMessage;
   if (session.errorCode != null) return `错误码 ${session.errorCode}`;
   return '运行时未提供具体原因（会话状态为异常）';
+}
+
+/**
+ * Extract the answerable shape of a questionnaire: its step ids, question text and options.
+ *
+ * Options carry a `recommended` flag, which is exactly the "推荐答案" the boss should prefer.
+ *
+ * @param {string} requestJson
+ * @returns {{ stepIds: string[], options: { id: string, label: string, recommended: boolean }[] }}
+ */
+export function questionnaireShape(requestJson) {
+  const empty = { stepIds: [], options: [] };
+  let parsed;
+  try {
+    parsed = JSON.parse(requestJson);
+  } catch {
+    return empty;
+  }
+  const steps = Array.isArray(parsed?.steps) ? parsed.steps : [];
+  const stepIds = steps.map((step) => step?.id).filter((id) => typeof id === 'string');
+  const options = steps
+    .flatMap((step) => (Array.isArray(step?.options) ? step.options : []))
+    .map((option) => ({
+      id: option?.id ?? '',
+      label: option?.label ?? '',
+      recommended: option?.recommended === true,
+    }))
+    .filter((option) => option.id);
+  return { stepIds, options };
 }
 
 /**
