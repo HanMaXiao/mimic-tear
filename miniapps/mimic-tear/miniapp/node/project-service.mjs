@@ -86,7 +86,14 @@ export class ProjectService {
    */
   async getPatrolConfig() {
     if (!this.patrol) {
-      return { enabled: false, intervalMinutes: 15, autoDispatch: false, lastRunAt: null, lastSignature: null };
+      return {
+        enabled: false,
+        intervalMinutes: 15,
+        autoDispatch: false,
+        dutyIntervalMinutes: 30,
+        lastRunAt: null,
+        lastSignature: null,
+      };
     }
     return this.patrol.getConfig();
   }

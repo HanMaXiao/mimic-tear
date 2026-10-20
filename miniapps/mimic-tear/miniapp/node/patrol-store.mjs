@@ -17,6 +17,7 @@ import { join } from 'node:path';
  *             severity:'high'|'medium'|'low', title:string, body:string,
  *             acknowledged:boolean }} PatrolFinding
  * @typedef {{ enabled:boolean, intervalMinutes:number, autoDispatch:boolean,
+ *             dutyIntervalMinutes:number,
  *             lastRunAt:number|null, lastSignature:string|null }} PatrolConfig
  */
 
@@ -24,6 +25,10 @@ const DEFAULT_CONFIG = {
   enabled: false,
   intervalMinutes: 15,
   autoDispatch: false,
+  // How often the boss is expected to hand over, in minutes. This is the duty cron's own
+  // period (currently 30), NOT the board's patrol loop. The board's "the boss went quiet"
+  // warning is derived from it, so the two must be changed together.
+  dutyIntervalMinutes: 30,
   lastRunAt: null,
   lastSignature: null,
 };
@@ -126,6 +131,7 @@ export class PatrolStore {
     const current = await this.getConfig();
     const next = { ...current, ...patch };
     next.intervalMinutes = Math.min(240, Math.max(5, Number(next.intervalMinutes) || 15));
+    next.dutyIntervalMinutes = Math.min(240, Math.max(5, Number(next.dutyIntervalMinutes) || 30));
     next.enabled = Boolean(next.enabled);
     next.autoDispatch = Boolean(next.autoDispatch);
     await writeJson(this.configPath, next);

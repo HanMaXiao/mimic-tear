@@ -45,9 +45,9 @@
           <input type="checkbox" id="patrol-enabled" />
           <span>大哥巡检</span>
         </label>
-        <label class="app-toggle" title="允许大哥在巡检时直接派工，而不是只汇报">
+        <label class="app-toggle" title="只作用于「巡检」按钮触发的这一轮：开启后大哥提出的低风险派工会经指挥部校验项目与会话归属后直接投递。值班（cron）路径不受此开关限制——大哥值班时的派工由常驻授权授权。">
           <input type="checkbox" id="patrol-autodispatch" />
-          <span>允许自动派工</span>
+          <span>看板巡检直接派工</span>
         </label>
         <button type="button" class="btn btn--small" id="patrol-run-button" aria-label="立即巡检一次">巡检</button>
         <button type="button" class="btn btn--small" id="refresh-button" aria-label="刷新数据">刷新</button>

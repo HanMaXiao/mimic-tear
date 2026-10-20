@@ -37,9 +37,10 @@
  *             role:'lead'|'member', purpose:string|null, error:string|null,
  *             children:OrgNode[] }} OrgNode
  * @typedef {{ projects:number, active:number, pendingDecisions:number, errors:number }} Kpi
- * @typedef {{ lastRunAt:number|null, intervalMinutes:number, autoDispatch:boolean,
- *             findings:number, openFindings:number, staleAfterMinutes:number,
- *             stale:boolean, neverRan:boolean, ageMinutes:number|null }} DutyStatus
+ * @typedef {{ lastRunAt:number|null, intervalMinutes:number, dutyIntervalMinutes:number,
+ *             autoDispatch:boolean, findings:number, openFindings:number,
+ *             staleAfterMinutes:number, stale:boolean, neverRan:boolean,
+ *             ageMinutes:number|null }} DutyStatus
  */
 
 /** Inbox severities, ordered from most to least urgent. */
@@ -337,16 +338,22 @@ export function buildKpi(cards, inbox) {
 /**
  * How long the board waits before it declares the boss missing.
  *
- * The boss is on a schedule of its own (a cron round, or the board's own patrol loop while
- * the board is open). One missed round is not news; three intervals of silence is.
+ * The boss hands over on its own schedule: the duty cron runs every
+ * `dutyIntervalMinutes`. The warning has to sit between two of those periods — any
+ * shorter and a healthy boss trips it, any longer and a dead one stays quiet for half
+ * an hour. The floor keeps a very fast duty from flapping the board.
  *
- * @param {number} intervalMinutes
+ * The duty period is a separate number from the board's own patrol interval on purpose:
+ * mixing them up is how a 60-minute duty ends up flagged as "the boss went quiet" on
+ * every single round.
+ *
+ * @param {number} dutyIntervalMinutes
  * @returns {number} minutes
  */
-export function dutyStaleAfterMinutes(intervalMinutes) {
-  const minutes = Number(intervalMinutes);
+export function dutyStaleAfterMinutes(dutyIntervalMinutes) {
+  const minutes = Number(dutyIntervalMinutes);
   if (!Number.isFinite(minutes) || minutes <= 0) return 45;
-  return Math.max(3 * minutes, 45);
+  return Math.max(Math.ceil(minutes * 1.5), 45);
 }
 
 /**
@@ -357,24 +364,27 @@ export function dutyStaleAfterMinutes(intervalMinutes) {
  * duty state carries its own liveness verdict: a boss that has not filed a round in time is
  * `stale`, and the client says so in words instead of a timestamp.
  *
- * @param {{config:{lastRunAt:number|null,intervalMinutes:number,autoDispatch:boolean},
+ * @param {{config:{lastRunAt:number|null,intervalMinutes:number,autoDispatch:boolean,
+ *                 dutyIntervalMinutes?:number},
  *          findings:Array<{acknowledged:boolean}>, now?:number}} input
- * @returns {{lastRunAt:number|null, intervalMinutes:number, autoDispatch:boolean,
- *            findings:number, openFindings:number, staleAfterMinutes:number,
- *            stale:boolean, neverRan:boolean, ageMinutes:number|null}}
+ * @returns {{lastRunAt:number|null, intervalMinutes:number, dutyIntervalMinutes:number,
+ *            autoDispatch:boolean, findings:number, openFindings:number,
+ *            staleAfterMinutes:number, stale:boolean, neverRan:boolean, ageMinutes:number|null}}
  */
 export function buildDutyStatus(input) {
   const config = input?.config ?? {};
   const findings = input?.findings ?? [];
   const now = input?.now ?? Date.now();
   const intervalMinutes = Number(config.intervalMinutes) > 0 ? Number(config.intervalMinutes) : 15;
-  const staleAfterMinutes = dutyStaleAfterMinutes(intervalMinutes);
+  const dutyIntervalMinutes = Number(config.dutyIntervalMinutes) > 0 ? Number(config.dutyIntervalMinutes) : 30;
+  const staleAfterMinutes = dutyStaleAfterMinutes(dutyIntervalMinutes);
   const lastRunAt = typeof config.lastRunAt === 'number' ? config.lastRunAt : null;
   const ageMinutes = lastRunAt === null ? null : Math.floor((now - lastRunAt) / 60_000);
 
   return {
     lastRunAt,
     intervalMinutes,
+    dutyIntervalMinutes,
     autoDispatch: Boolean(config.autoDispatch),
     findings: findings.length,
     openFindings: findings.filter((finding) => !finding.acknowledged).length,

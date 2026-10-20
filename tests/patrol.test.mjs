@@ -75,13 +75,16 @@ class PersistenceStub {
 }
 
 test('patrol', async (t) => {
-  await t.test('默认关闭，间隔 15 分钟', async () => {
+  await t.test('默认关闭，间隔 15 分钟，值班周期 30 分钟', async () => {
     const { service, patrol, store, dir } = makeService();
     try {
       const config = await service.getPatrolConfig();
       assert.equal(config.enabled, false);
       assert.equal(config.intervalMinutes, 15);
       assert.equal(config.autoDispatch, false);
+      // The duty cron runs every 30 minutes; the "boss went quiet" warning is derived
+      // from this, so it is a first-class setting and not a hidden constant.
+      assert.equal(config.dutyIntervalMinutes, 30);
       void patrol;
       store.close();
     } finally {

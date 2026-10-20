@@ -118,6 +118,21 @@ test('client-contract', async (t) => {
     assert.ok(app.includes("patrol: '大哥巡检'"), '收件箱缺少巡检类型标签');
   });
 
+  await t.test('自动派工开关必须写清它只管看板触发的巡检', () => {
+    // 「允许自动派工」听起来像大哥的全局开关，但值班（cron）路径根本不受它约束。
+    // 文案误导会让人以为"关掉 = 大哥不能派工"，与事实相反。
+    assert.ok(
+      !html.includes('允许自动派工'),
+      '「允许自动派工」这个泛化文案会误导——它只管看板触发的巡检',
+    );
+    assert.ok(html.includes('看板巡检直接派工'), '开关应标明它只作用于看板触发的巡检');
+    assert.match(
+      html,
+      /<label class="app-toggle" title="[^"]*值班（cron）路径不受此开关限制[^"]*">\s*<input type="checkbox" id="patrol-autodispatch"/,
+      '开关的 title 必须说明值班路径不受它约束',
+    );
+  });
+
   await t.test('浅色与深色主题定义同一套变量', () => {
     const light = css.slice(css.indexOf("[data-theme='light']"), css.indexOf("[data-theme='dark']"));
     const dark = css.slice(css.indexOf("[data-theme='dark']"), css.indexOf('@media (prefers-color-scheme: dark)'));

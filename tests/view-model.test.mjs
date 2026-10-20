@@ -298,12 +298,35 @@ test('view-model', async (t) => {
     assert.equal(duty.stale, false);
   });
 
-  await t.test('掉线阈值：三个间隔，且不低于 45 分钟', () => {
-    assert.equal(dutyStaleAfterMinutes(15), 45);
-    assert.equal(dutyStaleAfterMinutes(30), 90);
-    assert.equal(dutyStaleAfterMinutes(5), 45, '间隔很短时也要留出最低观察窗');
+  await t.test('掉线阈值跟着值班周期走，永远大于一个周期', () => {
+    assert.equal(dutyStaleAfterMinutes(30), 45, '30 分钟一班 → 45 分钟后判定掉线');
+    assert.equal(dutyStaleAfterMinutes(60), 90, '60 分钟一班必须是 90，否则每一轮都会被误报成掉线');
+    assert.equal(dutyStaleAfterMinutes(15), 45, '间隔很短时也要留出最低观察窗');
     assert.equal(dutyStaleAfterMinutes(0), 45, '非法间隔退回默认值');
     assert.equal(dutyStaleAfterMinutes(Number.NaN), 45);
+
+    for (const duty of [5, 10, 15, 30, 45, 60, 90, 120]) {
+      const threshold = dutyStaleAfterMinutes(duty);
+      assert.equal(threshold, Math.max(Math.ceil(duty * 1.5), 45), `周期 ${duty} 的阈值公式要对得上`);
+      assert.ok(threshold > duty, `值班周期 ${duty} 分钟时阈值 ${threshold} 必须大于它，否则健康的班次也会被判掉线`);
+    }
+  });
+
+  await t.test('掉线阈值按值班周期算，不看板板自己的巡检间隔', () => {
+    const duty = buildDutyStatus({
+      config: {
+        lastRunAt: NOW - 70 * 60_000,
+        intervalMinutes: 15,
+        dutyIntervalMinutes: 60,
+        autoDispatch: false,
+      },
+      findings: [],
+      now: NOW,
+    });
+
+    assert.equal(duty.staleAfterMinutes, 90, '阈值来自值班周期 60，不是看板的 15');
+    assert.equal(duty.stale, false, '70 分钟没交班，但在 90 分钟阈值内不该算掉线');
+    assert.equal(duty.dutyIntervalMinutes, 60);
   });
 
   await t.test('会话异常没有消息也没有错误码时，不显示 null', () => {
