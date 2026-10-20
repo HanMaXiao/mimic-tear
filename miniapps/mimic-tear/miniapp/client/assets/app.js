@@ -363,7 +363,7 @@ function projectRowHtml(project) {
           <span class="status__dot" aria-hidden="true"></span>${HEALTH_LABEL[project.health] ?? project.health}
         </span>
       </td>
-      <td>${activeGoals} 个进行中 / ${(project.goals ?? []).length} 个</td>
+      <td class="nowrap">${activeGoals} 个进行中 / ${(project.goals ?? []).length} 个</td>
       <td class="numeric">${project.sessionCount}</td>
       <td class="numeric">${project.pendingQuestions}</td>
       <td>${relativeTime(project.lastActivityAt)}</td>
@@ -1038,6 +1038,25 @@ el('dispatch-form').addEventListener('submit', submitDispatch);
 window.addEventListener('hashchange', () => {
   void renderRoute();
 });
+
+/**
+ * Apply an explicit theme override.
+ *
+ * The stylesheet ships a `[data-theme='light']` hook, but nothing could ever reach it:
+ * the board simply followed the operating system. A `?theme=light|dark` parameter makes
+ * that hook reachable — and it is also the only way to *look at* the light theme, since
+ * the operating system's colour scheme is not something the app can change.
+ *
+ * @param {string|null} theme
+ * @returns {boolean} whether a theme was applied
+ */
+function applyTheme(theme) {
+  if (theme !== 'light' && theme !== 'dark') return false;
+  document.documentElement.setAttribute('data-theme', theme);
+  return true;
+}
+
+applyTheme(new URLSearchParams(window.location.search).get('theme'));
 
 setStatus('正在连接…', 'idle');
 void renderRoute();

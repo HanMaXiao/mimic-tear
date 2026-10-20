@@ -148,6 +148,8 @@ const documentShim = {
     if (!documentListeners.has(type)) documentListeners.set(type, []);
     documentListeners.get(type).push(handler);
   },
+  // A real DOM always has a root element; the theme override is written onto it.
+  documentElement: new ShimElement('html'),
   body: new ShimElement('body'),
 };
 
@@ -220,8 +222,10 @@ const PROJECT_DETAIL = {
 
 /**
  * Load the real client module against a DOM shim and return handles for driving it.
+ *
+ * @param {{ search?: string }} [options] query string the page is loaded with
  */
-async function loadClient() {
+async function loadClient(options = {}) {
   const html = await readFile(HTML_PATH, 'utf8');
   registry.clear();
   allElements.length = 0;
@@ -229,7 +233,9 @@ async function loadClient() {
 
   const calls = [];
   const sseListeners = new Map();
-  const location = { hash: '', search: '' };
+  const location = { hash: '', search: options.search ?? '' };
+  // A fresh root element per load, so a theme written at boot time is observable.
+  documentShim.documentElement = new ShimElement('html');
 
   globalThis.document = documentShim;
   globalThis.window = {
@@ -500,5 +506,28 @@ test('client behavior (DOM shim)', async (t) => {
     } finally {
       overviewOverride = null;
     }
+  });
+
+  await t.test('?theme=light 能强制浅色主题（发布出去的 CSS 本来就有这个钩子）', async () => {
+    const client = await loadClient({ search: '?theme=light' });
+    await client.settle();
+
+    assert.equal(
+      documentShim.documentElement.getAttribute('data-theme'),
+      'light',
+      '根元素上必须落 data-theme="light"，CSS 才有浅色变量可用',
+    );
+  });
+
+  await t.test('?theme= 给了非法值时不乱改主题', async () => {
+    const client = await loadClient({ search: '?theme=neon' });
+    await client.settle();
+
+    assert.equal(
+      documentShim.documentElement.getAttribute('data-theme'),
+      null,
+      '非法主题值要当作没给，不能落到任意一个主题上',
+    );
+    void client;
   });
 });

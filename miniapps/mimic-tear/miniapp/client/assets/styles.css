@@ -374,6 +374,20 @@ tbody td {
   vertical-align: middle;
 }
 
+/* A narrow column must not break its own words: "0 个进行中" squeezed into
+   "0 个 / 进行 / 中" is worse than a column that is a little too wide. */
+td.nowrap,
+th.nowrap {
+  white-space: nowrap;
+}
+
+/* The project column carries a long absolute path. Letting it wrap keeps it from
+   demanding width and squeezing every other column down to nothing. */
+tbody td .item__meta {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 tbody tr:hover {
   background: var(--mcode-surface-muted);
 }
