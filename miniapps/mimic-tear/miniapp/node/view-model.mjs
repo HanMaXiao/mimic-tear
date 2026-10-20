@@ -39,7 +39,7 @@
  *             children:OrgNode[] }} OrgNode
  * @typedef {{ projects:number, active:number, pendingDecisions:number, errors:number }} Kpi
  * @typedef {{ lastRunAt:number|null, intervalMinutes:number, dutyIntervalMinutes:number,
- *             autoDispatch:boolean, findings:number, openFindings:number, withdrawn:number,
+ *             findings:number, openFindings:number, withdrawn:number,
  *             staleAfterMinutes:number, stale:boolean, neverRan:boolean,
  *             ageMinutes:number|null, missedRounds:number|null }} DutyStatus
  */
@@ -374,13 +374,13 @@ export function dutyStaleAfterMinutes(dutyIntervalMinutes) {
  * duty state carries its own liveness verdict: a boss that has not filed a round in time is
  * `stale`, and the client says so in words instead of a timestamp.
  *
- * @param {{config:{lastRunAt:number|null,intervalMinutes:number,autoDispatch:boolean,
+ * @param {{config:{lastRunAt:number|null,intervalMinutes:number,
  *                 dutyIntervalMinutes?:number},
  *          findings:Array<{acknowledged:boolean, acknowledgedBy?:string|null}>,
  *          dismissed?:Array<{id:string, reason?:string}>,
  *          now?:number}} input
  * @returns {{lastRunAt:number|null, intervalMinutes:number, dutyIntervalMinutes:number,
- *            autoDispatch:boolean, findings:number, openFindings:number, withdrawn:number,
+ *            findings:number, openFindings:number, withdrawn:number,
  *            dismissed:number, staleAfterMinutes:number, stale:boolean, neverRan:boolean,
  *            ageMinutes:number|null, missedRounds:number|null}}
  */
@@ -399,7 +399,6 @@ export function buildDutyStatus(input) {
     lastRunAt,
     intervalMinutes,
     dutyIntervalMinutes,
-    autoDispatch: Boolean(config.autoDispatch),
     findings: findings.length,
     openFindings: findings.filter((finding) => !finding.acknowledged).length,
     // Conclusions the boss retracted itself. They leave the attention list, so the board has

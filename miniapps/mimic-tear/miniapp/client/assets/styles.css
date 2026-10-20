@@ -120,41 +120,61 @@ select {
   color: inherit;
 }
 
-/* ---------- header ---------- */
+/* ---------- shell ---------- */
 
-.app-header {
-  display: flex;
-  align-items: center;
-  gap: 24px;
-  flex-wrap: wrap;
-  padding: 12px 24px;
-  border-bottom: 1px solid var(--mcode-border);
-  background: var(--mcode-bg);
+.app-shell {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  min-height: 100vh;
 }
 
-.app-header__brand {
+.app-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 100vh;
+}
+
+/* ---------- sidebar ---------- */
+
+.app-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 16px 12px;
+  border-right: 1px solid var(--mcode-border);
+  background: var(--mcode-bg-secondary);
+}
+
+.app-sidebar__brand {
   display: flex;
   align-items: center;
   gap: 10px;
+  padding: 0 8px 14px;
+  color: var(--mcode-text);
+  text-decoration: none;
+  font-size: 15px;
+  font-weight: 500;
 }
 
-.app-header__subtitle {
-  color: var(--mcode-text-muted);
-  font-size: 12px;
-  line-height: 16px;
+.app-sidebar__name {
+  margin: 0;
+  font-size: 15px;
+  line-height: 22px;
+  font-weight: 500;
 }
 
-.app-nav {
+.app-sidebar__nav {
   display: flex;
-  gap: 4px;
-  margin-left: auto;
+  flex-direction: column;
+  gap: 2px;
 }
 
-.app-nav a {
-  display: inline-flex;
+.app-sidebar__nav a {
+  display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 12px;
+  padding: 7px 10px;
   border-radius: 8px;
   color: var(--mcode-text-muted);
   text-decoration: none;
@@ -162,15 +182,37 @@ select {
   transition: background-color 150ms ease-out, color 150ms ease-out;
 }
 
-.app-nav a:hover {
+.app-sidebar__nav a:hover {
   background: var(--mcode-surface-muted);
   color: var(--mcode-text);
 }
 
-.app-nav a[aria-current='page'] {
-  background: var(--mcode-surface-muted);
+.app-sidebar__nav a[aria-current='page'] {
+  background: var(--mcode-surface);
   color: var(--mcode-text);
-  box-shadow: inset 0 -2px 0 var(--mcode-accent);
+  box-shadow: inset 2px 0 0 var(--mcode-accent);
+}
+
+.app-sidebar__foot {
+  margin-top: auto;
+  padding: 12px 8px 0;
+  border-top: 1px solid var(--mcode-border);
+}
+
+.app-sidebar__foot .app-toggle {
+  width: 100%;
+}
+
+/* ---------- header ---------- */
+
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  flex-wrap: wrap;
+  padding: 10px 24px;
+  border-bottom: 1px solid var(--mcode-border);
+  background: var(--mcode-bg);
 }
 
 .app-header__actions {
@@ -723,6 +765,180 @@ th.numeric {
   font-size: 13px;
 }
 
+/* ---------- chat ---------- */
+
+#view-chat {
+  min-height: calc(100vh - 108px);
+}
+
+.chat {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.chat__log {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+  overflow-y: auto;
+  padding-bottom: 8px;
+}
+
+.chat__intro {
+  color: var(--mcode-text-muted);
+  font-size: 13px;
+  line-height: 20px;
+  max-width: 56ch;
+}
+
+.chat__intro p {
+  margin: 0 0 6px;
+}
+
+.chat__intro-hint {
+  color: var(--mcode-text-subtle);
+}
+
+.chat__msg {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 70ch;
+}
+
+.chat__msg--me {
+  align-self: flex-end;
+  align-items: flex-end;
+}
+
+.chat__msg--boss {
+  align-self: flex-start;
+}
+
+.chat__who {
+  color: var(--mcode-text-subtle);
+  font-size: 12px;
+}
+
+.chat__bubble {
+  padding: 10px 14px;
+  border: 1px solid var(--mcode-border);
+  border-radius: 12px;
+  background: var(--mcode-surface);
+  font-size: 13px;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+
+.chat__msg--me .chat__bubble {
+  background: var(--mcode-surface-muted);
+}
+
+.chat__msg--streaming .chat__bubble {
+  border-style: dashed;
+}
+
+.chat__tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chat__tool {
+  padding: 1px 8px;
+  border: 1px solid var(--mcode-border);
+  border-radius: 999px;
+  color: var(--mcode-text-subtle);
+  font-size: 12px;
+}
+
+.chat__tool--failed {
+  color: var(--mcode-danger);
+}
+
+.chat__ask {
+  align-self: flex-start;
+  max-width: 70ch;
+  padding: 12px 14px;
+  border: 1px solid var(--mcode-border-strong);
+  border-radius: 12px;
+  background: var(--mcode-surface);
+}
+
+.chat__ask-title {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.chat__step {
+  margin-bottom: 10px;
+}
+
+.chat__question {
+  margin: 0 0 6px;
+  font-size: 13px;
+}
+
+.chat__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chat__option {
+  padding: 6px 10px;
+  border: 1px solid var(--mcode-border);
+  border-radius: 8px;
+  background: var(--mcode-bg);
+  color: var(--mcode-text);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.chat__option--on {
+  border-color: var(--mcode-accent);
+  color: var(--mcode-accent);
+}
+
+.chat__composer {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  padding: 8px;
+  border: 1px solid var(--mcode-border);
+  border-radius: 12px;
+  background: var(--mcode-surface);
+}
+
+.chat__composer:focus-within {
+  border-color: var(--mcode-accent);
+}
+
+.chat__composer textarea {
+  flex: 1;
+  min-width: 0;
+  min-height: 24px;
+  max-height: 140px;
+  padding: 2px 4px;
+  border: 0;
+  background: transparent;
+  color: var(--mcode-text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+  resize: none;
+}
+
+.chat__composer textarea:focus {
+  outline: none;
+}
+
 /* ---------- states ---------- */
 
 .visually-hidden {
@@ -852,6 +1068,37 @@ dialog select {
 
   .app-header {
     padding: 12px 16px;
+  }
+
+  /* The sidebar becomes a top strip on a narrow screen. */
+  .app-shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .app-sidebar {
+    flex-direction: row;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 10px 12px;
+    border-right: 0;
+    border-bottom: 1px solid var(--mcode-border);
+  }
+
+  .app-sidebar__brand {
+    padding: 0 8px 0 0;
+  }
+
+  .app-sidebar__nav {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .app-sidebar__foot {
+    margin-top: 0;
+    margin-left: auto;
+    padding: 0;
+    border-top: 0;
   }
 
   .kpi-row {

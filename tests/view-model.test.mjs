@@ -265,7 +265,6 @@ test('view-model', async (t) => {
         lastRunAt: NOW - 5 * 60_000,
         intervalMinutes: 15,
         dutyIntervalMinutes: 30,
-        autoDispatch: false,
       },
       findings: [
         { acknowledged: false },
@@ -282,7 +281,7 @@ test('view-model', async (t) => {
   });
 
   await t.test('大哥很久没交班时，看板必须能说出「可能掉线」', () => {
-    const config = { lastRunAt: NOW - 60 * 60_000, intervalMinutes: 15, dutyIntervalMinutes: 30, autoDispatch: false };
+    const config = { lastRunAt: NOW - 60 * 60_000, intervalMinutes: 15, dutyIntervalMinutes: 30 };
 
     const fresh = buildDutyStatus({ config: { ...config, lastRunAt: NOW - 5 * 60_000 }, findings: [], now: NOW });
     assert.equal(fresh.stale, false, '刚交过班不算掉线');
@@ -299,7 +298,7 @@ test('view-model', async (t) => {
 
   await t.test('漏了几轮要算得准：这是大哥自检「上一轮有没有交班」的依据', () => {
     const at = (ageMinutes) => buildDutyStatus({
-      config: { lastRunAt: NOW - ageMinutes * 60_000, intervalMinutes: 15, dutyIntervalMinutes: 30, autoDispatch: false },
+      config: { lastRunAt: NOW - ageMinutes * 60_000, intervalMinutes: 15, dutyIntervalMinutes: 30 },
       findings: [],
       now: NOW,
     });
@@ -312,7 +311,7 @@ test('view-model', async (t) => {
     assert.equal(at(150).missedRounds, 4);
 
     const never = buildDutyStatus({
-      config: { lastRunAt: null, intervalMinutes: 15, dutyIntervalMinutes: 30, autoDispatch: false },
+      config: { lastRunAt: null, intervalMinutes: 15, dutyIntervalMinutes: 30 },
       findings: [],
       now: NOW,
     });
@@ -321,7 +320,7 @@ test('view-model', async (t) => {
 
   await t.test('大哥从没交过班，也算掉线（而不是安静）', () => {
     const duty = buildDutyStatus({
-      config: { lastRunAt: null, intervalMinutes: 15, autoDispatch: false },
+      config: { lastRunAt: null, intervalMinutes: 15 },
       findings: [],
       now: NOW,
     });
@@ -334,7 +333,7 @@ test('view-model', async (t) => {
   await t.test('交班时间戳只看交班本身，不受结论条数影响', () => {
     const findings = [{ acknowledged: false }, { acknowledged: true }];
     const duty = buildDutyStatus({
-      config: { lastRunAt: NOW - 10 * 60_000, intervalMinutes: 15, autoDispatch: false },
+      config: { lastRunAt: NOW - 10 * 60_000, intervalMinutes: 15 },
       findings,
       now: NOW,
     });
@@ -364,7 +363,6 @@ test('view-model', async (t) => {
         lastRunAt: NOW - 70 * 60_000,
         intervalMinutes: 15,
         dutyIntervalMinutes: 60,
-        autoDispatch: false,
       },
       findings: [],
       now: NOW,

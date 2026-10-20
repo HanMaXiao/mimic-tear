@@ -166,10 +166,10 @@ export class BossBridge {
    * Run one proactive patrol turn.
    *
    * Unlike a dispatch, the boss is not given an instruction to deliver — it is given the
-   * facts and asked what actually needs doing. It may dispatch when the board allows it,
-   * and must escalate the rest.
+   * facts and asked what actually needs doing. Whether a finding is worth dispatching is
+   * the boss's own judgement; it must escalate the rest.
    *
-   * @param {{ brief: string, autoDispatch: boolean }} input
+   * @param {{ brief: string }} input
    * @returns {Promise<{ bossSessionId: string, status: string, text: string, error: string|null }>}
    */
   async patrol(input) {
@@ -206,23 +206,103 @@ export class BossBridge {
   }
 
   /**
+   * One turn of conversation with the boss.
+   *
+   * Unlike a dispatch (the boss is told to deliver an instruction) or a patrol (the boss is
+   * given facts to judge), a chat turn is simply the boss being talked to. It runs on the same
+   * session as the duty rounds and the board's dispatches, so one thread holds the whole
+   * story — which is the point: the user asked to be able to see what the boss is doing.
+   *
+   * @param {{ text: string }} input
+   * @param {(event: any) => void} [onEvent] receives the runtime's run events
+   * @returns {Promise<{ bossSessionId:string, status:string, text:string, error:string|null,
+   *                     request:any, usedAgent:string }>}
+   */
+  async chat(input, onEvent = () => {}) {
+    if (!this.agent) {
+      return {
+        bossSessionId: '',
+        status: 'error',
+        text: '',
+        error: '当前运行时未开放 agent 能力，无法对话',
+        request: null,
+        usedAgent: 'boss',
+      };
+    }
+
+    const text = String(input?.text ?? '').trim();
+    if (!text) {
+      return { bossSessionId: '', status: 'error', text: '', error: '消息不能为空', request: null, usedAgent: 'boss' };
+    }
+
+    const forward = (event) => {
+      onEvent(event);
+      if (event?.type === 'permission.requested') {
+        void this.#handlePermission(event);
+      }
+    };
+
+    const { result, usedAgent } = await this.#runTurn(text, forward);
+
+    if (result?.sessionId && usedAgent === 'boss') {
+      await this.persistence.setBossSession({ sessionId: result.sessionId, agent: 'boss' });
+    }
+
+    return {
+      bossSessionId: result?.sessionId ?? '',
+      status: result?.status ?? 'error',
+      text: typeof result?.text === 'string' ? result.text : '',
+      error: result?.status === 'finished' ? null : (result?.error?.message ?? '大哥没有回复'),
+      // A turn that paused on a questionnaire carries it here; the page renders it and
+      // continues the turn with `answer`.
+      request: result?.request ?? null,
+      usedAgent,
+    };
+  }
+
+  /**
+   * Answer a questionnaire the boss paused on and continue its turn.
+   *
+   * @param {{ requestId: string, answers: any[], sessionId?: string }} input
+   * @param {(event: any) => void} [onEvent]
+   * @returns {Promise<{ status:string, text:string, error:string|null, request:any }>}
+   */
+  async answerQuestion(input, onEvent = () => {}) {
+    if (!this.agent) {
+      return { status: 'error', text: '', error: '当前运行时未开放 agent 能力', request: null };
+    }
+    const sessionId = input?.sessionId || (await this.persistence.getBossSession())?.sessionId;
+    if (!sessionId) {
+      return { status: 'error', text: '', error: '找不到大哥的会话', request: null };
+    }
+    const result = await this.agent.answer(
+      { sessionId, requestId: input.requestId, answers: input.answers ?? [] },
+      { onEvent },
+    );
+    return {
+      status: result?.status ?? 'error',
+      text: typeof result?.text === 'string' ? result.text : '',
+      error: result?.status === 'finished' ? null : (result?.error?.message ?? '大哥没有继续'),
+      request: result?.request ?? null,
+    };
+  }
+
+  /**
    * Build the patrol prompt.
    *
-   * @param {{ brief: string, autoDispatch: boolean }} input
+   * The boss decides for itself whether a finding is worth dispatching; there is no switch
+   * that turns dispatching on or off.
+   *
+   * @param {{ brief: string }} input
    * @returns {string}
    */
   buildPatrolPrompt(input) {
-    const dispatchRule = input.autoDispatch
-      ? [
-        '**允许你建议派工**：对风险低、目标明确、不会改动别人成果的项，写进「我建议派工」段落，'
-        + '由指挥部校验项目与会话归属后投递。',
-        '**不要自己用 session send 投递**——所有派工都必须走指挥部，否则会绕过归属校验。',
-        '**必须回问大老板**：需求变更、破坏性操作、跨项目冲突、要大额 token 的新开 Goal、连续失败 3 次以上。',
-      ]
-      : [
-        '**本轮不允许你派工**：只做判断与汇报，任何需要动手的事都写进「需要大老板决策」。',
-        '**不要用 session send 投递**——本轮只汇报。',
-      ];
+    const dispatchRule = [
+      '**该不该派工你自己判断**：对风险低、目标明确、不会改动别人成果的项，写进「我建议派工」段落，'
+      + '由指挥部校验项目与会话归属后投递。没有值得派的就不要派——不要为了显得有产出而制造待办。',
+      '**不要自己用 session send 投递**——所有派工都必须走指挥部，否则会绕过归属校验。',
+      '**必须回问大老板**：需求变更、破坏性操作、跨项目冲突、要大额 token 的新开 Goal、连续失败 3 次以上。',
+    ];
 
     return [
       '你是「大哥」，仿身泪滴的总管。现在是**主动巡检**：没有大老板的派工单，是你自己醒来看看有没有事需要办。',

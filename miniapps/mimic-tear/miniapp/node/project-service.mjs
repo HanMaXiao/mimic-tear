@@ -89,7 +89,6 @@ export class ProjectService {
       return {
         enabled: false,
         intervalMinutes: 15,
-        autoDispatch: false,
         dutyIntervalMinutes: 30,
         lastRunAt: null,
         lastBoardPatrolAt: null,
@@ -101,7 +100,7 @@ export class ProjectService {
 
   /**
    * Update the boss's proactive patrol settings.
-   * @param {{ enabled?: boolean, intervalMinutes?: number, autoDispatch?: boolean }} patch
+   * @param {{ enabled?: boolean, intervalMinutes?: number }} patch
    */
   async setPatrolConfig(patch) {
     if (!this.patrol) {
@@ -128,7 +127,7 @@ export class ProjectService {
     // Unique per run, so a repeated patrol never re-delivers the same proposal.
     this.patrolRunKey = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
-    const outcome = await this.boss.patrol({ brief, autoDispatch: Boolean(config.autoDispatch) });
+    const outcome = await this.boss.patrol({ brief });
 
     const report = parsePatrolReport(outcome.text);
     /** @type {any[]} */
@@ -161,29 +160,28 @@ export class ProjectService {
       created.push(await this.patrol.add(finding));
     }
 
-    // The boss proposes; the board dispatches. Proposals go through the same validated
-    // path as a manual dispatch, so a project or session the boss named wrongly is
-    // rejected here instead of being delivered.
+    // The boss proposes; the board dispatches. Whether to propose at all is the boss's own
+    // judgement — there is no switch that turns dispatching on or off. Proposals go through
+    // the same validated path as a manual dispatch, so a project or session the boss named
+    // wrongly is rejected here instead of being delivered.
     const executed = [];
-    if (config.autoDispatch) {
-      for (const [index, proposal] of report.proposals.entries()) {
-        const card = snapshot.cards.find((c) => c.name === proposal.projectName);
-        if (!card) {
-          executed.push({ proposal, ok: false, error: `找不到项目 ${proposal.projectName}` });
-          continue;
-        }
-        try {
-          const { record } = await this.prepareDispatch({
-            projectId: card.id,
-            sessionId: proposal.sessionId,
-            instruction: proposal.instruction,
-            idempotencyKey: `patrol:${this.patrolRunKey}:${index}`,
-          });
-          const result = await this.runDispatch(record);
-          executed.push({ proposal, ok: result.delivered, error: result.error });
-        } catch (error) {
-          executed.push({ proposal, ok: false, error: error?.message ?? String(error) });
-        }
+    for (const [index, proposal] of report.proposals.entries()) {
+      const card = snapshot.cards.find((c) => c.name === proposal.projectName);
+      if (!card) {
+        executed.push({ proposal, ok: false, error: `找不到项目 ${proposal.projectName}` });
+        continue;
+      }
+      try {
+        const { record } = await this.prepareDispatch({
+          projectId: card.id,
+          sessionId: proposal.sessionId,
+          instruction: proposal.instruction,
+          idempotencyKey: `patrol:${this.patrolRunKey}:${index}`,
+        });
+        const result = await this.runDispatch(record);
+        executed.push({ proposal, ok: result.delivered, error: result.error });
+      } catch (error) {
+        executed.push({ proposal, ok: false, error: error?.message ?? String(error) });
       }
     }
 
@@ -204,6 +202,42 @@ export class ProjectService {
       findings: created,
       error: outcome.error,
     };
+  }
+
+  /**
+   * One conversation turn with the boss.
+   *
+   * This is the board's front door: the user talks to the boss the way they talk to any
+   * other agent. The turn runs on the boss's own session, so the conversation and the duty
+   * rounds share one memory — which is what makes "I can see what the boss is doing" true.
+   *
+   * @param {string} text
+   * @param {(event: any) => void} [onEvent] receives the runtime's run events
+   * @returns {Promise<any>}
+   */
+  async chat(text, onEvent) {
+    if (!this.boss) {
+      throw new DomainError('chat_unavailable', '当前运行时未开放 agent 能力，无法对话', 501);
+    }
+    const outcome = await this.boss.chat({ text }, onEvent);
+    this.cache = null;
+    return outcome;
+  }
+
+  /**
+   * Answer a question the boss paused on, and let its turn continue.
+   *
+   * @param {{ requestId: string, answers: any[], sessionId?: string }} input
+   * @param {(event: any) => void} [onEvent]
+   * @returns {Promise<any>}
+   */
+  async answerChatQuestion(input, onEvent) {
+    if (!this.boss) {
+      throw new DomainError('chat_unavailable', '当前运行时未开放 agent 能力，无法对话', 501);
+    }
+    const outcome = await this.boss.answerQuestion(input, onEvent);
+    this.cache = null;
+    return outcome;
   }
 
   /**

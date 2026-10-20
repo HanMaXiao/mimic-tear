@@ -54,6 +54,22 @@ function makeFakeService() {
     async ack(id) {
       return { ok: Boolean(id) };
     },
+    async runPatrol() {
+      return {
+        runAt: 1,
+        conclusion: '巡检结论',
+        dispatches: [],
+        proposals: [],
+        executed: [],
+        findings: [],
+        error: null,
+      };
+    },
+    async chat(text, onEvent) {
+      onEvent?.({ type: 'text.delta', text: '收到' });
+      onEvent?.({ type: 'tool.started', name: 'bash' });
+      return { bossSessionId: 'b1', status: 'finished', text: '收到', error: null, request: null };
+    },
   };
 }
 
@@ -244,6 +260,58 @@ test('server', async (t) => {
       }
       assert.match(received, /event: dispatch/);
       assert.match(received, /"delivered":true/);
+      controller.abort();
+    } finally {
+      await server.close();
+    }
+  });
+
+  await t.test('SSE：巡检跑完必须广播 patrol 事件（广播静默失效过一次）', async () => {
+    const server = await startTestServer();
+    try {
+      const controller = new AbortController();
+      const response = await fetch(`http://127.0.0.1:${server.port}/api/stream`, {
+        signal: controller.signal,
+        headers: { accept: 'text/event-stream' },
+      });
+      const reader = response.body.getReader();
+
+      await post(server.port, '/api/patrol/run', {});
+
+      let received = '';
+      for (let i = 0; i < 5 && !received.includes('event: patrol'); i += 1) {
+        const { value } = await reader.read();
+        received += new TextDecoder().decode(value);
+      }
+      // 这条事件以前是静默失效的：createApp 的作用域里没有 app，广播抛的是
+      // "app is not defined"，页面会永远卡在"巡检中…"。
+      assert.match(received, /event: patrol/, '巡检跑完必须广播，否则页面永远等不到结果');
+      controller.abort();
+    } finally {
+      await server.close();
+    }
+  });
+
+  await t.test('SSE：对话的流式事件与结束事件都要广播', async () => {
+    const server = await startTestServer();
+    try {
+      const controller = new AbortController();
+      const response = await fetch(`http://127.0.0.1:${server.port}/api/stream`, {
+        signal: controller.signal,
+        headers: { accept: 'text/event-stream' },
+      });
+      const reader = response.body.getReader();
+
+      await post(server.port, '/api/chat', { text: '各项目什么状态' });
+
+      let received = '';
+      for (let i = 0; i < 8 && !received.includes('event: chat.done'); i += 1) {
+        const { value } = await reader.read();
+        received += new TextDecoder().decode(value);
+      }
+      assert.match(received, /event: chat\.delta/, '回复要一个字一个字地流出来');
+      assert.match(received, /event: chat\.tool/, '大哥在用什么工具要看得见');
+      assert.match(received, /event: chat\.done/, '这轮结束必须广播，否则界面一直转');
       controller.abort();
     } finally {
       await server.close();

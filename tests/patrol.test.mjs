@@ -114,10 +114,11 @@ test('patrol', async (t) => {
       const config = await service.getPatrolConfig();
       assert.equal(config.enabled, false);
       assert.equal(config.intervalMinutes, 15);
-      assert.equal(config.autoDispatch, false);
       // The duty cron runs every 30 minutes; the "boss went quiet" warning is derived
       // from this, so it is a first-class setting and not a hidden constant.
       assert.equal(config.dutyIntervalMinutes, 30);
+      // There is no autoDispatch switch any more: the boss decides for itself.
+      assert.equal('autoDispatch' in config, false, 'autoDispatch 这个开关已经被移除');
       void patrol;
       store.close();
     } finally {

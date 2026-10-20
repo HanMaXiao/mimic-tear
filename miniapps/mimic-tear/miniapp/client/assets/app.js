@@ -18,6 +18,8 @@ const API = {
   patrol: '/api/patrol',
   patrolConfig: '/api/patrol/config',
   patrolRun: '/api/patrol/run',
+  chat: '/api/chat',
+  chatAnswer: '/api/chat/answer',
   stream: '/api/stream',
 };
 
@@ -36,6 +38,9 @@ const state = {
   // remember its own target: deriving it from the current route silently sends the
   // instruction to whichever project was opened last.
   dispatchTarget: { projectId: null, sessionId: null },
+  // The conversation with the boss. `messages` is the transcript; `streaming` is the reply
+  // being written right now; `question` is the questionnaire the boss is waiting on.
+  chat: { messages: [], streaming: null, tools: [], question: null, answers: {} },
 };
 
 const el = (id) => document.getElementById(id);
@@ -614,9 +619,184 @@ function renderSkills() {
     : '<div class="empty">该领域下没有技能。</div>';
 }
 
+/* -------------------------------------------------------------------- chat */
+
+/**
+ * One line of the conversation.
+ *
+ * @param {{role:'user'|'boss', text:string, tools?:Array<{name:string, ok?:boolean|null}>}} message
+ * @returns {string}
+ */
+function chatMessageHtml(message) {
+  const mine = message.role === 'user';
+  const tools = (message.tools ?? [])
+    .map((tool) => `<span class="chat__tool${tool.ok === false ? ' chat__tool--failed' : ''}">${escapeHtml(tool.name)}</span>`)
+    .join('');
+  return `
+    <article class="chat__msg chat__msg--${mine ? 'me' : 'boss'}">
+      <span class="chat__who">${mine ? '你' : '大哥'}</span>
+      <div class="chat__bubble">${escapeHtml(message.text || '').replace(/\n/g, '<br />')}</div>
+      ${tools ? `<div class="chat__tools">${tools}</div>` : ''}
+    </article>`;
+}
+
+/**
+ * The questionnaire the boss paused on.
+ *
+ * The boss can only be unblocked by the person who owns the session, so this has to be
+ * answerable right here in the conversation.
+ *
+ * @returns {string}
+ */
+function chatQuestionHtml() {
+  const question = state.chat.question;
+  if (!question) return '';
+  const steps = (question.request?.steps ?? []).map((step) => {
+    const answer = state.chat.answers[step.id] ?? { selectedOptionIds: [] };
+    const options = (step.options ?? []).map((option) => {
+      const on = answer.selectedOptionIds.includes(option.id);
+      return `<button type="button" class="chat__option${on ? ' chat__option--on' : ''}" data-action="chat-option" data-step="${escapeHtml(step.id)}" data-option="${escapeHtml(option.id)}">${escapeHtml(option.label)}</button>`;
+    }).join('');
+    return `
+      <div class="chat__step">
+        <p class="chat__question">${escapeHtml(step.question)}</p>
+        <div class="chat__options">${options}</div>
+      </div>`;
+  }).join('');
+  return `
+    <div class="chat__ask">
+      <p class="chat__ask-title">${escapeHtml(question.request?.title ?? '大哥需要你确认一件事')}</p>
+      ${steps}
+      <button type="button" class="btn" data-action="chat-answer">提交回答</button>
+    </div>`;
+}
+
+/**
+ * Pick (or un-pick) one option of the questionnaire the boss is waiting on.
+ *
+ * @param {string} stepId
+ * @param {string} optionId
+ */
+function selectChatOption(stepId, optionId) {
+  const step = (state.chat.question?.request?.steps ?? []).find((entry) => entry.id === stepId);
+  if (!step) return;
+  const picked = state.chat.answers[stepId] ?? { selectedOptionIds: [] };
+  const single = step.selectionMode !== 'multiple';
+  const selectedOptionIds = single
+    ? (picked.selectedOptionIds.includes(optionId) ? [] : [optionId])
+    : (picked.selectedOptionIds.includes(optionId)
+      ? picked.selectedOptionIds.filter((id) => id !== optionId)
+      : [...picked.selectedOptionIds, optionId]);
+  state.chat.answers = { ...state.chat.answers, [stepId]: { selectedOptionIds } };
+  renderChat();
+}
+
+function renderChat() {
+  const log = el('chat-log');
+  if (!log) return;
+  const { messages, streaming } = state.chat;
+  let html;
+  if (!messages.length) {
+    html = `
+      <div class="chat__intro">
+        <p>大哥在。</p>
+        <p class="chat__intro-hint">告诉他哪个项目有什么需求、要盯紧谁、什么时候开始、什么时候停。他做的事会直接出现在这里——他在哪个项目上动了什么、给谁派了工。</p>
+      </div>`;
+  } else {
+    html = messages.map(chatMessageHtml).join('');
+  }
+  // The tools show up while the turn is still running: "seeing what the boss is doing"
+  // means seeing it now, not after it finishes. A tool call can also arrive before the
+  // first words, so the block is shown whenever the turn is still in flight.
+  const inTurn = streaming !== null || state.chat.tools.length > 0;
+  if (inTurn) {
+    const tools = state.chat.tools
+      .map((tool) => `<span class="chat__tool${tool.ok === false ? ' chat__tool--failed' : ''}">${escapeHtml(tool.name)}</span>`)
+      .join('');
+    html += `
+      <article class="chat__msg chat__msg--boss chat__msg--streaming">
+        <span class="chat__who">大哥</span>
+        ${streaming !== null ? `<div class="chat__bubble">${escapeHtml(streaming).replace(/\n/g, '<br />')}</div>` : ''}
+        ${tools ? `<div class="chat__tools">${tools}</div>` : ''}
+      </article>`;
+  }
+  html += chatQuestionHtml();
+  log.innerHTML = html;
+  log.scrollTop = log.scrollHeight;
+}
+
+/**
+ * Send a message to the boss.
+ *
+ * The turn runs on the server, so the reply arrives over SSE rather than in the response.
+ *
+ * @param {string} text
+ */
+async function sendChat(text) {
+  const message = String(text ?? '').trim();
+  if (!message) return;
+  state.chat.messages.push({ role: 'user', text: message });
+  state.chat.streaming = '';
+  state.chat.tools = [];
+  renderChat();
+  try {
+    await request(API.chat, { method: 'POST', body: JSON.stringify({ text: message }) });
+  } catch (error) {
+    state.chat.streaming = null;
+    state.chat.messages.push({ role: 'boss', text: `（消息没送到大哥：${error.message}）` });
+    renderChat();
+  }
+}
+
+/**
+ * Record one tool call the boss made during the turn.
+ *
+ * @param {{name:string, phase:string, ok?:boolean}} payload
+ */
+function recordChatTool(payload) {
+  const tools = state.chat.tools;
+  if (payload.phase === 'started') {
+    tools.push({ name: payload.name || '工具', ok: null });
+    return;
+  }
+  const last = tools.at(-1);
+  if (last && last.name === (payload.name || '工具')) last.ok = payload.ok !== false;
+  else tools.push({ name: payload.name || '工具', ok: payload.ok !== false });
+  renderChat();
+}
+
+/**
+ * Answer the questionnaire the boss paused on.
+ */
+async function submitChatAnswer() {
+  const question = state.chat.question;
+  if (!question) return;
+  const answers = (question.request?.steps ?? []).map((step) => {
+    const picked = state.chat.answers[step.id] ?? { selectedOptionIds: [] };
+    return {
+      stepId: step.id,
+      selectedOptionIds: picked.selectedOptionIds ?? [],
+      selectedOther: false,
+    };
+  });
+  state.chat.question = null;
+  state.chat.answers = {};
+  renderChat();
+  try {
+    await request(API.chatAnswer, {
+      method: 'POST',
+      body: JSON.stringify({ requestId: question.requestId, answers }),
+    });
+  } catch (error) {
+    state.chat.messages.push({ role: 'boss', text: `（回答没送到大哥：${error.message}）` });
+    renderChat();
+  }
+}
+
 /* ------------------------------------------------------------------ router */
 
 const VIEWS = {
+  chat: 'view-chat',
   overview: 'view-overview',
   inbox: 'view-inbox',
   project: 'view-project',
@@ -635,7 +815,9 @@ function currentRoute() {
   if (deepLink && Number.isFinite(Number(deepLink))) {
     return { name: 'project', param: Number(deepLink) };
   }
-  return { name: 'overview', param: null };
+  // The board opens on the conversation: the boss is the product, the dashboards are
+  // what he reports on.
+  return { name: 'chat', param: null };
 }
 
 function showView(name) {
@@ -783,6 +965,47 @@ function connectStream() {
       body: JSON.stringify({ decision: 'allowOnce' }),
     }).catch(() => undefined);
     toast(`大哥请求使用工具 ${payload.toolName}`, 'error');
+  });
+
+  // ---- the conversation with the boss ----
+
+  eventSource.addEventListener('chat.delta', (event) => {
+    const payload = JSON.parse(event.data);
+    state.chat.streaming = (state.chat.streaming ?? '') + (payload.text ?? '');
+    renderChat();
+  });
+
+  eventSource.addEventListener('chat.tool', (event) => {
+    recordChatTool(JSON.parse(event.data));
+  });
+
+  eventSource.addEventListener('chat.question', (event) => {
+    const payload = JSON.parse(event.data);
+    state.chat.question = { requestId: payload.requestId, request: payload.request ?? null };
+    state.chat.answers = {};
+    // The turn is paused until the user answers, so the half-written reply becomes a
+    // message of its own rather than a bubble that keeps growing.
+    if (state.chat.streaming) {
+      state.chat.messages.push({ role: 'boss', text: state.chat.streaming, tools: state.chat.tools });
+    }
+    state.chat.streaming = null;
+    state.chat.tools = [];
+    renderChat();
+  });
+
+  eventSource.addEventListener('chat.done', (event) => {
+    const payload = JSON.parse(event.data);
+    const text = payload.text || state.chat.streaming || '';
+    if (text || state.chat.tools.length) {
+      state.chat.messages.push({ role: 'boss', text, tools: state.chat.tools });
+    }
+    if (payload.error) {
+      state.chat.messages.push({ role: 'boss', text: `（大哥这轮没完成：${payload.error}）` });
+    }
+    state.chat.streaming = null;
+    state.chat.tools = [];
+    renderChat();
+    void refresh();
   });
 
   eventSource.onerror = () => {
@@ -972,6 +1195,24 @@ document.addEventListener('click', (event) => {
     void applyRecommendation(item);
     return;
   }
+  if (action === 'chat-option') {
+    event.preventDefault();
+    selectChatOption(target.dataset.step, target.dataset.option);
+    return;
+  }
+  if (action === 'chat-answer') {
+    event.preventDefault();
+    void submitChatAnswer();
+    return;
+  }
+});
+
+el('chat-form').addEventListener('submit', (event) => {
+  event.preventDefault();
+  const input = el('chat-input');
+  const text = input.value;
+  input.value = '';
+  void sendChat(text);
 });
 
 el('domain-nav').addEventListener('click', (event) => {
@@ -1001,7 +1242,6 @@ async function loadPatrolConfig() {
   try {
     const payload = await request(API.patrol);
     el('patrol-enabled').checked = Boolean(payload.config?.enabled);
-    el('patrol-autodispatch').checked = Boolean(payload.config?.autoDispatch);
   } catch {
     // The patrol is optional; a board without it still works.
   }
@@ -1013,7 +1253,6 @@ async function savePatrolConfig() {
       method: 'POST',
       body: JSON.stringify({
         enabled: el('patrol-enabled').checked,
-        autoDispatch: el('patrol-autodispatch').checked,
       }),
     });
     toast('巡检设置已保存');
@@ -1023,10 +1262,6 @@ async function savePatrolConfig() {
 }
 
 el('patrol-enabled').addEventListener('change', () => {
-  void savePatrolConfig();
-});
-
-el('patrol-autodispatch').addEventListener('change', () => {
   void savePatrolConfig();
 });
 
@@ -1088,6 +1323,7 @@ function applyTheme(theme) {
 applyTheme(new URLSearchParams(window.location.search).get('theme'));
 
 setStatus('正在连接…', 'idle');
+renderChat();
 void renderRoute();
 void loadPatrolConfig();
 connectStream();

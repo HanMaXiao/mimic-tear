@@ -432,7 +432,6 @@ test('client behavior (DOM shim)', async (t) => {
       duty: {
         lastRunAt: Date.now() - 5 * 60_000,
         intervalMinutes: 15,
-        autoDispatch: false,
         findings: 0,
         openFindings: 0,
         staleAfterMinutes: 45,
@@ -460,7 +459,6 @@ test('client behavior (DOM shim)', async (t) => {
       duty: {
         lastRunAt: Date.now() - 4 * 60 * 60_000,
         intervalMinutes: 15,
-        autoDispatch: false,
         findings: 2,
         openFindings: 1,
         staleAfterMinutes: 45,
@@ -488,7 +486,6 @@ test('client behavior (DOM shim)', async (t) => {
       duty: {
         lastRunAt: null,
         intervalMinutes: 15,
-        autoDispatch: false,
         findings: 0,
         openFindings: 0,
         staleAfterMinutes: 45,
@@ -517,7 +514,6 @@ test('client behavior (DOM shim)', async (t) => {
         lastRunAt: Date.now() - 5 * 60_000,
         intervalMinutes: 15,
         dutyIntervalMinutes: 30,
-        autoDispatch: false,
         findings: 12,
         openFindings: 9,
         withdrawn: 2,
@@ -610,7 +606,6 @@ test('client behavior (DOM shim)', async (t) => {
         lastRunAt: Date.now() - 5 * 60_000,
         intervalMinutes: 15,
         dutyIntervalMinutes: 30,
-        autoDispatch: false,
         findings: 12,
         openFindings: 9,
         withdrawn: 2,
@@ -637,6 +632,100 @@ test('client behavior (DOM shim)', async (t) => {
       overviewOverride = null;
       inboxOverride = null;
     }
+  });
+
+  await t.test('进入看板先看到对话面板', async () => {
+    const client = await loadClient();
+    await client.settle();
+
+    assert.equal(client.element('view-chat').hidden, false, '对话应该是落地页——大哥才是产品');
+    assert.equal(client.element('view-overview').hidden, true);
+    assert.match(client.element('chat-log').innerHTML, /大哥在/, '空对话要给一句话的引导');
+  });
+
+  await t.test('给大哥发消息：我的气泡出现，并请求一次 /api/chat', async () => {
+    const client = await loadClient();
+    await client.settle();
+
+    client.element('chat-input').value = '盯紧 Dungeon-Chesser';
+    client.element('chat-form').dispatchEvent({ type: 'submit', preventDefault() {} });
+    await client.settle();
+
+    assert.match(client.element('chat-log').innerHTML, /盯紧 Dungeon-Chesser/, '我发的消息要出现在对话里');
+
+    const call = client.calls.find((c) => c.url.startsWith('/api/chat') && c.method === 'POST');
+    assert.ok(call, '应该向 /api/chat 发一次请求');
+    assert.equal(call.body.text, '盯紧 Dungeon-Chesser');
+  });
+
+  await t.test('大哥的回复边来边显示，结束后落成一条消息', async () => {
+    const client = await loadClient();
+    await client.settle();
+
+    client.fireSse('chat.delta', { text: '收到' });
+    client.fireSse('chat.delta', { text: '，我去看看' });
+    await client.settle();
+    assert.match(client.element('chat-log').innerHTML, /收到，我去看看/, '流式内容要实时出现在气泡里');
+
+    client.fireSse('chat.done', { status: 'finished', text: '收到，我去看看' });
+    await client.settle();
+    const html = client.element('chat-log').innerHTML;
+    assert.match(html, /收到，我去看看/);
+    assert.equal(html.includes('chat__msg--streaming'), false, '结束后不该还留着进行中的气泡');
+  });
+
+  await t.test('大哥调工具时能看到他在做什么', async () => {
+    const client = await loadClient();
+    await client.settle();
+
+    client.fireSse('chat.tool', { name: 'bash', phase: 'started' });
+    client.fireSse('chat.tool', { name: 'bash', phase: 'finished', ok: true });
+    await client.settle();
+
+    assert.match(client.element('chat-log').innerHTML, /bash/, '工具名要出现在对话里——这是"看到大哥在干什么"的关键');
+  });
+
+  await t.test('大哥卡在问卷上时，选项能在对话里选并提交', async () => {
+    const client = await loadClient();
+    await client.settle();
+
+    client.fireSse('chat.question', {
+      requestId: 'ask_1',
+      mode: 'questionnaire',
+      request: {
+        title: '需要你确认',
+        steps: [{
+          id: 's1',
+          question: '要不要现在开工？',
+          selectionMode: 'single',
+          options: [{ id: 'yes', label: '开工' }, { id: 'no', label: '再等等' }],
+        }],
+      },
+    });
+    await client.settle();
+
+    const html = client.element('chat-log').innerHTML;
+    assert.match(html, /要不要现在开工？/, '问卷要渲染出来');
+    assert.match(html, /开工/);
+
+    // Pick "开工" and submit.
+    const option = client.element('chat-log').querySelectorAll('[data-action]')
+      .find((node) => node.dataset.option === 'yes');
+    assert.ok(option, '选项按钮要在 DOM 里');
+    client.click(option);
+    await client.settle();
+
+    const submit = client.element('chat-log').querySelectorAll('[data-action]')
+      .find((node) => node.dataset.action === 'chat-answer');
+    assert.ok(submit, '提交按钮要在 DOM 里');
+    client.click(submit);
+    await client.settle();
+
+    const call = client.calls.find((c) => c.url.startsWith('/api/chat/answer') && c.method === 'POST');
+    assert.ok(call, '应该向 /api/chat/answer 提交回答');
+    assert.equal(call.body.requestId, 'ask_1');
+    assert.equal(call.body.answers[0].stepId, 's1');
+    assert.deepEqual(call.body.answers[0].selectedOptionIds, ['yes']);
   });
 
   await t.test('?theme=light 能强制浅色主题（发布出去的 CSS 本来就有这个钩子）', async () => {    const client = await loadClient({ search: '?theme=light' });

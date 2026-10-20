@@ -237,7 +237,6 @@ export function createApp(deps) {
         const config = await service.setPatrolConfig({
           enabled: body?.enabled,
           intervalMinutes: body?.intervalMinutes,
-          autoDispatch: body?.autoDispatch,
         });
         sendJson(response, 200, config);
         return;
@@ -248,12 +247,64 @@ export function createApp(deps) {
         sendJson(response, 202, { status: 'started' });
         void service.runPatrol()
           .then((outcome) => {
-            app.broadcast('patrol', outcome);
+            broadcast('patrol', outcome);
             return service.getOverview();
           })
-          .then((overview) => app.broadcast('update', overview))
+          .then((overview) => broadcast('update', overview))
           .catch((error) => {
-            app.broadcast('patrol', { error: error?.message ?? String(error), findings: [] });
+            broadcast('patrol', { error: error?.message ?? String(error), findings: [] });
+          });
+        return;
+      }
+
+      if (pathname === '/api/chat' && method === 'POST') {
+        const body = await readBody(request);
+        const text = String(body?.text ?? '').trim();
+        if (!text) {
+          sendJson(response, 400, { error: 'empty_message' });
+          return;
+        }
+        // A conversation turn can take minutes, so it must not hold the HTTP request open.
+        sendJson(response, 202, { status: 'started' });
+        void service.chat(text, broadcastChatEvent)
+          .then((outcome) => {
+            broadcast('chat.done', {
+              status: outcome.status,
+              text: outcome.text ?? '',
+              error: outcome.error ?? null,
+              request: outcome.request ?? null,
+            });
+            return service.getOverview();
+          })
+          .then((overview) => broadcast('update', overview))
+          .catch((error) => {
+            broadcast('chat.done', { status: 'error', text: '', error: error?.message ?? String(error) });
+          });
+        return;
+      }
+
+      if (pathname === '/api/chat/answer' && method === 'POST') {
+        const body = await readBody(request);
+        const requestId = String(body?.requestId ?? '');
+        if (!requestId) {
+          sendJson(response, 400, { error: 'missing_request_id' });
+          return;
+        }
+        sendJson(response, 202, { status: 'started' });
+        void service.answerChatQuestion(
+          { requestId, answers: body?.answers ?? [] },
+          broadcastChatEvent,
+        )
+          .then((outcome) => {
+            broadcast('chat.done', {
+              status: outcome.status,
+              text: outcome.text ?? '',
+              error: outcome.error ?? null,
+              request: outcome.request ?? null,
+            });
+          })
+          .catch((error) => {
+            broadcast('chat.done', { status: 'error', text: '', error: error?.message ?? String(error) });
           });
         return;
       }
@@ -277,6 +328,42 @@ export function createApp(deps) {
       const code = error?.code || 'internal_error';
       if (status >= 500) logger.error('mimic-tear.request.failed', { path: pathname, message: error?.message });
       sendJson(response, status, { error: code, message: error?.message ?? '请求处理失败' });
+    }
+  };
+
+  /**
+   * Forward one event of the boss's conversation turn to the page.
+   *
+   * The runtime streams the turn as it happens: `text.delta` is the reply arriving piece by
+   * piece, the tool events are what the boss is doing right now, and a questionnaire pauses
+   * the turn until the user answers it.
+   *
+   * @param {any} event
+   */
+  const broadcastChatEvent = (event) => {
+    switch (event?.type) {
+      case 'text.delta':
+        broadcast('chat.delta', { text: event.text ?? '' });
+        break;
+      case 'message.committed':
+        broadcast('chat.message', { text: event.text ?? '' });
+        break;
+      case 'tool.started':
+        broadcast('chat.tool', { name: event.name ?? '', phase: 'started' });
+        break;
+      case 'tool.finished':
+        broadcast('chat.tool', { name: event.name ?? '', phase: 'finished', ok: event.ok !== false });
+        break;
+      case 'question.requested':
+        broadcast('chat.question', {
+          requestId: event.requestId ?? '',
+          mode: event.mode ?? 'questionnaire',
+          request: event.request ?? null,
+        });
+        break;
+      default:
+        // `run.queued`, `turn.started`, `turn.finished` and unknown future types are ignored.
+        break;
     }
   };
 
@@ -465,7 +552,7 @@ export async function start(context) {
         }
 
         const outcome = await service.runPatrol();
-        app.broadcast('patrol', outcome);
+        broadcast('patrol', outcome);
         const overview = await service.getOverview();
         app.broadcast('update', overview);
       } catch (error) {

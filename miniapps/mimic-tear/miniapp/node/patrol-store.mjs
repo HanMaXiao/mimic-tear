@@ -28,7 +28,7 @@ const writeQueues = new Map();
  * @typedef {{ id:string, createdAt:number, projectId:number|null, projectName:string|null,
  *             severity:'high'|'medium'|'low', title:string, body:string,
  *             acknowledged:boolean, acknowledgedBy:'user'|'boss'|null, note:string }} PatrolFinding
- * @typedef {{ enabled:boolean, intervalMinutes:number, autoDispatch:boolean,
+ * @typedef {{ enabled:boolean, intervalMinutes:number,
  *             dutyIntervalMinutes:number,
  *             lastRunAt:number|null, lastBoardPatrolAt:number|null,
  *             lastSignature:string|null }} PatrolConfig
@@ -37,7 +37,6 @@ const writeQueues = new Map();
 const DEFAULT_CONFIG = {
   enabled: false,
   intervalMinutes: 15,
-  autoDispatch: false,
   // How often the boss is expected to hand over, in minutes. This is the duty cron's own
   // period (currently 30), NOT the board's patrol loop. The board's "the boss went quiet"
   // warning is derived from it, so the two must be changed together.
@@ -213,7 +212,7 @@ export class PatrolStore {
         changes[key] = Math.min(240, Math.max(5, Number(value) || 15));
       } else if (key === 'dutyIntervalMinutes') {
         changes[key] = Math.min(240, Math.max(5, Number(value) || 30));
-      } else if (key === 'enabled' || key === 'autoDispatch') {
+      } else if (key === 'enabled') {
         changes[key] = Boolean(value);
       } else {
         changes[key] = value;

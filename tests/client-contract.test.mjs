@@ -110,7 +110,6 @@ test('client-contract', async (t) => {
 
   await t.test('主动巡检：界面有开关、有立即巡检、API 齐全', () => {
     assert.ok(html.includes('id="patrol-enabled"'), '缺少巡检开关');
-    assert.ok(html.includes('id="patrol-autodispatch"'), '缺少自动派工开关');
     assert.ok(html.includes('id="patrol-run-button"'), '缺少立即巡检按钮');
     for (const path of ['/api/patrol', '/api/patrol/config', '/api/patrol/run']) {
       assert.ok(app.includes(path), `app.js 未引用 ${path}`);
@@ -118,19 +117,16 @@ test('client-contract', async (t) => {
     assert.ok(app.includes("patrol: '大哥巡检'"), '收件箱缺少巡检类型标签');
   });
 
-  await t.test('自动派工开关必须写清它只管看板触发的巡检', () => {
-    // 「允许自动派工」听起来像大哥的全局开关，但值班（cron）路径根本不受它约束。
-    // 文案误导会让人以为"关掉 = 大哥不能派工"，与事实相反。
+  await t.test('自动派工开关整个消失——大哥自己判断该不该派工', () => {
+    // 有没有派工不该由一个开关决定：它既管不了值班路径，也没法表达"这件事值得派"。
     assert.ok(
-      !html.includes('允许自动派工'),
-      '「允许自动派工」这个泛化文案会误导——它只管看板触发的巡检',
+      !html.includes('patrol-autodispatch'),
+      '不该再有自动派工开关——大哥自己判断',
     );
-    assert.ok(html.includes('看板巡检直接派工'), '开关应标明它只作用于看板触发的巡检');
-    assert.match(
-      html,
-      /<label class="app-toggle" title="[^"]*值班（cron）路径不受此开关限制[^"]*">\s*<input type="checkbox" id="patrol-autodispatch"/,
-      '开关的 title 必须说明值班路径不受它约束',
-    );
+    assert.ok(!app.includes('patrol-autodispatch'), 'app.js 不该再读写自动派工开关');
+    assert.ok(!app.includes('autoDispatch'), 'autoDispatch 这个概念不该再出现在客户端');
+    // 剩下的那个开关说的是人话：大哥在不在岗。
+    assert.ok(html.includes('大哥在岗'), '巡检开关应标明它管的是大哥在不在岗');
   });
 
   await t.test('浅色与深色主题定义同一套变量', () => {
