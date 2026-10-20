@@ -74,6 +74,17 @@ const STATE_LABEL = {
 
 const SEVERITY_LABEL = { high: '高', medium: '中', low: '低' };
 
+/** Human-readable waiting time, so a three-week-old item does not read as "20140 分钟". */
+function waitingLabel(timestamp) {
+  if (!timestamp) return '时间未知';
+  const minutes = Math.round((Date.now() - timestamp) / 60000);
+  if (minutes < 1) return '刚刚';
+  if (minutes < 60) return `等待 ${minutes} 分钟`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `等待 ${hours} 小时`;
+  return `等待 ${Math.round(hours / 24)} 天`;
+}
+
 const KIND_LABEL = {
   questionnaire: '待答问题',
   'goal-paused': 'Goal 暂停',
@@ -115,6 +126,36 @@ async function request(path, options) {
 }
 
 /* --------------------------------------------------------------- rendering */
+
+/**
+ * Rendering is guarded by a content signature.
+ *
+ * The runtime pushes an update whenever any session anywhere moves, so a naive re-render
+ * would replace the whole table every few seconds — destroying the element under the user's
+ * cursor and dropping focus mid-click. Re-rendering only when the visible content actually
+ * changed keeps the DOM stable.
+ */
+let overviewSignature = '';
+let inboxSignature = '';
+
+function overviewChanged(overview) {
+  const signature = JSON.stringify([
+    overview?.kpi,
+    overview?.projects,
+    overview?.attention,
+    overview?.internalProjectCount,
+  ]);
+  if (signature === overviewSignature) return false;
+  overviewSignature = signature;
+  return true;
+}
+
+function inboxChanged(items) {
+  const signature = JSON.stringify(items);
+  if (signature === inboxSignature) return false;
+  inboxSignature = signature;
+  return true;
+}
 
 function setStatus(text, status = 'idle') {
   const node = el('app-status');
@@ -162,7 +203,7 @@ function attentionItemHtml(item) {
         <span class="tag tag--${item.severity}">${SEVERITY_LABEL[item.severity] ?? item.severity}</span>
         <span class="tag">${KIND_LABEL[item.kind] ?? item.kind}</span>
         <span class="item__title">${escapeHtml(item.title)}</span>
-        <span class="item__meta">${escapeHtml(item.projectName)} · 等待 ${item.ageMinutes} 分钟</span>
+        <span class="item__meta">${escapeHtml(item.projectName)} · ${waitingLabel(item.createdAt)}</span>
       </div>
       <p class="item__body">${escapeHtml(item.body)}</p>
       <div class="item__actions">${actions}</div>
@@ -210,8 +251,11 @@ function projectRowHtml(project) {
 function renderProjects(overview) {
   const body = el('projects-body');
   const projects = overview?.projects ?? [];
+  const hidden = overview?.internalProjectCount ?? 0;
 
-  el('projects-count').textContent = projects.length ? `${projects.length} 个项目` : '';
+  el('projects-count').textContent = projects.length
+    ? `${projects.length} 个项目${hidden ? ` · 另有 ${hidden} 个运行时内部工作区未显示` : ''}`
+    : '';
 
   if (state.error && !projects.length) {
     body.innerHTML = '<tr><td colspan="7"><div class="state state--error">项目数据读取失败，请刷新重试。</div></td></tr>';
@@ -439,6 +483,13 @@ function currentRoute() {
   const [name, param] = hash.split('/');
   if (name === 'project' && param) return { name: 'project', param: Number(param) };
   if (VIEWS[name]) return { name, param: null };
+
+  // Deep link: /?project=5 opens one project directly. The Host's open API cannot carry a
+  // fragment, so a query parameter is the way to hand the board a specific project.
+  const deepLink = new URLSearchParams(window.location.search).get('project');
+  if (deepLink && Number.isFinite(Number(deepLink))) {
+    return { name: 'project', param: Number(deepLink) };
+  }
   return { name: 'overview', param: null };
 }
 
@@ -496,10 +547,12 @@ async function refresh() {
     state.inbox = inbox.items ?? [];
     state.error = null;
     renderWarning(overview.dataWarning);
-    renderKpi(overview);
-    renderAttention(overview);
-    renderProjects(overview);
-    renderInbox();
+    if (overviewChanged(overview)) {
+      renderKpi(overview);
+      renderAttention(overview);
+      renderProjects(overview);
+    }
+    if (inboxChanged(state.inbox)) renderInbox();
     setStatus('实时同步中', 'live');
   } catch (error) {
     state.error = error.message;
@@ -523,17 +576,21 @@ function connectStream() {
 
   eventSource.addEventListener('snapshot', (event) => {
     state.overview = JSON.parse(event.data);
-    renderKpi(state.overview);
-    renderAttention(state.overview);
-    renderProjects(state.overview);
+    if (overviewChanged(state.overview)) {
+      renderKpi(state.overview);
+      renderAttention(state.overview);
+      renderProjects(state.overview);
+    }
     setStatus('实时同步中', 'live');
   });
 
   eventSource.addEventListener('update', (event) => {
     state.overview = JSON.parse(event.data);
-    renderKpi(state.overview);
-    renderAttention(state.overview);
-    renderProjects(state.overview);
+    if (overviewChanged(state.overview)) {
+      renderKpi(state.overview);
+      renderAttention(state.overview);
+      renderProjects(state.overview);
+    }
     void refreshInbox();
   });
 
@@ -562,7 +619,7 @@ async function refreshInbox() {
   try {
     const inbox = await request(API.inbox);
     state.inbox = inbox.items ?? [];
-    renderInbox();
+    if (inboxChanged(state.inbox)) renderInbox();
   } catch {
     // A transient inbox read failure must not break the page.
   }

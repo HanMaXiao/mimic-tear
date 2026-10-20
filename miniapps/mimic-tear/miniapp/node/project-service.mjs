@@ -28,6 +28,24 @@ export class DomainError extends Error {
   }
 }
 
+/**
+ * Runtime-internal workspaces.
+ *
+ * The runtime registers a workspace for every agent's default directory and for every
+ * installed Mini App. Those are plumbing, not the user's projects, and listing them as
+ * "workspace" rows makes the board look broken. They are filtered out and counted so the
+ * page can say how many were hidden instead of silently dropping them.
+ */
+const INTERNAL_WORKSPACE = /[\\/]\.(?:minimax|mavis)[\\/](?:agents[\\/][^\\/]+[\\/](?:workspace|miniapps)|workspace)([\\/]|$)/i;
+
+/**
+ * @param {string} workspaceDir
+ * @returns {boolean}
+ */
+export function isInternalWorkspace(workspaceDir) {
+  return Boolean(workspaceDir) && INTERNAL_WORKSPACE.test(workspaceDir);
+}
+
 export class ProjectService {
   /**
    * @param {{
@@ -61,7 +79,10 @@ export class ProjectService {
       generatedAt: Date.now(),
       kpi: buildKpi(snapshot.cards, snapshot.inbox),
       projects: snapshot.cards,
-      attention: snapshot.inbox.filter((item) => item.severity !== 'low'),
+      // Acknowledged items are known already: showing them here would make the count
+      // disagree with the KPI and the inbox badge.
+      attention: snapshot.inbox.filter((item) => item.severity !== 'low' && !item.acknowledged),
+      internalProjectCount: snapshot.internalProjectCount,
       dataWarning: snapshot.dataWarning,
     };
   }
@@ -303,7 +324,8 @@ export class ProjectService {
     if (this.cache && this.cache.revision === revision) return this.cache;
 
     const projects = this.store.listProjects();
-    const visibleIds = new Set(projects.map((p) => p.id));
+    const visibleProjects = projects.filter((p) => !isInternalWorkspace(p.workspaceDir));
+    const visibleIds = new Set(visibleProjects.map((p) => p.id));
     const allSessions = this.store.listSessions();
     const sessions = allSessions.filter((s) => visibleIds.has(s.projectId));
     const goals = this.store.listGoals();
@@ -311,7 +333,7 @@ export class ProjectService {
     const tasks = this.store.listActiveTasks();
 
     const plans = new Map();
-    await Promise.all(projects.map(async (project) => {
+    await Promise.all(visibleProjects.map(async (project) => {
       try {
         plans.set(project.id, await this.readPlan(project.workspaceDir));
       } catch {
@@ -320,12 +342,12 @@ export class ProjectService {
     }));
 
     const acks = new Set(await this.persistence.listAcks());
-    const cards = buildProjectCards({ projects, sessions, goals, questionnaires, plans });
-    const inbox = buildInbox({ projects, sessions, goals, questionnaires, plans }, acks);
+    const cards = buildProjectCards({ projects: visibleProjects, sessions, goals, questionnaires, plans });
+    const inbox = buildInbox({ projects: visibleProjects, sessions, goals, questionnaires, plans }, acks);
 
     this.cache = {
       revision,
-      projects,
+      projects: visibleProjects,
       sessions,
       goals,
       questionnaires,
@@ -333,6 +355,7 @@ export class ProjectService {
       plans,
       cards,
       inbox,
+      internalProjectCount: projects.length - visibleProjects.length,
       dataWarning: this.store.lastError(),
     };
     return this.cache;

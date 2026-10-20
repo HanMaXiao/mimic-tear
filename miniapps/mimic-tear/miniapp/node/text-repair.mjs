@@ -125,10 +125,22 @@ export function repairMojibake(text, vocabulary) {
   try {
     const repaired = new TextDecoder('utf-8', { fatal: true }).decode(buffer);
     if (repaired === text) return text;
-    return repaired;
+    return restoreSeparators(repaired);
   } catch {
     return text;
   }
+}
+
+/**
+ * Put back the space that the corruption ate between a CJK run and a Latin token.
+ *
+ * When GBK cannot pair a byte it consumes the byte after it as well, so a separator such as
+ * the space in "跨重启 PID" is lost. The text then reads "跨重启PID". A CJK character directly
+ * followed by a Latin letter or digit is always a missing separator in this corpus, and
+ * Chinese typography puts a space there anyway.
+ */
+function restoreSeparators(text) {
+  return text.replace(/([\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef])([A-Za-z0-9+])/g, '$1 $2');
 }
 
 /**
@@ -164,8 +176,9 @@ function sequenceStartBefore(buffer, index) {
  * Choose the byte that was lost to an odd-length UTF-8 run.
  *
  * The lost byte almost always sits inside a multi-byte sequence, so it must be a UTF-8
- * continuation byte (0x80-0xBF). Candidates are ranked by whether the completed sequence
- * decodes cleanly and whether the resulting character occurs in known-clean text.
+ * continuation byte (0x80-0xBF). Among those the original value is ambiguous: every
+ * continuation byte produces a valid character. The tie is broken against the clean sibling
+ * text — the candidate whose decoding reproduces the most known character sequences wins.
  */
 function solveLostByte(buffer, index, vocabulary) {
   const start = sequenceStartBefore(buffer, index) ?? index;
@@ -174,13 +187,13 @@ function solveLostByte(buffer, index, vocabulary) {
   const needsContinuation = length > 1 && offset > 0 && offset < length;
 
   let best = 0x3f;
-  let bestScore = -1;
+  let bestScore = -Infinity;
 
   for (let candidate = 0; candidate < 0x100; candidate += 1) {
     if (candidate === 0x00) continue;
     if (needsContinuation && (candidate < 0x80 || candidate > 0xbf)) continue;
     buffer[index] = candidate;
-    const score = scoreByte(buffer, start, length, vocabulary);
+    const score = scoreCandidate(buffer, start, length, vocabulary);
     if (score > bestScore) {
       bestScore = score;
       best = candidate;
@@ -199,10 +212,29 @@ function sequenceLength(lead) {
 }
 
 /**
- * Score a candidate byte by how cleanly the sequence it completes decodes, with a bonus when
- * the recovered character is one that occurs in known-clean text.
+ * Score a candidate byte.
+ *
+ * With a clean sibling text available, the decisive signal is how many known character
+ * sequences the whole decoded text reproduces: the correct byte restores words the sibling
+ * text also contains. A single character is not enough — the right and the wrong character
+ * are often both present somewhere in the sibling text.
  */
-function scoreByte(buffer, start, length, vocabulary) {
+function scoreCandidate(buffer, start, length, vocabulary) {
+  const text = new TextDecoder('utf-8', { fatal: false }).decode(buffer);
+
+  if (vocabulary?.ngrams?.size) {
+    let score = 0;
+    for (let i = 0; i + 3 <= text.length; i += 1) {
+      if (vocabulary.ngrams.has(text.slice(i, i + 3))) score += 3;
+    }
+    for (let i = 0; i + 2 <= text.length; i += 1) {
+      if (vocabulary.ngrams.has(text.slice(i, i + 2))) score += 1;
+    }
+    return score;
+  }
+
+  // No sibling text: fall back to whether the completed sequence decodes cleanly and
+  // whether the resulting character is ordinary Chinese.
   const end = Math.min(buffer.length, start + length);
   const decoded = new TextDecoder('utf-8', { fatal: false }).decode(buffer.subarray(start, end));
   const loss = (decoded.match(/\ufffd/g) ?? []).length;
@@ -211,22 +243,31 @@ function scoreByte(buffer, start, length, vocabulary) {
   if (loss === 0 && decoded.length > 0) {
     const first = decoded[0];
     score += 20;
-    if (vocabulary?.has(first)) score += 40;
+    if (vocabulary?.chars?.has(first)) score += 40;
     else if (/[\u4e00-\u9fff]/.test(first)) score += 10;
   }
   return score;
 }
 
 /**
- * Build a vocabulary set from clean text, used to disambiguate repaired characters.
+ * Build the reference used to disambiguate repaired characters.
+ *
+ * `chars` holds every non-ASCII character of the clean text. `ngrams` holds its character
+ * sequences, which is what actually disambiguates a lost byte: the correct candidate
+ * reproduces words the clean text also contains, and a wrong one does not.
+ *
  * @param {string} text
- * @returns {Set<string>}
+ * @returns {{ chars: Set<string>, ngrams: Set<string> }}
  */
 export function buildVocabulary(text) {
-  const vocabulary = new Set();
-  if (!text) return vocabulary;
+  const chars = new Set();
+  const ngrams = new Set();
+  if (!text) return { chars, ngrams };
+
   for (const char of text) {
-    if (char >= '\u0080') vocabulary.add(char);
+    if (char >= '\u0080') chars.add(char);
   }
-  return vocabulary;
+  for (let i = 0; i + 2 <= text.length; i += 1) ngrams.add(text.slice(i, i + 2));
+  for (let i = 0; i + 3 <= text.length; i += 1) ngrams.add(text.slice(i, i + 3));
+  return { chars, ngrams };
 }

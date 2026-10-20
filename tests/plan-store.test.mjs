@@ -259,6 +259,20 @@ test('PlanStore', async (t) => {
     assert.equal(tasks[0].title, '无 BOM 任务');
   });
 
+  await t.test('任务符号与标题粘连时仍能取到完整标题', () => {
+    // GBK 乱码会吞掉符号与标题之间的空格，修复后两者可能粘在一起。
+    const tasks = parseStatusLog('Tasks:\n  \u2580V1.4-A:LogRule 引擎 longest-match [producing]  verify=on\n');
+    assert.equal(tasks.length, 1);
+    assert.equal(tasks[0].title, 'V1.4-A:LogRule 引擎 longest-match');
+    assert.equal(tasks[0].state, 'producing');
+  });
+
+  await t.test('任务符号带空格时同样正确', () => {
+    const tasks = parseStatusLog('Tasks:\n  \u2726 V1.4-A:LogRule 引擎 [ready]  verify=on\n');
+    assert.equal(tasks[0].title, 'V1.4-A:LogRule 引擎');
+    assert.equal(tasks[0].state, 'ready');
+  });
+
   await t.test('GBK 乱码的日志标题能被修复', async () => {
     const root = tmpDir();
     try {

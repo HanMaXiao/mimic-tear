@@ -59,6 +59,29 @@ test('text-repair', async (t) => {
     }
   });
 
+  await t.test('丢失的分隔空格被补回', () => {
+    // GBK 配对失败时会吞掉后一个字节，"跨重启 PID" 里的空格就是这样没的。
+    const original = '跨重启 PID 持久化';
+    const mojibake = toMojibake(original);
+    const vocabulary = buildVocabulary('DEHD V1.4 – 跨重启 PID 持久化 + LogRule 增强');
+    const repaired = repairMojibake(mojibake, vocabulary);
+    assert.ok(repaired.includes('跨重启 PID'), `应补回空格，实际为 ${repaired}`);
+    assert.ok(repaired.includes('持久化'), `应补回 化，实际为 ${repaired}`);
+  });
+
+  await t.test('同族干净文本用于消歧：两个候选字都在词表里时靠 n-gram 选对', () => {
+    // "启" 与 "各" 都出现在干净文本里，单字匹配无法区分，必须靠 n-gram。
+    const original = '跨重启 PID 持久化';
+    const mojibake = toMojibake(original);
+    const vocabulary = buildVocabulary('跨重启 各 持久化');
+
+    const withVocabulary = repairMojibake(mojibake, vocabulary);
+    assert.ok(withVocabulary.includes('跨重启'), `应还原 跨重启，实际为 ${withVocabulary}`);
+
+    const withoutVocabulary = repairMojibake(mojibake);
+    assert.ok(!withoutVocabulary.includes('跨重启'), '没有干净文本时不应假装还原成功');
+  });
+
   await t.test('空值安全', () => {
     assert.equal(repairMojibake(''), '');
     assert.equal(repairMojibake(null), null);

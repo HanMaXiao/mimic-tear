@@ -209,6 +209,46 @@ test('project-service', async (t) => {
     }
   });
 
+  await t.test('运行时内部工作区（agent 默认目录、插件目录）不计入项目', async () => {
+    const { service, store, dir } = makeService();
+    try {
+      const internal = await import('../miniapps/mimic-tear/miniapp/node/project-service.mjs');
+      assert.equal(internal.isInternalWorkspace('C:/Users/x/.minimax/agents/mavis/workspace'), true);
+      assert.equal(internal.isInternalWorkspace('C:/Users/x/.minimax/agents/mavis/miniapps/minimax-bot'), true);
+      assert.equal(internal.isInternalWorkspace('C:/Users/x/.mavis/agents/worker/workspace'), true);
+      assert.equal(internal.isInternalWorkspace('D:/Project/AppProject/Dungeon-Chesser'), false);
+      assert.equal(internal.isInternalWorkspace('D:/Project/My Workspace'), false);
+      store.close();
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  await t.test('已确认的条目不再计入「需你处理」，与 KPI 保持一致', async () => {
+    const { service, store, dir } = makeService();
+    try {
+      const before = await service.getOverview();
+      assert.ok(before.attention.length > 0);
+      const target = before.attention[0];
+
+      await service.ack(target.id);
+
+      const after = await service.getOverview();
+      assert.ok(
+        !after.attention.some((item) => item.id === target.id),
+        '已确认条目不应继续出现在需你处理里',
+      );
+      assert.equal(
+        after.attention.length + 1,
+        before.attention.length,
+        '需你处理条数应与 KPI 待决策同步减少',
+      );
+      store.close();
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
   await t.test('持久化：ack 与派工记录写入 dataDir', async () => {
     const { service, store, dir } = makeService();
     try {

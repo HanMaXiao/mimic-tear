@@ -159,7 +159,7 @@ export function buildInbox(input, acked) {
       sessionId: session.id,
       sessionTitle: session.title,
       title: `会话异常：${session.title || session.id}`,
-      body: session.errorMessage || `错误码 ${session.errorCode}`,
+      body: sessionErrorBody(session),
       createdAt: session.updatedAt,
       ageMinutes: ageMinutes(session.updatedAt, now),
     });
@@ -313,6 +313,21 @@ export function buildKpi(cards, inbox) {
     pendingDecisions: items.filter((i) => !i.acknowledged && i.severity !== 'low').length,
     errors: projectCards.filter((c) => c.health === 'error').length,
   };
+}
+
+/**
+ * Human-readable reason for a failed session.
+ *
+ * The runtime sometimes records a failure without a message or an error code, so the
+ * fallback must not print "null".
+ *
+ * @param {SessionRow} session
+ * @returns {string}
+ */
+export function sessionErrorBody(session) {
+  if (session.errorMessage && session.errorMessage.trim()) return session.errorMessage;
+  if (session.errorCode != null) return `错误码 ${session.errorCode}`;
+  return '运行时未提供具体原因（会话状态为异常）';
 }
 
 /**

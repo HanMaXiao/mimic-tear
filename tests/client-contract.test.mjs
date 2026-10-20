@@ -71,6 +71,31 @@ test('client-contract', async (t) => {
     assert.match(css, /border:\s*1px solid var\(--mcode-border\)/, '描边应为 1px');
   });
 
+  await t.test('支持 /?project=N 深链（Host 的 open API 不接受 fragment）', () => {
+    assert.ok(app.includes("get('project')"), '缺少 query 深链解析');
+    assert.ok(app.includes('location.search'), '缺少 location.search 读取');
+  });
+
+  await t.test('重绘按内容签名守卫，避免 SSE 频繁重建 DOM', () => {
+    assert.ok(app.includes('overviewChanged'), '缺少 overviewChanged 守卫');
+    assert.ok(app.includes('inboxChanged'), '缺少 inboxChanged 守卫');
+    assert.ok(app.includes('function overviewChanged'), '需要内容签名比较');
+  });
+
+  await t.test('等待时长用人类可读文案，不直接显示分钟数', () => {
+    assert.ok(app.includes('waitingLabel'), '缺少 waitingLabel');
+    assert.ok(!app.includes('等待 ${item.ageMinutes}'), '不应直接渲染分钟数');
+    assert.ok(app.includes('等待 ${minutes} 分钟'), '短等待应显示分钟');
+    assert.ok(app.includes('等待 ${Math.round(hours / 24)} 天'), '长等待应显示天数');
+  });
+
+  await t.test('横向溢出被约束，表格在容器内滚动', () => {
+    assert.match(css, /\.table-scroll\s*\{[^}]*overflow-x:\s*auto/, '表格容器应可横向滚动');
+    assert.match(css, /\.table-scroll\s*\{[^}]*max-width:\s*100%/, '表格容器不应撑破页面');
+    assert.match(css, /\.panel\s*\{[^}]*min-width:\s*0/, '面板需要 min-width: 0 才能收缩');
+    assert.match(css, /\.view\s*\{[^}]*min-width:\s*0/, '视图需要 min-width: 0 才能收缩');
+  });
+
   await t.test('没有远程资源引用', () => {
     const allowed = ['http://www.w3.org/2000/svg', 'http://127.0.0.1', 'http://localhost'];
     for (const [name, content] of [['index.html', html], ['app.js', app], ['styles.css', css]]) {

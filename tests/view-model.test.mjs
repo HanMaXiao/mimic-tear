@@ -9,6 +9,7 @@ import {
   buildKpi,
   questionnaireBody,
   projectName,
+  sessionErrorBody,
 } from '../miniapps/mimic-tear/miniapp/node/view-model.mjs';
 
 const NOW = 1_800_000_000_000;
@@ -254,6 +255,17 @@ test('view-model', async (t) => {
     assert.equal(kpi.active, 1);
     assert.equal(kpi.errors, 1);
     assert.equal(kpi.pendingDecisions, 2, 'low 优先级与已确认项都不计入');
+  });
+
+  await t.test('会话异常没有消息也没有错误码时，不显示 null', () => {
+    const body = sessionErrorBody({ errorMessage: null, errorCode: null });
+    assert.ok(!body.includes('null'), `不应出现 null：${body}`);
+    assert.match(body, /未提供具体原因/);
+  });
+
+  await t.test('会话异常优先显示运行时给出的消息', () => {
+    assert.equal(sessionErrorBody({ errorMessage: '网络错误', errorCode: 501 }), '网络错误');
+    assert.equal(sessionErrorBody({ errorMessage: null, errorCode: 501 }), '错误码 501');
   });
 
   await t.test('项目名：取路径末段，容忍尾部斜杠', () => {

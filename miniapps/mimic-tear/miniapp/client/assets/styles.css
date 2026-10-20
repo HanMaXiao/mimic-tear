@@ -227,6 +227,7 @@ main {
   display: flex;
   flex-direction: column;
   gap: 24px;
+  min-width: 0;
 }
 
 .view[hidden] {
@@ -237,6 +238,7 @@ main {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-width: 0;
 }
 
 .section__head {
@@ -299,6 +301,7 @@ main {
   border-radius: 12px;
   background: var(--mcode-surface);
   overflow: hidden;
+  min-width: 0;
 }
 
 .panel__head {
@@ -321,6 +324,7 @@ main {
 
 table {
   width: 100%;
+  min-width: 680px;
   border-collapse: collapse;
   font-size: 13px;
 }
@@ -352,6 +356,8 @@ th.numeric {
 
 .table-scroll {
   overflow-x: auto;
+  max-width: 100%;
+  min-width: 0;
 }
 
 /* ---------- status ---------- */

@@ -18,7 +18,8 @@ import { buildVocabulary, repairMojibake } from './text-repair.mjs';
 
 const STATE_TOKENS = new Set(['producing', 'ready', 'blocked', 'done', 'failed']);
 
-const TASK_LINE = /^\s*\S+\s+(.*?)\s+\[([a-zA-Z-]+)\]\s*(.*)$/;
+const TASK_LINE = /^(.*?)\s+\[([a-zA-Z-]+)\]\s*(.*)$/;
+const LEADING_SYMBOL = /^[^\p{L}\p{N}]+/u;
 const YAML_TASK_START = /^\s*-\s+([A-Za-z_][\w-]*)\s*:\s*(.*)$/;
 const YAML_KEY = /^\s+([A-Za-z_][\w-]*)\s*:\s*(.*)$/;
 const BLOCK_SCALAR = /^[|>][-+]?\d*$/;
@@ -150,9 +151,14 @@ export function parseStatusLog(text) {
     if (!line.trim()) continue;
     const match = TASK_LINE.exec(line);
     if (!match) continue;
-    const [, title, rawState] = match;
+    const [, rawTitle, rawState] = match;
+    // The leading status symbol is stripped by removing every character before the first
+    // letter or digit. Matching a fixed-width symbol is not safe: the GBK corruption can
+    // swallow the space that separated the symbol from the title, gluing them together.
+    const title = rawTitle.replace(LEADING_SYMBOL, '').trim();
+    if (!title) continue;
     const state = STATE_TOKENS.has(rawState) ? rawState : 'unknown';
-    tasks.push({ id: null, title: title.trim(), state, assignedTo: null });
+    tasks.push({ id: null, title, state, assignedTo: null });
   }
   return tasks;
 }
