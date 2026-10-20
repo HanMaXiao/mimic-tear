@@ -92,6 +92,7 @@ export class ProjectService {
         autoDispatch: false,
         dutyIntervalMinutes: 30,
         lastRunAt: null,
+        lastBoardPatrolAt: null,
         lastSignature: null,
       };
     }

@@ -7,6 +7,11 @@ import { fileURLToPath } from 'node:url';
 
 import { PatrolStore } from '../miniapps/mimic-tear/miniapp/node/patrol-store.mjs';
 import { ProjectService, DomainError } from '../miniapps/mimic-tear/miniapp/node/project-service.mjs';
+import {
+  boardPatrolAction,
+  isPatrolDue,
+  stampBoardPatrol,
+} from '../miniapps/mimic-tear/miniapp/node/patrol-scheduler.mjs';
 import { buildPatrolBrief, parsePatrolReport } from '../miniapps/mimic-tear/miniapp/node/view-model.mjs';
 import { RuntimeStore } from '../miniapps/mimic-tear/miniapp/node/runtime-store.mjs';
 import { makeRuntimeDb, tmpDir, cleanupDir } from './helpers/fixture.mjs';
@@ -207,6 +212,69 @@ test('patrol', async (t) => {
         '看板自己的巡检要写自己的时间戳，否则看板的下一次巡检会被无限触发',
       );
       store.close();
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  await t.test('看板定时器挪时钟时也只挪自己的钟（这条路径没有别的护栏）', async () => {
+    const dir = tmpDir();
+    const store = new PatrolStore(join(dir, 'data'));
+    try {
+      // A duty handover is already on record; the board must not touch it.
+      await store.setConfig({ lastRunAt: 1234 });
+      const stamped = await stampBoardPatrol(store, 9999);
+
+      const config = await store.getConfig();
+      assert.equal(stamped, 9999);
+      assert.equal(config.lastBoardPatrolAt, 9999, '看板的时钟要前进');
+      assert.equal(config.lastRunAt, 1234, '值班交班时间戳一个字都不能动');
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  await t.test('看板定时器的到期判断：旧配置首启即到期，之后按间隔节流', () => {
+    const old = { enabled: true, intervalMinutes: 15 };
+    assert.equal(isPatrolDue(old, 1_000_000), true, '没有 lastBoardPatrolAt = 从没跑过 = 立即到期');
+
+    const justRan = { enabled: true, intervalMinutes: 15, lastBoardPatrolAt: 1_000_000 };
+    assert.equal(isPatrolDue(justRan, 1_000_000 + 60_000), false, '刚跑过不该立刻再跑');
+    assert.equal(isPatrolDue(justRan, 1_000_000 + 15 * 60_000), true, '一个间隔之后到期');
+  });
+
+  await t.test('看板定时器的动作：跳过 / 只挪时钟 / 真跑一轮', () => {
+    const due = { enabled: true, intervalMinutes: 15, lastBoardPatrolAt: 0 };
+    assert.equal(boardPatrolAction({ ...due, enabled: false }, false), 'skip', '没开就跳过');
+    assert.equal(boardPatrolAction(due, true), 'stamp', '到期但收件箱没变化 → 只挪时钟');
+    assert.equal(boardPatrolAction(due, false), 'run', '到期且有变化 → 跑一轮');
+    assert.equal(
+      boardPatrolAction({ ...due, lastBoardPatrolAt: Date.now() }, false),
+      'skip',
+      '没到期就跳过',
+    );
+  });
+
+  await t.test('并发写不会失败，也不会互相覆盖字段', async () => {
+    const dir = tmpDir();
+    const dataDir = join(dir, 'data');
+    // Two writers on one directory, the way the duty process and the board actually meet.
+    const duty = new PatrolStore(dataDir);
+    const board = new PatrolStore(dataDir);
+    try {
+      for (let round = 0; round < 20; round += 1) {
+        await Promise.all([
+          duty.setConfig({ lastRunAt: 1000 + round }),
+          board.setConfig({ lastBoardPatrolAt: 2000 + round }),
+        ]);
+      }
+
+      const config = await duty.getConfig();
+      assert.equal(typeof config.lastRunAt, 'number', '值班交班时间戳不能被覆盖掉');
+      assert.equal(typeof config.lastBoardPatrolAt, 'number', '看板自己的时间戳也不能被覆盖掉');
+      // The file itself must still be readable JSON — a half-written file would break the board.
+      const raw = JSON.parse(readFileSync(join(dataDir, 'patrol-config.json'), 'utf8'));
+      assert.equal(typeof raw.lastRunAt, 'number');
     } finally {
       cleanupDir(dir);
     }

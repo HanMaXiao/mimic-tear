@@ -1,5 +1,17 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { randomBytes } from 'node:crypto';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
+
+/**
+ * One write queue per data directory.
+ *
+ * Two writers that share a directory must not interleave a read-modify-write: whoever writes
+ * last would silently drop the other's field — and the field being dropped can be the duty
+ * handover stamp, which makes the board report a boss that actually handed over.
+ *
+ * @type {Map<string, Promise<unknown>>}
+ */
+const writeQueues = new Map();
 
 /**
  * Durable state for the boss's proactive patrol.
@@ -41,10 +53,28 @@ const DEFAULT_CONFIG = {
 export class PatrolStore {
   /** @param {string} dataDir */
   constructor(dataDir) {
-    this.dataDir = dataDir;
-    this.findingsPath = join(dataDir, 'patrol.json');
-    this.configPath = join(dataDir, 'patrol-config.json');
-    this.answeredPath = join(dataDir, 'patrol-answered.json');
+    this.dataDir = resolve(dataDir);
+    this.findingsPath = join(this.dataDir, 'patrol.json');
+    this.configPath = join(this.dataDir, 'patrol-config.json');
+    this.answeredPath = join(this.dataDir, 'patrol-answered.json');
+  }
+
+  /**
+   * Run a write task after every previously queued write on this directory has settled.
+   *
+   * Writes are read-modify-write, so two of them racing would drop one side's fields. The
+   * queue is shared per directory rather than per instance: the board can hold two stores on
+   * the same directory, and the duty path writes from a separate process entirely.
+   *
+   * @template T
+   * @param {() => Promise<T>} task
+   * @returns {Promise<T>}
+   */
+  enqueue(task) {
+    const previous = writeQueues.get(this.dataDir) ?? Promise.resolve();
+    const run = previous.then(task, task);
+    writeQueues.set(this.dataDir, run.then(() => undefined, () => undefined));
+    return run;
   }
 
   /** @returns {Promise<PatrolFinding[]>} */
@@ -64,28 +94,32 @@ export class PatrolStore {
    * @returns {Promise<PatrolFinding>}
    */
   async add(input) {
-    const findings = await this.list();
-    const finding = {
-      id: `patrol_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
-      createdAt: Date.now(),
-      acknowledged: false,
-      ...input,
-    };
-    findings.unshift(finding);
-    // Keep the history bounded; the board only ever shows the recent tail.
-    await this.save(findings.slice(0, 100));
-    return finding;
+    return this.enqueue(async () => {
+      const findings = await this.list();
+      const finding = {
+        id: `patrol_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+        createdAt: Date.now(),
+        acknowledged: false,
+        ...input,
+      };
+      findings.unshift(finding);
+      // Keep the history bounded; the board only ever shows the recent tail.
+      await this.save(findings.slice(0, 100));
+      return finding;
+    });
   }
 
   /** @param {string} id */
   async ack(id) {
-    const findings = await this.list();
-    const target = findings.find((f) => f.id === id);
-    if (target) {
-      target.acknowledged = true;
-      await this.save(findings);
-    }
-    return Boolean(target);
+    return this.enqueue(async () => {
+      const findings = await this.list();
+      const target = findings.find((f) => f.id === id);
+      if (target) {
+        target.acknowledged = true;
+        await this.save(findings);
+      }
+      return Boolean(target);
+    });
   }
 
   /**
@@ -105,18 +139,20 @@ export class PatrolStore {
    * @param {{ requestId: string, sessionId: string, answer: string, rationale?: string }} entry
    */
   async markAnswered(entry) {
-    const answered = await this.listAnswered();
-    if (answered.some((item) => item.requestId === entry.requestId)) return answered;
-    answered.unshift({
-      requestId: entry.requestId,
-      sessionId: entry.sessionId,
-      answeredAt: Date.now(),
-      answer: entry.answer ?? '',
-      rationale: entry.rationale ?? '',
-      optionIds: entry.optionIds ?? [],
+    return this.enqueue(async () => {
+      const answered = await this.listAnswered();
+      if (answered.some((item) => item.requestId === entry.requestId)) return answered;
+      answered.unshift({
+        requestId: entry.requestId,
+        sessionId: entry.sessionId,
+        answeredAt: Date.now(),
+        answer: entry.answer ?? '',
+        rationale: entry.rationale ?? '',
+        optionIds: entry.optionIds ?? [],
+      });
+      await writeJson(this.answeredPath, answered.slice(0, 200));
+      return answered;
     });
-    await writeJson(this.answeredPath, answered.slice(0, 200));
-    return answered;
   }
 
   /** @param {string} requestId */
@@ -131,16 +167,37 @@ export class PatrolStore {
     return { ...DEFAULT_CONFIG, ...(value && typeof value === 'object' ? value : {}) };
   }
 
-  /** @param {Partial<PatrolConfig>} patch */
+  /**
+   * Apply a patch to the config.
+   *
+   * Only the fields this call actually sets are written. The duty path writes `lastRunAt`
+   * and the board writes `lastBoardPatrolAt` + `lastSignature` — they are different fields,
+   * so a whole-file overwrite that re-stamps the other writer's fields would drop them.
+   * The file is therefore re-read immediately before writing, and only the patch rides on top.
+   *
+   * @param {Partial<PatrolConfig>} patch
+   * @returns {Promise<PatrolConfig>}
+   */
   async setConfig(patch) {
-    const current = await this.getConfig();
-    const next = { ...current, ...patch };
-    next.intervalMinutes = Math.min(240, Math.max(5, Number(next.intervalMinutes) || 15));
-    next.dutyIntervalMinutes = Math.min(240, Math.max(5, Number(next.dutyIntervalMinutes) || 30));
-    next.enabled = Boolean(next.enabled);
-    next.autoDispatch = Boolean(next.autoDispatch);
-    await writeJson(this.configPath, next);
-    return next;
+    const changes = {};
+    for (const [key, value] of Object.entries(patch ?? {})) {
+      if (key === 'intervalMinutes') {
+        changes[key] = Math.min(240, Math.max(5, Number(value) || 15));
+      } else if (key === 'dutyIntervalMinutes') {
+        changes[key] = Math.min(240, Math.max(5, Number(value) || 30));
+      } else if (key === 'enabled' || key === 'autoDispatch') {
+        changes[key] = Boolean(value);
+      } else {
+        changes[key] = value;
+      }
+    }
+    return this.enqueue(async () => {
+      // Re-read right before writing so a concurrent writer's fields survive.
+      const latest = await this.getConfig();
+      const next = { ...latest, ...changes };
+      await writeJson(this.configPath, next);
+      return next;
+    });
   }
 }
 
@@ -154,11 +211,40 @@ async function readJson(path, fallback) {
   }
 }
 
+/**
+ * Write JSON atomically.
+ *
+ * The temporary file name must be UNIQUE per write. Two writers share this file: the duty
+ * path runs as its own process (`patrol-cli report`) and the board is a long-running Node
+ * process. With a fixed `<path>.tmp` name, one writer's rename moves the file out from under
+ * the other and the rename fails — and a failed write in the duty path means the handover
+ * timestamp is silently lost, so the board reports a duty boss that actually handed over.
+ *
+ * A unique name plus a bounded retry turns that into a harmless transient error.
+ */
 async function writeJson(path, value) {
   await mkdir(dirname(path), { recursive: true });
-  const temporary = `${path}.tmp`;
-  await writeFile(temporary, JSON.stringify(value, null, 2), 'utf8');
-  await rename(temporary, path);
+  const payload = `${JSON.stringify(value, null, 2)}\n`;
+  let lastError;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const temporary = `${path}.${process.pid}.${Date.now()}.${randomBytes(6).toString('hex')}.tmp`;
+    try {
+      await writeFile(temporary, payload, 'utf8');
+      await rename(temporary, path);
+      return;
+    } catch (error) {
+      lastError = error;
+      await rm(temporary, { force: true }).catch(() => {});
+      await delay(20 * (attempt + 1));
+    }
+  }
+  throw lastError;
+}
+
+function delay(ms) {
+  return new Promise((resolveDelay) => {
+    setTimeout(resolveDelay, ms);
+  });
 }
 
 function dirname(path) {

@@ -3,6 +3,8 @@ import { readFile, stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { extname, join, normalize, resolve, sep } from 'node:path';
 
+import { boardPatrolAction, isPatrolDue, stampBoardPatrol } from './patrol-scheduler.mjs';
+
 /**
  * The Mini App's HTTP surface: a small REST API plus one SSE stream, and the static Client.
  *
@@ -447,18 +449,18 @@ export async function start(context) {
     void (async () => {
       try {
         const config = await service.getPatrolConfig();
+        // Cheap early-outs before the (expensive) snapshot.
         if (!config.enabled) return;
-
-        // The board's own loop keeps its own clock: lastRunAt belongs to the duty path,
-        // and borrowing it here would make the board look like it had covered for the boss.
-        const since = config.lastBoardPatrolAt ?? 0;
-        const due = Date.now() - since >= config.intervalMinutes * 60_000;
-        if (!due) return;
+        if (!isPatrolDue(config)) return;
 
         const snapshot = await service.snapshot();
-        if (config.lastSignature && service.inboxSignature(snapshot) === config.lastSignature) {
+        const signatureMatches = Boolean(config.lastSignature)
+          && service.inboxSignature(snapshot) === config.lastSignature;
+        const action = boardPatrolAction(config, signatureMatches);
+        if (action === 'skip') return;
+        if (action === 'stamp') {
           // Nothing changed: just move the clock so the next check is not immediately due.
-          await patrol.setConfig({ lastBoardPatrolAt: Date.now() });
+          await stampBoardPatrol(patrol);
           return;
         }
 
