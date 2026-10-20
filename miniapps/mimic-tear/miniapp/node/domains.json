@@ -1,0 +1,70 @@
+{
+  "domains": [
+    {
+      "key": "unreal",
+      "label": "UE5 引擎",
+      "match": ["ue5-", "unreal5", "unreal", "generate-ue5", "generate-unreal5"],
+      "keywords": ["unreal", "ue5"]
+    },
+    {
+      "key": "blender",
+      "label": "3D 建模 / Blender",
+      "match": ["blender-", "blender", "threejs-"],
+      "keywords": ["blender", "threejs"]
+    },
+    {
+      "key": "gamedev",
+      "label": "游戏开发 / 互动",
+      "match": ["game-studio", "game-design", "phaser", "sprite-", "remotion", "algorithmic-art", "gpt-taste", "retro-tech-illustration"],
+      "keywords": ["game", "sprite", "phaser"]
+    },
+    {
+      "key": "frontend",
+      "label": "前端 / Web 体验",
+      "match": ["frontend-design", "design-taste", "interface-design", "minimalist-ui", "shadcn", "tailwind-", "next-", "nextjs-", "react-", "vercel-", "web-design", "webapp-testing", "canvas-design", "web-security", "vite", "ui-ux", "ui-blueprint", "high-end-visual-design", "image-to-code", "redesign-existing-projects", "stitch-", "sleek-design", "theme-kit", "component-library-testing", "biome-", "cross-project-component", "component-migration", "locale-guard", "cultural-tourism-be", "coze-prototype", "lp-proto-gen", "xpm-first-level", "provider-config-framework", "shared-ui-component", "react-canva"],
+      "keywords": ["frontend", "ui/ux", "design"]
+    },
+    {
+      "key": "desktop",
+      "label": "桌面应用 / Electron",
+      "match": ["tauri-", "nextjs-electron"],
+      "keywords": ["desktop", "electron", "tauri"]
+    },
+    {
+      "key": "mobile",
+      "label": "移动端 / App",
+      "match": ["android-", "capacitor-", "ios-", "app-development-workbench", "flutter-", "react-native", "sleek-design-mobile", "msstore-"],
+      "keywords": ["android", "ios", "mobile"]
+    },
+    {
+      "key": "backend",
+      "label": "后端 / API / 基础设施",
+      "match": ["django-", "fastapi", "postgres", "supabase-", "redis-", "celery-", "hangfire", "apollo-", "microservices", "system-design", "event-driven", "docker-", "k8s-", "observability", "ci-cd", "devops", "kubernetes", "alipay-", "schemaspy", "production-ops", "terminal-style", "langchain-redis"],
+      "keywords": ["api", "backend", "database", "kubernetes", "docker", "celery", "redis", "postgres", "microservice", "server"]
+    },
+    {
+      "key": "dotnet",
+      "label": ".NET / C#",
+      "match": ["dotnet-", "aspire", "blazor-", "ef-", "csharp"],
+      "keywords": ["dotnet", ".net", "c#", "xunit"]
+    },
+    {
+      "key": "pm",
+      "label": "项目管理 / 质量保障",
+      "match": ["project-development-advisor", "module-planning-with-files", "planning-with-files", "writing-plans", "writing-skills", "executing-plans", "subagent-driven-development", "dispatching-parallel-agents", "superpowers", "code-review", "code-safety-audit", "verification-before-completion", "systematic-debugging", "test-driven-development", "tdd-coach", "software-testing-guide", "code-arch-optimizer", "ddd-", "mattpocock-skills", "git-pr-review", "precommit", "reflect", "brainstorming", "iteration-planner", "idea-to-prd", "project-foundation", "project-tidy", "full-output-enforcement", "gantt-chart-builder", "requesting-code-review", "finishing-a-development-branch", "using-git-worktrees", "generate-uml", "security-best-practices", "code-arch"],
+      "keywords": ["planning", "review", "testing", "refactor", "architecture", "subagent", "uml", "project"]
+    },
+    {
+      "key": "research",
+      "label": "调研 / 文档 / 媒体",
+      "match": ["deep-research", "research-writer", "docx", "minimax-docx", "minimax-pdf", "minimax-xlsx", "pptx", "pdf", "xlsx", "deep-probe", "humanizer", "mcode-tools", "minimax-code-product", "code-to-chart", "logo-", "brandkit", "copy-editor", "sop-writer", "dev-guide-writer", "work-report-writer", "visual-page", "seo-", "wechat-post-craft", "xhs-note-craft", "guizang-ppt", "customer-reply-craft", "py-perf-analyzer", "muse-", "kimi-skills-finder", "tencent-captcha"],
+      "keywords": ["research", "document", "report", "presentation", "pdf", "docx", "image"]
+    },
+    {
+      "key": "tooling",
+      "label": "工具 / 自动化 / 运行时",
+      "match": ["playwright", "browser-use", "agent-browser", "chrome-devtools", "agent-tools", "tool-", "lark-", "kaggle", "composio", "arkcli", "mcp", "im-", "web-search", "http-load-tester", "create-agent", "deploy-website", "edit-deployed-website", "llm-call", "find-skills", "skill-creator", "skill-refiner", "init", "mavis", "miniapp-creator", "minimax-bot", "mcp-", "mimic-", "landing-page", "agent-workflow", "agentadmin", "muse-"],
+      "keywords": ["browser", "automation", "mcp", "tool", "plugin"]
+    }
+  ]
+}

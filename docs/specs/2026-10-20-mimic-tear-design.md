@@ -218,8 +218,7 @@ interface ProjectCard {
 ### 4.3 决策收件箱条目
 
 ```ts
-type InboxKind = 'questionnaire' | 'goal-paused' | 'session-error'
-               | 'task-failed' | 'plan-blocked';
+type InboxKind = 'questionnaire' | 'goal-paused' | 'session-error' | 'plan-blocked';
 type Severity = 'high' | 'medium' | 'low';
 
 interface InboxItem {
@@ -238,7 +237,9 @@ interface InboxItem {
 }
 ```
 
-严重度：`session-error` = high；`questionnaire` / `plan-blocked` = high；`goal-paused` = medium；`task-failed` = low。
+严重度：`session-error` = high；`questionnaire` = high；`plan-blocked` = high；`goal-paused` = medium。
+
+> **实现修正（2026-10-20）**：初稿列了 `task-failed` 一类。实现时实测运行时已有 428 条历史失败任务，全部列入收件箱会把真正需要你决策的事项淹没，因此**不把后台任务失败纳入收件箱**——只有会话级异常、待答问卷、被阻塞的计划任务和暂停的 Goal 才进入。四类都指向"需要你做点什么"，这才是收件箱的职责。
 
 ### 4.4 项目详情：组织树
 
