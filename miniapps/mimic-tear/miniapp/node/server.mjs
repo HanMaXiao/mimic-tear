@@ -36,13 +36,16 @@ const CONTENT_TYPES = {
  *
  * Kept separate from `start()` so the routes can be exercised without a Host context.
  *
- * @param {{ service: any, clientDir: string, logger?: any }} deps
+ * @param {{ service: any, clientDir: string, logger?: any, persistence?: any }} deps
  */
 export function createApp(deps) {
   const { clientDir } = deps;
   // Mutable so `start()` can wire the real service after the app is created: the boss needs
   // the app's permission channel, and the app needs the service.
   let service = deps.service ?? null;
+  // The boss session id lives in the persistence layer; the chat routes need it so the page
+  // can offer "open this conversation in the Host chat side panel".
+  const persistence = deps.persistence ?? null;
   const logger = deps.logger ?? { info() {}, warn() {}, error() {}, debug() {} };
 
   /** @type {Set<import('node:http').ServerResponse>} */
@@ -257,6 +260,14 @@ export function createApp(deps) {
         return;
       }
 
+      if (pathname === '/api/chat/session' && method === 'GET') {
+        // The Host side panel needs the boss's session id, and the page must be able to ask for
+        // it before the first message is ever sent.
+        const stored = persistence ? await persistence.getBossSession() : null;
+        sendJson(response, 200, { bossSessionId: stored?.sessionId ?? null, agent: stored?.agent ?? null });
+        return;
+      }
+
       if (pathname === '/api/chat' && method === 'POST') {
         const body = await readBody(request);
         const text = String(body?.text ?? '').trim();
@@ -264,8 +275,12 @@ export function createApp(deps) {
           sendJson(response, 400, { error: 'empty_message' });
           return;
         }
+        // The boss's session id goes out with the acknowledgement: the page needs it to offer
+        // "open this conversation in the Host chat side panel" (the Host renders agent turns
+        // far better than a Mini App can re-implement them).
+        const stored = persistence ? await persistence.getBossSession() : null;
         // A conversation turn can take minutes, so it must not hold the HTTP request open.
-        sendJson(response, 202, { status: 'started' });
+        sendJson(response, 202, { status: 'started', bossSessionId: stored?.sessionId ?? null });
         void service.chat(text, broadcastChatEvent)
           .then((outcome) => {
             broadcast('chat.done', {
@@ -474,6 +489,7 @@ export async function start(context) {
     service: null,
     clientDir: join(context.pluginRoot, 'miniapp', 'client'),
     logger: context.logger,
+    persistence,
   });
 
   const boss = new BossBridge({

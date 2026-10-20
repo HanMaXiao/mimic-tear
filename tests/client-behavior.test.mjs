@@ -84,6 +84,11 @@ class ShimElement {
     node.parent = this;
   }
 
+  appendChild(node) {
+    this.append(node);
+    return node;
+  }
+
   remove() {
     if (!this.parent) return;
     this.parent.children = this.parent.children.filter((c) => c !== this);
@@ -225,7 +230,8 @@ const PROJECT_DETAIL = {
 /**
  * Load the real client module against a DOM shim and return handles for driving it.
  *
- * @param {{ search?: string }} [options] query string the page is loaded with
+ * @param {{ search?: string, mcode?: any }} [options] query string the page is loaded with;
+ *   `mcode` stands in for the Host bridge the real page gets from the preload.
  */
 async function loadClient(options = {}) {
   const html = await readFile(HTML_PATH, 'utf8');
@@ -242,6 +248,7 @@ async function loadClient(options = {}) {
   globalThis.document = documentShim;
   globalThis.window = {
     get location() { return location; },
+    mcode: options.mcode,
     addEventListener: (type, handler) => {
       if (!windowListeners.has(type)) windowListeners.set(type, []);
       windowListeners.get(type).push(handler);
@@ -272,6 +279,8 @@ async function loadClient(options = {}) {
     else if (path.startsWith('/api/projects/')) payload = PROJECT_DETAIL;
     else if (path.startsWith('/api/projects')) payload = { projects: PROJECTS };
     else if (path.startsWith('/api/dispatch')) payload = { dispatchId: 'd1', status: 'queued' };
+    else if (path.startsWith('/api/chat/session')) payload = { bossSessionId: 'mvs_boss_1', agent: 'boss' };
+    else if (path.startsWith('/api/chat')) payload = { status: 'started', bossSessionId: 'mvs_boss_1' };
     return { ok: true, status: 200, text: async () => JSON.stringify(payload) };
   };
 
@@ -726,6 +735,51 @@ test('client behavior (DOM shim)', async (t) => {
     assert.equal(call.body.requestId, 'ask_1');
     assert.equal(call.body.answers[0].stepId, 's1');
     assert.deepEqual(call.body.answers[0].selectedOptionIds, ['yes']);
+  });
+
+  await t.test('「在侧栏打开」真的调用宿主的 agent.open，并带上大哥的会话 id', async () => {
+    // The Host renders agent turns (streaming, tools, permissions, questionnaires) far better
+    // than a Mini App can re-implement them, so the page must be able to hand the conversation
+    // to the Host's own chat side panel. A string-match test cannot prove the call happens
+    // with the right id; this one clicks the button and watches the Host API.
+    const opened = [];
+    const client = await loadClient({
+      mcode: {
+        miniapp: {
+          agent: {
+            async open(sessionId) { opened.push(sessionId); },
+          },
+        },
+      },
+    });
+    await client.settle();
+
+    const button = client.element('chat-open-host');
+    assert.ok(button, '侧栏按钮要存在');
+
+    button.dispatchEvent({ type: 'click', preventDefault() {} });
+    await client.settle();
+
+    // Exactly one call with the right id: "not called" and "called twice" are both failures,
+    // and an optional call (`agent.open?.(...)`) must not pass for a real call.
+    assert.equal(opened.length, 1, '应恰好调用一次 agent.open');
+    assert.deepEqual(opened, ['mvs_boss_1'], '应传入大哥的会话 id');
+    const sessionCall = client.calls.find((c) => c.url.startsWith('/api/chat/session'));
+    assert.ok(sessionCall, '会话 id 应来自服务端');
+  });
+
+  await t.test('宿主没有侧栏能力时给出可见提示，不静默失败', async () => {
+    const client = await loadClient({ mcode: { miniapp: { agent: {} } } });
+    await client.settle();
+
+    client.element('chat-open-host').dispatchEvent({ type: 'click', preventDefault() {} });
+    await client.settle();
+
+    const host = client.element('toast-host');
+    assert.ok(host, '提示容器要存在');
+    // The shim's `textContent` is a plain property, so the message lives on the child node.
+    const shown = host.children.map((node) => node.textContent).join(' ');
+    assert.match(shown, /侧栏/, '应该告诉用户为什么打不开');
   });
 
   await t.test('?theme=light 能强制浅色主题（发布出去的 CSS 本来就有这个钩子）', async () => {    const client = await loadClient({ search: '?theme=light' });

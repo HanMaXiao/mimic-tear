@@ -20,6 +20,7 @@ const API = {
   patrolRun: '/api/patrol/run',
   chat: '/api/chat',
   chatAnswer: '/api/chat/answer',
+  chatSession: '/api/chat/session',
   stream: '/api/stream',
 };
 
@@ -40,7 +41,9 @@ const state = {
   dispatchTarget: { projectId: null, sessionId: null },
   // The conversation with the boss. `messages` is the transcript; `streaming` is the reply
   // being written right now; `question` is the questionnaire the boss is waiting on.
-  chat: { messages: [], streaming: null, tools: [], question: null, answers: {} },
+  // `bossSessionId` is the boss's own session, needed to open the same conversation in the
+  // Host's chat side panel.
+  chat: { messages: [], streaming: null, tools: [], question: null, answers: {}, bossSessionId: null },
 };
 
 const el = (id) => document.getElementById(id);
@@ -740,7 +743,10 @@ async function sendChat(text) {
   state.chat.tools = [];
   renderChat();
   try {
-    await request(API.chat, { method: 'POST', body: JSON.stringify({ text: message }) });
+    const payload = await request(API.chat, { method: 'POST', body: JSON.stringify({ text: message }) });
+    // The acknowledgement carries the boss's session id, so the side-panel button works even
+    // before the first reply arrives.
+    if (payload?.bossSessionId) state.chat.bossSessionId = payload.bossSessionId;
   } catch (error) {
     state.chat.streaming = null;
     state.chat.messages.push({ role: 'boss', text: `（消息没送到大哥：${error.message}）` });
@@ -790,6 +796,58 @@ async function submitChatAnswer() {
   } catch (error) {
     state.chat.messages.push({ role: 'boss', text: `（回答没送到大哥：${error.message}）` });
     renderChat();
+  }
+}
+
+/* ------------------------------------------------------------------ host panel */
+
+/**
+ * Open the conversation with the boss in the Host's own chat side panel.
+ *
+ * The Host renders an agent turn far better than a Mini App can re-implement it: streaming
+ * text, tool calls, permission prompts and questionnaires all come for free, and the user
+ * gets the same dialogue they already know from talking to any other agent. The Host
+ * exposes exactly this through `agent.open(sessionId)` — it shows one of this plugin's own
+ * sessions in the side panel of the chat the Mini App is open in.
+ *
+ * Two things it deliberately does not do:
+ *
+ * - **It does not replace the in-page conversation.** The panel is an extra view of the same
+ *   session, not a better one; the Mini App stays usable when the Mini App is opened on its
+ *   own, outside any chat.
+ * - **It does not fail silently.** If the Host refuses — no chat session, no permission, an
+ *   older session id — the user is told, because a button that does nothing visible is worse
+ *   than no button at all.
+ */
+async function openBossInHostPanel() {
+  const agent = window.mcode?.miniapp?.agent;
+  if (!agent?.open) {
+    toast('这个窗口没有可用的宿主侧栏（Mini App 需要开在聊天里）', 'error');
+    return;
+  }
+
+  let sessionId = state.chat.bossSessionId;
+  if (!sessionId) {
+    try {
+      const payload = await request(API.chatSession);
+      sessionId = payload?.bossSessionId ?? null;
+      state.chat.bossSessionId = sessionId;
+    } catch (error) {
+      toast(`拿不到大哥的会话：${error.message}`, 'error');
+      return;
+    }
+  }
+
+  if (!sessionId) {
+    toast('大哥还没有会话，先跟他说一句话再打开侧栏', 'error');
+    return;
+  }
+
+  try {
+    await agent.open(sessionId);
+    toast('已在宿主侧栏打开与大哥的对话');
+  } catch (error) {
+    toast(`宿主侧栏打开失败：${error?.message ?? error}`, 'error');
   }
 }
 
@@ -1213,6 +1271,10 @@ el('chat-form').addEventListener('submit', (event) => {
   const text = input.value;
   input.value = '';
   void sendChat(text);
+});
+
+el('chat-open-host').addEventListener('click', () => {
+  void openBossInHostPanel();
 });
 
 el('domain-nav').addEventListener('click', (event) => {

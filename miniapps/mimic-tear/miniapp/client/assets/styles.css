@@ -920,6 +920,14 @@ th.numeric {
   border-color: var(--mcode-accent);
 }
 
+/* The row above the composer: a way into the Host's own chat side panel. */
+.chat__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 0 8px 4px;
+}
+
 .chat__composer textarea {
   flex: 1;
   min-width: 0;
