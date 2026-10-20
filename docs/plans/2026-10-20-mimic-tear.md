@@ -710,29 +710,26 @@ git commit -m "feat(mimic-tear): 发布并通过 Host 验收"
 - Consumes: Task 7 / 10 的产物
 - Produces: 规格 §9 第 6 项的实测证据
 
-- [ ] **Step 1: 在 Mini App 里对一个真实项目发起一次派工**
+- [x] **Step 1: 在 Mini App 里对一个真实项目发起一次派工**
 
-  选一个空闲项目的会话，提交一条可辨识的指令（例如"【仿身泪滴派工自检】请回复当前项目状态摘要。"）。
+  目标：MagicMaze&Line 负责人会话 `mvs_6e11ce0e58104e059dc82ec2b16e413f`。
+  在项目详情页点「下达指令」，填入自检指令，显式选择目标会话，提交。
 
-- [ ] **Step 2: 到目标会话确认收到**
+- [x] **Step 2: 到目标会话确认收到**
 
-  Run: `mavis` 工具 `session messages --session-id <目标会话>`（或 `session list` 观察 updatedAt）
-  Expected: 目标会话出现该指令。
+  Run: `mavis` 工具 `session messages --session-id mvs_6e11ce0e58104e059dc82ec2b16e413f`
+  Expected: 出现 `role=user, source=communication` 的指令原文，且目标 agent 按要求只回复确认。
+  实测：指令原文一字未改到达，对方回「收到，仿身泪滴派工链路正常」，未启动任何开发工作。
 
-- [ ] **Step 3: 若投递失败，按降级链修正**
+- [x] **Step 3: 确认走的是首选路径而非降级**
 
-  若 boss agent 拿不到 `mavis` 工具：把 `BossBridge` 的投递跳改由默认 agent 承担（规格 §3.3 降级），重跑 Step 1–2。
+  Run: `mavis` 工具 `session get --session-id <大哥会话>`
+  Expected: `agentName = boss`。
+  实测：大哥会话 `mvs_90f86d83cfff4dda97990ba7cda16eb0` 的 `agentName = boss`、`purpose = miniapp:mimic-tear`，**降级未触发**。
 
-- [ ] **Step 4: 记录实测结论**
+- [x] **Step 4: 记录实测结论** —— 见规格 §9.1。
 
-  在最终汇报中写明：实际生效的是首选路径还是降级路径。
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add miniapps/mimic-tear
-git commit -m "fix(mimic-tear): 派工链路实测修正"
-```
+- [x] **Step 5: Commit** —— `eca59f5`。
 
 ---
 

@@ -102,6 +102,23 @@ test('client-contract', async (t) => {
     assert.match(css, /\.view\s*\{[^}]*min-width:\s*0/, '视图需要 min-width: 0 才能收缩');
   });
 
+  await t.test('浅色与深色主题定义同一套变量', () => {
+    const light = css.slice(css.indexOf("[data-theme='light']"), css.indexOf("[data-theme='dark']"));
+    const dark = css.slice(css.indexOf("[data-theme='dark']"), css.indexOf('@media (prefers-color-scheme: dark)'));
+    const names = (block) => new Set(
+      [...block.matchAll(/(--mcode-[a-z-]+)\s*:/g)].map((m) => m[1]),
+    );
+    const lightVars = names(light);
+    const darkVars = names(dark);
+    assert.ok(lightVars.size >= 15, `浅色变量过少：${lightVars.size}`);
+    for (const name of lightVars) {
+      assert.ok(darkVars.has(name), `深色主题缺少 ${name}`);
+    }
+    for (const name of darkVars) {
+      assert.ok(lightVars.has(name), `浅色主题缺少 ${name}`);
+    }
+  });
+
   await t.test('没有远程资源引用', () => {
     const allowed = ['http://www.w3.org/2000/svg', 'http://127.0.0.1', 'http://localhost'];
     for (const [name, content] of [['index.html', html], ['app.js', app], ['styles.css', css]]) {
