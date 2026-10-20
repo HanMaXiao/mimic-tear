@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { buildDutyStatus } from '../miniapps/mimic-tear/miniapp/node/view-model.mjs';
@@ -167,6 +168,35 @@ test('端到端：健康 → 掉线 → 恢复，各发一条', async () => {
 
     const state = JSON.parse(readFileSync(join(dataDir, 'watchdog-state.json'), 'utf8'));
     assert.equal(state.notifiedStale, false);
+  } finally {
+    cleanupDir(dir);
+  }
+});
+
+test('单测绝不能写进真实数据目录', async () => {
+  // The watchdog resolves a default data directory from the home directory. If any code
+  // path in `runWatchdog` ever falls back to that default instead of the directory it was
+  // handed, the unit tests would silently write into the live board's state — a failure
+  // mode that looks like a passing test and corrupts real data.
+  const realDataDir = join(homedir(), '.minimax', 'v2', 'plugin-data', 'liveboards', 'mimic-tear');
+  const realLog = join(realDataDir, 'watchdog-alert.log');
+  const before = existsSync(realLog) ? statSync(realLog).size : null;
+
+  const dir = tmpDir();
+  try {
+    const dataDir = join(dir, 'data');
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(
+      join(dataDir, 'patrol-config.json'),
+      JSON.stringify(configWithLastRun(60)),
+      'utf8',
+    );
+
+    // A failing delivery is the path that writes the log — the one that used to escape.
+    await runWatchdog({ dataDir, now: NOW, deliver: async () => ({ ok: false, error: '模拟失败' }) });
+
+    const after = existsSync(realLog) ? statSync(realLog).size : null;
+    assert.equal(after, before, '单测不许写进真实数据目录');
   } finally {
     cleanupDir(dir);
   }
