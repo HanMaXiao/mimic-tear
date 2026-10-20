@@ -934,6 +934,9 @@ th.numeric {
  * The boss's own reports. They sit above the conversation because they are what
  * happened whether or not anyone was talking: a duty round is not something the
  * boss said to you, and it must not be mistaken for a reply.
+ *
+ * Only the newest round is open; the rest collapse to a one-line summary, so the
+ * conversation keeps the screen. The conversation is the main surface here.
  */
 .chat__duty:empty {
   display: none;
@@ -942,8 +945,8 @@ th.numeric {
 .chat__duty {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  max-height: 34vh;
+  gap: 4px;
+  max-height: 40vh;
   overflow-y: auto;
   padding: 8px 8px 0;
 }
@@ -954,7 +957,6 @@ th.numeric {
 }
 
 .chat__duty-round {
-  padding: 8px 10px;
   border: 1px solid var(--mcode-border);
   border-radius: 8px;
   background: var(--mcode-surface);
@@ -965,7 +967,22 @@ th.numeric {
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
-  margin-bottom: 4px;
+  padding: 8px 10px;
+  cursor: pointer;
+  list-style: none;
+}
+
+/* The default disclosure triangle is replaced by the row itself. */
+.chat__duty-head::-webkit-details-marker {
+  display: none;
+}
+
+.chat__duty-round[open] .chat__duty-head {
+  border-bottom: 1px solid var(--mcode-border);
+}
+
+.chat__duty-head:hover .chat__duty-when {
+  color: var(--mcode-accent);
 }
 
 .chat__duty-when {
@@ -980,7 +997,7 @@ th.numeric {
 
 .chat__duty-list {
   margin: 0;
-  padding: 0;
+  padding: 8px 10px;
   list-style: none;
   display: flex;
   flex-direction: column;

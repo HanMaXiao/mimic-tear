@@ -633,6 +633,11 @@ function renderSkills() {
  * so they belong here too — as reports, not as chat messages: a duty round is something
  * the boss did on its own, and it must not look like something it said to you.
  *
+ * The newest round is open; the older ones are collapsed to a one-line summary. The
+ * conversation is the main surface, and the rounds are a standing record beside it: left
+ * fully expanded they push the user's own messages and the boss's replies off the screen,
+ * which is the opposite of what this panel is for.
+ *
  * @param {Array<{startedAt:number, findings:Array<{id:string,severity:string,title:string,
  *                projectName:string|null,acknowledged:boolean,acknowledgedBy:string|null}>,
  *                counts:{high:number,medium:number,low:number}}>} rounds
@@ -640,7 +645,7 @@ function renderSkills() {
  */
 function dutyRoundsHtml(rounds) {
   if (!rounds || !rounds.length) return '';
-  const items = rounds.map((round) => {
+  const items = rounds.map((round, index) => {
     const parts = [];
     if (round.counts.high) parts.push(`${round.counts.high} 项高`);
     if (round.counts.medium) parts.push(`${round.counts.medium} 项中`);
@@ -651,14 +656,16 @@ function dutyRoundsHtml(rounds) {
         ${f.projectName ? `<span class="chat__duty-project">${escapeHtml(f.projectName)}</span>` : ''}
         ${f.acknowledgedBy === 'boss' ? '<span class="chat__duty-tag">已撤回</span>' : ''}
       </li>`).join('');
+    const summary = `
+      <span class="chat__duty-when">${escapeHtml(dutyRoundTime(round.startedAt))}</span>
+      <span class="chat__duty-counts">交班 ${parts.join(' / ') || '无结论'}</span>`;
+    // `details`/`summary` is native: it is keyboard reachable, screen-reader friendly and
+    // needs no JavaScript to work.
     return `
-      <article class="chat__duty-round">
-        <header class="chat__duty-head">
-          <span class="chat__duty-when">${escapeHtml(dutyRoundTime(round.startedAt))}</span>
-          <span class="chat__duty-counts">交班 ${parts.join(' / ') || '无结论'}</span>
-        </header>
+      <details class="chat__duty-round"${index === 0 ? ' open' : ''}>
+        <summary class="chat__duty-head">${summary}</summary>
         <ul class="chat__duty-list">${lines}</ul>
-      </article>`;
+      </details>`;
   }).join('');
   return `<div class="chat__duty-title">大哥的值班交班</div>${items}`;
 }

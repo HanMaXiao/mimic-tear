@@ -809,6 +809,36 @@ test('client behavior (DOM shim)', async (t) => {
     assert.doesNotMatch(log.innerHTML, /派系轴交付了/, '交班汇报不该混进对话记录');
   });
 
+  await t.test('值班交班：只有最新一轮展开，旧的折叠成一行（别把对话挤出屏幕）', async () => {
+    const client = await loadClient();
+    await client.settle();
+
+    client.fireSse('duty', {
+      rounds: [
+        {
+          startedAt: 1792507304400,
+          findings: [{ id: 'p1', severity: 'high', title: '最新一轮的结论', projectName: 'alpha', acknowledged: false, acknowledgedBy: null }],
+          counts: { high: 1, medium: 0, low: 0 },
+        },
+        {
+          startedAt: 1792503704400,
+          findings: [{ id: 'p2', severity: 'low', title: '上一轮的结论', projectName: 'beta', acknowledged: false, acknowledgedBy: null }],
+          counts: { high: 0, medium: 0, low: 1 },
+        },
+      ],
+    });
+    await client.settle();
+
+    const html = client.element('chat-duty').innerHTML;
+    // Native details/summary: keyboard reachable, screen-reader friendly, no JS.
+    assert.match(html, /<details[^>]*\sopen[^>]*>/, '最新一轮要默认展开');
+    assert.match(html, /<summary/, '折叠态要有可点的摘要行');
+    // And exactly one round is open: two open rounds is the layout that pushed the
+    // conversation off the screen.
+    const openCount = (html.match(/<details[^>]*\sopen[^>]*>/g) || []).length;
+    assert.equal(openCount, 1, '只有最新一轮展开');
+  });
+
   await t.test('?theme=light 能强制浅色主题（发布出去的 CSS 本来就有这个钩子）', async () => {    const client = await loadClient({ search: '?theme=light' });
     await client.settle();
 
