@@ -1220,3 +1220,76 @@ if (root?.rootSessionId !== sessionId || root.pluginId !== caller.pluginId) {
 | `POST /api/chat` 的 202 响应 | 带上 `bossSessionId`——发完消息立刻就能开侧栏 |
 
 会话 id 来自 `boss-session.json`（`persistence.getBossSession()`），与大哥实际跑在哪个会话上是同一个来源，不会出现「侧栏开了另一个会话」。
+
+## 19. 值班轨迹也进对话（2026-10-20 追加）
+
+§18 把宿主侧栏接进来了，但立刻暴露一个缺口：**侧栏开的是「对话」那条大哥会话，值班跑在 cron 的固定会话上，侧栏里看不到值班。** 而值班恰恰是"大哥在各个部门来回走动"——用户要看的正是它。
+
+### 19.1 为什么不把值班合并进对话会话
+
+最直接的解法是把 cron 的 `target_session_id` 改成对话会话（`mvs_90f86d83…`）。技术条件**全部满足**（实测运行时库与 `session-creation.adapter.ts`）：
+
+| 约束 | 值班 cron | 对话会话 | 结论 |
+| --- | --- | --- | --- |
+| `session.agentName` == cron 的 `agentName` | `boss` | `boss` | ✓ |
+| `project` == `workspaceDir` | `C:\Users\12391\.minimax\agents\boss\miniapps\mimic-tear` | 完全相同 | ✓ |
+| 目标会话未归档 | — | `archived = 0` | ✓ |
+
+**但这条路被投递语义否决了。** cron 投递走的是 `turns.steer()`（`runtime-delivery.ts`）：
+
+> ```ts
+> result = await turns.steer({ sessionId: request.sessionId, input: { text: request.text, ... } });
+> ```
+
+`steer` 是**转向**而不是排队：目标会话有 active turn 时，它会**插进那一轮**（`mode: 'steered'`），而不是等这一轮结束。合并之后的后果是——
+
+> **你正在跟大哥说话，值班巡检插进来，把你那句话带偏了。**
+
+（投递被拒的情况是**可重试**的临时拒绝：`active-turn` / `session-mutating` / `compaction-active` → 指数退避重试，run 保持 `pending`，不丢。但"插进当前 turn"这一支是**会发生的**。）
+
+所以：**不合并。** 值班保持自己的会话（主链路零风险），值班轨迹**浮现**到对话里。
+
+### 19.2 浮现，不是搬动
+
+值班轮次的产出本来就落在 `patrol.json`（每条结论一个 finding）。这些结论按时间聚成轮次：
+
+| 轮次 | 结论数 | 高/中/低 |
+| --- | --- | --- |
+| 22:41:44 | 3 | 0 / 2 / 1 |
+| 22:12:06 | 2 | 0 / 0 / 2 |
+| 21:40:15 | 2 | 0 / 0 / 2 |
+
+**轮次怎么认**：finding 不带轮次 id，但同一轮的所有结论是**同一秒**写下的，轮次之间隔 21–32 分钟。所以「一分钟窗口内」的就是同一轮（`duty-rounds.mjs` 的 `buildDutyRounds`）。
+
+界面上，值班轮次渲染在**对话记录上方**，用独立样式（`chat__duty`），**不混进聊天气泡**——值班是大哥自己做的事，不是它对你说的话，两者混在一起你分不出哪句是在跟你讲、哪句是它自己干的。
+
+### 19.3 怎么知道值班又交班了
+
+值班大哥在**独立进程**里跑，它的交班不会改变运行时 revision（看板轮询的那个），所以看板不会自动知道。解法是复用看板已有的巡检定时器：**值班交班时间戳变了 → 广播 `duty` 事件**。
+
+判定抽成纯函数 `dutyAnnouncementNeeded`（`duty-announce.mjs`），单独可测——和 `patrol-scheduler.mjs` 同一个理由：定时器里的逻辑单测够不到，抽出来才守得住。
+
+| 情形 | 通报？ | 理由 |
+| --- | --- | --- |
+| 交班时间戳变了 | 是 | 有一轮新的 |
+| 交班时间戳没变 | 否 | 同一轮不重复报 |
+| 从没交过班（`lastRunAt` 为 null） | 否 | 那是"还没开始"，不是一次交班 |
+
+### 19.4 数据流
+
+```
+值班大哥（独立进程）交班
+   └─ patrol-cli report → patrol.json（新增若干 finding）
+        └─ 看板巡检定时器发现 lastRunAt 变了
+             └─ broadcast('duty', { rounds })  →  客户端 state.chat.duty
+                  └─ 渲染成对话上方的交班汇报
+
+页面打开时：
+   GET /api/chat/duty → { rounds } → 渲染（补上打开前发生的轮次）
+```
+
+`GET /api/chat/duty` 存在的意义：轮询只推**变化**，所以页面刚打开时必须有一次性拉取，否则打开前发生的轮次永远看不到。
+
+### 19.5 撤回过的结论仍然留着
+
+大哥撤回自己那条结论时，finding 不会被删（§15.12）。交班汇报里也**留着**它，并标「已撤回」——因为那一轮确实发生过，抹掉它等于让用户以为大哥没做过。
