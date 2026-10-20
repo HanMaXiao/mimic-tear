@@ -219,18 +219,18 @@ function renderKpi(overview) {
 /**
  * Why an item is no longer on your desk.
  *
- * `user` means you marked it known. `boss` means the boss withdrew a conclusion of its own
- * that turned out not to apply — a stale fact, a duplicate, an alarm that was not real.
- * The reason is always shown, because a retraction that leaves no trace is just a quieter
- * kind of noise.
+ * `user` means you marked it known. `boss` means the boss ruled it out — either withdrawing a
+ * conclusion of its own that turned out not to apply, or disproving a raw runtime item (a
+ * session error it proved was a leftover). The reason is always shown, because an item that
+ * leaves the desk without a trace is just a quieter kind of noise.
  *
  * @param {any} item
  * @returns {string}
  */
 function acknowledgedNoteHtml(item) {
   if (!item?.acknowledged) return '';
-  if (item.acknowledgedBy === 'boss') {
-    return `<p class="item__note">大哥已撤回：${escapeHtml(item.note || '这条结论已不适用')}</p>`;
+  if (item.handledBy === 'boss') {
+    return `<p class="item__note">大哥已处理：${escapeHtml(item.handledReason || '这条已不适用')}</p>`;
   }
   return '<p class="item__note">你已标记已知</p>';
 }
@@ -446,7 +446,13 @@ function renderInbox() {
     return true;
   });
 
-  el('inbox-count').textContent = items.length ? `${items.length} 项` : '';
+  // How many raw runtime items the boss ruled out. It leaves the attention list, so the
+  // count has to be said out loud — otherwise the screening is invisible.
+  const ruledOut = state.overview?.duty?.dismissed ?? 0;
+
+  el('inbox-count').textContent = items.length
+    ? `${items.length} 项${ruledOut > 0 ? ` · ${ruledOut} 条已由大哥排除` : ''}`
+    : (ruledOut > 0 ? `${ruledOut} 条已由大哥排除` : '');
 
   if (state.error && !state.inbox.length) {
     list.innerHTML = '<div class="state state--error">收件箱读取失败，请刷新重试。</div>';

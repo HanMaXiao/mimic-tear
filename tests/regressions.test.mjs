@@ -14,11 +14,19 @@ class PersistenceStub {
   constructor() {
     this.bossSession = null;
     this.acks = new Set();
+    this.dismissed = new Map();
   }
   async getBossSession() { return this.bossSession; }
   async setBossSession(session) { this.bossSession = session; }
   async listAcks() { return [...this.acks]; }
   async addAck(id) { this.acks.add(id); }
+  async listDismissed() {
+    return [...this.dismissed].map(([id, reason]) => ({ id, reason, at: Date.now() }));
+  }
+  async addDismissed(id, reason) {
+    this.dismissed.set(id, reason);
+    return this.listDismissed();
+  }
   async findDispatchByKey() { return null; }
   async saveDispatch() {}
   async listDispatches() { return []; }
@@ -243,8 +251,10 @@ test('audit regressions', async (t) => {
 
   await t.test('M2：server 路由接的是真实 ProjectService 时，非法派工返回 400', async () => {
     const dir = tmpDir();
+    let store = null;
+    let server = null;
     try {
-      const store = RuntimeStore.open(makeRuntimeDb(dir));
+      store = RuntimeStore.open(makeRuntimeDb(dir));
       const service = new ProjectService({
         store,
         readPlan: async () => null,
@@ -256,7 +266,7 @@ test('audit regressions', async (t) => {
       });
 
       const app = createApp({ service, clientDir: dir });
-      const server = (await import('node:http')).createServer((req, res) => {
+      server = (await import('node:http')).createServer((req, res) => {
         void app.handler(req, res);
       });
       await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -278,10 +288,12 @@ test('audit regressions', async (t) => {
       });
       assert.equal(unknown.status, 404);
       assert.equal((await unknown.json()).error, 'unknown_project');
-
-      await new Promise((resolve) => server.close(resolve));
-      store.close();
     } finally {
+      // The server MUST be closed even when an assertion throws. An open server keeps the
+      // event loop alive and `node --test` waits for the file's process to exit — so a
+      // failing assertion would hang the whole suite instead of reporting itself.
+      if (server) await new Promise((resolve) => server.close(resolve));
+      store?.close();
       cleanupDir(dir);
     }
   });

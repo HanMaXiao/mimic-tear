@@ -32,7 +32,8 @@
  * @typedef {{ id:string, kind:'questionnaire'|'goal-paused'|'session-error'|'plan-blocked'|'patrol',
  *             severity:'high'|'medium'|'low', projectId:number, projectName:string,
  *             sessionId:string|null, sessionTitle:string|null, title:string, body:string,
- *             createdAt:number, ageMinutes:number, acknowledged:boolean }} InboxItem
+ *             createdAt:number, ageMinutes:number, acknowledged:boolean,
+ *             handledBy:'user'|'boss'|null, handledReason:string }} InboxItem
  * @typedef {{ id:string, agentName:string, title:string, status:string,
  *             role:'lead'|'member', purpose:string|null, error:string|null,
  *             children:OrgNode[] }} OrgNode
@@ -141,10 +142,12 @@ export function buildProjectCards(input) {
  * @param {{ projects: ProjectRow[], sessions: SessionRow[], goals: GoalRow[],
  *           questionnaires: QuestionnaireRow[], plans: Map<number, PlanSnapshot|null> }} input
  * @param {Set<string>} [acked] ids the user already acknowledged
+ * @param {Map<string,string>} [dismissed] ids the boss ruled out, with the reason
  * @returns {InboxItem[]}
  */
-export function buildInbox(input, acked) {
+export function buildInbox(input, acked, dismissed) {
   const acknowledged = acked ?? new Set();
+  const ruledOut = dismissed ?? new Map();
   const projects = input.projects ?? [];
   const sessions = input.sessions ?? [];
   const goals = input.goals ?? [];
@@ -162,7 +165,14 @@ export function buildInbox(input, acked) {
   const push = (item) => {
     if (!item.projectId) return;
     if (!projectById.has(item.projectId)) return;
-    items.push({ ...item, acknowledged: acknowledged.has(item.id) });
+    const reason = ruledOut.get(item.id);
+    items.push({
+      ...item,
+      acknowledged: acknowledged.has(item.id) || reason !== undefined,
+      // Who cleared it, and why — so an item that left the desk is never a silent one.
+      handledBy: acknowledged.has(item.id) ? 'user' : (reason !== undefined ? 'boss' : null),
+      handledReason: reason ?? '',
+    });
   };
 
   // A session that errored out is the most urgent thing in the system.
@@ -366,14 +376,18 @@ export function dutyStaleAfterMinutes(dutyIntervalMinutes) {
  *
  * @param {{config:{lastRunAt:number|null,intervalMinutes:number,autoDispatch:boolean,
  *                 dutyIntervalMinutes?:number},
- *          findings:Array<{acknowledged:boolean}>, now?:number}} input
+ *          findings:Array<{acknowledged:boolean, acknowledgedBy?:string|null}>,
+ *          dismissed?:Array<{id:string, reason?:string}>,
+ *          now?:number}} input
  * @returns {{lastRunAt:number|null, intervalMinutes:number, dutyIntervalMinutes:number,
- *            autoDispatch:boolean, findings:number, openFindings:number,
- *            staleAfterMinutes:number, stale:boolean, neverRan:boolean, ageMinutes:number|null}}
+ *            autoDispatch:boolean, findings:number, openFindings:number, withdrawn:number,
+ *            dismissed:number, staleAfterMinutes:number, stale:boolean, neverRan:boolean,
+ *            ageMinutes:number|null, missedRounds:number|null}}
  */
 export function buildDutyStatus(input) {
   const config = input?.config ?? {};
   const findings = input?.findings ?? [];
+  const dismissed = input?.dismissed ?? [];
   const now = input?.now ?? Date.now();
   const intervalMinutes = Number(config.intervalMinutes) > 0 ? Number(config.intervalMinutes) : 15;
   const dutyIntervalMinutes = Number(config.dutyIntervalMinutes) > 0 ? Number(config.dutyIntervalMinutes) : 30;
@@ -391,6 +405,8 @@ export function buildDutyStatus(input) {
     // Conclusions the boss retracted itself. They leave the attention list, so the board has
     // to say how many were withdrawn — otherwise the boss could quietly clear your desk.
     withdrawn: findings.filter((finding) => finding.acknowledgedBy === 'boss').length,
+    // Raw runtime items the boss ruled out (a session error it proved is a leftover).
+    dismissed: dismissed.length,
     staleAfterMinutes,
     stale: lastRunAt === null || ageMinutes > staleAfterMinutes,
     neverRan: lastRunAt === null,

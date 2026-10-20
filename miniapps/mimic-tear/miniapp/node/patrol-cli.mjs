@@ -24,6 +24,7 @@ import { RuntimeStore } from './runtime-store.mjs';
 import { readPlan } from './plan-store.mjs';
 import { buildDutyStatus, buildInbox, buildOrgTree, buildPatrolBrief, buildProjectCards } from './view-model.mjs';
 import { PatrolStore } from './patrol-store.mjs';
+import { Persistence } from './persistence.mjs';
 
 const args = process.argv.slice(2);
 const command = args.find((arg) => !arg.startsWith('--')) ?? 'facts';
@@ -280,7 +281,26 @@ if (command === 'withdraw') {
   process.exit(ok ? 0 : 1);
 }
 
-process.stderr.write(`未知命令：${command}\n可用：facts / report / withdraw / paths\n`);
+if (command === 'dismiss') {
+  // The boss ruling out a RAW runtime item it has proved is not a problem — a session error
+  // that is actually a 122-day-old leftover, a plan task that is not really blocked. The
+  // reason is mandatory: excluding something without saying why is just quieter noise.
+  const positional = positionalArgs();
+  const [, id, ...reasonParts] = positional;
+  const reason = reasonParts.join(' ').trim();
+  if (!id || !reason) {
+    process.stderr.write('用法：dismiss <收件箱条目id> <排除理由>\n');
+    store.close();
+    process.exit(2);
+  }
+  const persistence = new Persistence(dataDir);
+  const dismissed = await persistence.addDismissed(id, reason);
+  print({ ok: true, id, reason, dismissed: dismissed.length });
+  store.close();
+  process.exit(0);
+}
+
+process.stderr.write(`未知命令：${command}\n可用：facts / report / withdraw / dismiss / paths\n`);
 store.close();
 process.exit(2);
 

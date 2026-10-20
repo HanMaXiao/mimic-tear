@@ -79,12 +79,20 @@ class PersistenceStub {
   constructor(dir) {
     this.dir = dir;
     this.acks = new Set();
+    this.dismissed = new Map();
   }
   async listAcks() {
     return [...this.acks];
   }
   async addAck(id) {
     this.acks.add(id);
+  }
+  async listDismissed() {
+    return [...this.dismissed].map(([id, reason]) => ({ id, reason, at: Date.now() }));
+  }
+  async addDismissed(id, reason) {
+    this.dismissed.set(id, reason);
+    return this.listDismissed();
   }
   async findDispatchByKey() {
     return null;
@@ -320,6 +328,38 @@ test('patrol', async (t) => {
         rejected = error.status === 2;
       }
       assert.equal(rejected, true, '没有撤回理由必须被拒绝');
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  await t.test('CLI 的 dismiss 能排除一条运行时原始项，并留下理由', () => {
+    const dir = tmpDir();
+    const dbPath = makeRuntimeDb(dir);
+    const dataDir = join(dir, 'data');
+    try {
+      // The fact sheet carries the raw runtime items the boss can rule out.
+      const facts = runCli(dbPath, dataDir);
+      const item = facts.decisions.find((entry) => entry.id.startsWith('session-error:'));
+      assert.ok(item, '事实表里应该有待排除的运行时原始项');
+
+      const result = runCli(dbPath, dataDir, ['dismiss', item.id, '这条会话早就停了，是残骸不是故障']);
+      assert.equal(result.ok, true);
+      assert.equal(result.id, item.id);
+
+      const dismissed = JSON.parse(readFileSync(join(dataDir, 'dismissed.json'), 'utf8'));
+      assert.equal(dismissed.length, 1);
+      assert.equal(dismissed[0].id, item.id);
+      assert.match(dismissed[0].reason, /残骸/, '排除必须留下理由');
+
+      // No reason, no exclusion — same rule as withdrawing a conclusion.
+      let rejected = false;
+      try {
+        runCli(dbPath, dataDir, ['dismiss', 'plan-blocked:5:custom-rule-ui']);
+      } catch (error) {
+        rejected = error.status === 2;
+      }
+      assert.equal(rejected, true, '没有排除理由必须被拒绝');
     } finally {
       cleanupDir(dir);
     }

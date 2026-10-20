@@ -556,8 +556,8 @@ test('client behavior (DOM shim)', async (t) => {
           createdAt: Date.now() - 3600_000,
           ageMinutes: 60,
           acknowledged: true,
-          acknowledgedBy: 'boss',
-          note: '账号并未被额度卡住，这条结论已过期',
+          handledBy: 'boss',
+          handledReason: '账号并未被额度卡住，这条结论已过期',
         },
         {
           id: 'patrol:patrol_old_2',
@@ -572,8 +572,8 @@ test('client behavior (DOM shim)', async (t) => {
           createdAt: Date.now() - 7200_000,
           ageMinutes: 120,
           acknowledged: true,
-          acknowledgedBy: 'user',
-          note: '',
+          handledBy: 'user',
+          handledReason: '',
         },
       ],
     };
@@ -584,7 +584,7 @@ test('client behavior (DOM shim)', async (t) => {
 
       // "只看未确认" is on by default, so a retracted item is hidden — that is the point.
       assert.equal(
-        client.element('inbox-list').innerHTML.includes('大哥已撤回'),
+        client.element('inbox-list').innerHTML.includes('大哥已处理'),
         false,
         '默认视图不该出现已确认的条目',
       );
@@ -596,9 +596,45 @@ test('client behavior (DOM shim)', async (t) => {
       await client.settle();
 
       const html = client.element('inbox-list').innerHTML;
-      assert.match(html, /大哥已撤回：账号并未被额度卡住/, '撤回必须写清理由');
-      assert.match(html, /你已标记已知/, '大老板自己确认的要和大哥撤回的区分开');
+      assert.match(html, /大哥已处理：账号并未被额度卡住/, '处理必须写清理由');
+      assert.match(html, /你已标记已知/, '大老板自己确认的要和大哥处理的区分开');
     } finally {
+      inboxOverride = null;
+    }
+  });
+
+  await t.test('大哥排除掉的原始项，收件箱要报出数量', async () => {
+    overviewOverride = {
+      ...OVERVIEW,
+      duty: {
+        lastRunAt: Date.now() - 5 * 60_000,
+        intervalMinutes: 15,
+        dutyIntervalMinutes: 30,
+        autoDispatch: false,
+        findings: 12,
+        openFindings: 9,
+        withdrawn: 2,
+        dismissed: 4,
+        staleAfterMinutes: 45,
+        stale: false,
+        neverRan: false,
+        ageMinutes: 5,
+        missedRounds: 0,
+      },
+    };
+    inboxOverride = { items: [] };
+    try {
+      const client = await loadClient();
+      await client.navigate('#/inbox');
+      await client.settle();
+
+      assert.match(
+        client.element('inbox-count').textContent,
+        /4 条已由大哥排除/,
+        '大哥排除了多少条必须让大老板知道——不然它能悄悄清场',
+      );
+    } finally {
+      overviewOverride = null;
       inboxOverride = null;
     }
   });

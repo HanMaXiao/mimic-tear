@@ -14,6 +14,7 @@ import { join } from 'node:path';
  *             targetSessionId:string|null, instruction:string,
  *             status:'queued'|'running'|'done'|'error', bossSessionId:string|null,
  *             text:string, error:string|null, createdAt:number, updatedAt:number }} DispatchRecord
+ * @typedef {{ id:string, reason:string, at:number }} DismissedRecord
  */
 export class Persistence {
   /** @param {string} dataDir */
@@ -21,6 +22,10 @@ export class Persistence {
     this.dataDir = dataDir;
     this.dispatchesPath = join(dataDir, 'dispatches.json');
     this.acksPath = join(dataDir, 'acks.json');
+    // The boss's own screening of the raw runtime items (a session error it proved is a
+    // leftover, a blocked plan task that is not actually blocked). Kept apart from the
+    // user's own "标记已知" so the two never get confused.
+    this.dismissedPath = join(dataDir, 'dismissed.json');
     this.bossSessionPath = join(dataDir, 'boss-session.json');
   }
 
@@ -59,6 +64,39 @@ export class Persistence {
     if (!acks.includes(id)) acks.push(id);
     await writeJson(this.acksPath, acks);
     return acks;
+  }
+
+  /**
+   * Runtime items the boss has ruled out.
+   *
+   * The board's inbox mixes the boss's own conclusions with raw runtime items (session
+   * errors, blocked plan tasks, paused goals). The boss can withdraw its own conclusions, but
+   * it could not rule out a raw item it had proved was a leftover — so those stayed on the
+   * user's desk forever. This is that missing half.
+   *
+   * @returns {Promise<DismissedRecord[]>}
+   */
+  async listDismissed() {
+    const value = await readJson(this.dismissedPath, []);
+    return Array.isArray(value) ? value : [];
+  }
+
+  /**
+   * @param {string} id the inbox item id, e.g. `session-error:mvs_…`
+   * @param {string} reason why it is not a problem
+   * @returns {Promise<DismissedRecord[]>}
+   */
+  async addDismissed(id, reason) {
+    const dismissed = await this.listDismissed();
+    const existing = dismissed.find((entry) => entry.id === id);
+    if (existing) {
+      existing.reason = reason;
+      existing.at = Date.now();
+    } else {
+      dismissed.push({ id, reason, at: Date.now() });
+    }
+    await writeJson(this.dismissedPath, dismissed);
+    return dismissed;
   }
 
   /**

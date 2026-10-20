@@ -226,6 +226,7 @@ export class ProjectService {
     const inbox = await this.collectInbox(snapshot);
     const patrolConfig = await this.getPatrolConfig();
     const findings = this.patrol ? await this.patrol.list() : [];
+    const dismissed = await this.persistence.listDismissed();
     return {
       generatedAt: Date.now(),
       kpi: buildKpi(snapshot.cards, inbox),
@@ -239,6 +240,7 @@ export class ProjectService {
       duty: buildDutyStatus({
         config: patrolConfig,
         findings,
+        dismissed,
         now: Date.now(),
       }),
     };
@@ -271,8 +273,8 @@ export class ProjectService {
         ageMinutes: ageInMinutes(finding.createdAt),
         acknowledged: finding.acknowledged,
         // 'user' = 大老板点过「标记已知」；'boss' = 大哥撤回了自己的结论（已不适用）。
-        acknowledgedBy: finding.acknowledgedBy ?? null,
-        note: finding.note ?? '',
+        handledBy: finding.acknowledgedBy ?? null,
+        handledReason: finding.note ?? '',
       }))
       : [];
 
@@ -593,8 +595,17 @@ export class ProjectService {
     }));
 
     const acks = new Set(await this.persistence.listAcks());
+    // Items the boss ruled out, with the reason. They leave the attention list but the
+    // reason travels with them, so nothing ever leaves the desk silently.
+    const dismissed = new Map(
+      (await this.persistence.listDismissed()).map((entry) => [entry.id, entry.reason ?? '']),
+    );
     const cards = buildProjectCards({ projects: visibleProjects, sessions, goals, questionnaires, plans });
-    const inbox = buildInbox({ projects: visibleProjects, sessions, goals, questionnaires, plans }, acks);
+    const inbox = buildInbox(
+      { projects: visibleProjects, sessions, goals, questionnaires, plans },
+      acks,
+      dismissed,
+    );
 
     this.cache = {
       revision,
