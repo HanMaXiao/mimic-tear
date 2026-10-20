@@ -740,7 +740,33 @@ node ".../miniapp/node/patrol-cli.mjs" report <file>  # 写巡检结论 / 已代
    | `lastRunAt` | **只有值班路径**（`patrol-cli report`） | 值班大哥上一次交班——掉线判定只看它 |
    | `lastBoardPatrolAt` | 看板自己的巡检（按钮 + 内部循环） | 看板上一次自己巡检——看板用它决定下次何时到期 |
 
-   这样"看板开着"和"值班大哥活着"是两件独立的事，看板不会替值班大哥背书。回归测试：跑一次 `runPatrol()` 之后，`lastRunAt` 必须仍然是 `null`，而 `lastBoardPatrolAt` 必须被刷新。
+   这样"看板开着"和"值班大哥活着"是两件独立的事，看板不会替值班大哥背书。
+
+5. **修完还要有护栏，否则缺陷会原样回来**（独立审计用变异实验抓出）。审计把 `server.mjs` 里定时器的两行改回写 `lastRunAt`，**154 项测试依然全绿**——原来只给 `runPatrol()` 一条路径装了回归测试，另外两条（到期判断、"无变化只挪时钟"）是可以被静默改回去的，而"无变化只挪时钟"恰恰是触发频率最高、最能续命的掩盖路径（收件箱没变化是常态）。
+
+   修法：把定时器的调度规则抽成独立模块 `patrol-scheduler.mjs` 的纯函数并导出，单独测：
+
+   | 函数 | 职责 |
+   | --- | --- |
+   | `isPatrolDue(config, now)` | 旧配置（没有 `lastBoardPatrolAt`）首启即到期；跑过则按间隔节流 |
+   | `boardPatrolAction(config, signatureMatches, now)` | `skip` / `stamp`（只挪时钟）/ `run` |
+   | `stampBoardPatrol(patrol, now)` | 只写 `lastBoardPatrolAt`，**一个字都不碰 `lastRunAt`** |
+
+   `stampBoardPatrol` 是关键：它被独立测试守着（断言 `lastRunAt` 保持原值），**谁把那一行改回 `lastRunAt`，测试立刻变红**。
+
+6. **配置文件被两个写者共用，并发写会静默丢数据**（独立审计用并发实验复现）。`patrol-config.json` 的临时文件名原本是**固定的** `<path>.tmp`：值班路径（独立进程）和看板（常驻进程）写同一个文件、同一个临时名，一个写者的 rename 会把文件从另一个脚下抽走，rename 失败——**而值班路径的 `report` 一旦抛错，值班交班就丢了**（大哥明明交了班，看板却显示"大哥可能掉线"）。审计实测 12 轮并发写里 69 次写失败、7 轮丢掉值班时间戳。
+
+   修法三条：
+   - **唯一临时名**（含 pid + 时间 + 随机串）→ 跨进程不再互相抽走文件
+   - **rename 失败重试 3 次**（每次换新临时名）→ Windows 上偶发的 EPERM 不再致命
+   - **写入前重新读一次、只写本次真正要改的字段** → 值班写 `lastRunAt`、看板写 `lastBoardPatrolAt` + `lastSignature`，字段不同，谁也不会抹掉谁
+   - **同一进程内按数据目录串行化写**（写队列按目录共享，两个 PatrolStore 实例指向同一目录也排队）→ 看板的定时器与用户点击不会互相踩
+
+   回归测试：两个 store 并发写 20 轮，断言不抛错、文件仍是合法 JSON、且两个时间戳都在。
+
+#### 仍然残留的一条（低，独立审计提出，可延后）
+
+`patrol.json` 是**值班路径与看板路径共用的结论池**，两类结论没有来源字段，客户端一律标成「大哥巡检」。值班状态那一行里的"N 条结论待你过目"因此混了两种来源。**这不影响掉线判定**（`stale` 只看 `lastRunAt`），但"结论数在长"与"可能掉线"并排出现时，读起来像在替大哥背书。要彻底干净需要给结论加 `source: 'duty' | 'board'`，并让值班那一行只统计值班来源——属于数据模型改动，等下次要动结论结构时一并做。
 
 #### 还欠着的
 
@@ -819,6 +845,9 @@ node ".../miniapp/node/patrol-cli.mjs" report <file>  # 写巡检结论 / 已代
 | 18:29 | 应用重新打开 | 运行时日志 18:29 恢复；调度器 `next_run_at_ms` 重算到 18:37 |
 | 18:37 | 第 5 轮触发，大哥**自己发现了断层** | `run_count` 3→4；结论「我漏了 3 轮值班」 |
 | 18:41 | 补交班完成 | `lastRunAt` 刷新，看板回到「大哥值班中」 |
+| 19:07 | 第 6 轮触发，**被内容安全审核掐断** | `output review stopped turn {reviewOutcome:"unavailable", outputSuppressed:true}`；`event_id` = `local-output-network-stopped-…`，**终态却是 `completed`** |
+| 19:28 | 看板掉线告警按时亮起 | 「大哥可能掉线 · 上次巡检 50 分钟前」（45 分钟阈值） |
+| 19:37 | 第 7 轮触发，**正常交班** | `run_count` 5→6；`lastRunAt` 刷新到 19:42:03；`event_id` 无任何 suppress 标记 |
 
 #### 三条结论
 
@@ -830,6 +859,20 @@ node ".../miniapp/node/patrol-cli.mjs" report <file>  # 写巡检结论 / 已代
    > 上一轮交班是 16:45，本轮 18:37 才交班，间隔 111 分钟，看板 duty 记 missedRounds=3，状态已经从「大哥值班中」翻成「大哥可能掉线」。……我没假装没发生，按要求逐项核对了 17:07 那轮做了一半的事，结论：3 条常驻授权全部确认送达。
 
    同一轮它还更正了自己上一轮的错误结论（"补投的答复其实没送达——排队 1.5 小时一次都没执行"）、核实了"Token Plan 额度墙"其实早已过期、以及 MagicMaze&Line 的 P1 **真的交付通过了**（121 测试全绿、移动端两条链路在 dev 与生产构建下都通过）。
+
+4. **值班中断有第二种面孔，而且三种都伪装成"成功"。** 19:07 那轮撞上的是内容安全审核的**输出**审核超时：`agent.minimax.cn` 在约一分钟内连续 13 次传输超时（日志 `[content-safety] review failed {scene:11/13, failureKind:"transport", durationMs:≈10010}`），运行时随即执行 `output review stopped turn {reviewOutcome:"unavailable", outputSuppressed:true, terminalStatus:"completed"}`——**输出被吞掉，而终态仍然是 `completed`**。那一分钟里被同样掐断的还有**我的独立审计 agent** 和另一个项目会话，三家同时中招。
+
+   至此"这一轮没有产出"有三种形态，**终态全都是 `completed`**：
+
+   | 形态 | 标记 |
+   | --- | --- |
+   | 输入被撤回 | `event_id` = `local-input-retracted-…` |
+   | 输出被吞 | `event_id` = `local-output-network-stopped-…` |
+   | 应用关闭被掐断 | `local_runtime_turn_ingress.status` = `aborted` |
+
+   **所以"completed"永远不代表"agent 真的产出了回复"**，判产出只能看消息行数。这条已写进记忆。
+
+   好消息是**19:37 那轮正常交班**（`lastRunAt` 刷新到 19:42:03），值班在两种不同的故障后都自愈了。
 
 #### 还欠着的（收窄后）
 
