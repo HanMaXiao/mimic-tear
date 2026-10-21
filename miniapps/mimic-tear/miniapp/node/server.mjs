@@ -284,6 +284,15 @@ export function createApp(deps) {
         return;
       }
 
+      if (pathname === '/api/watchdog/alerts' && method === 'GET') {
+        // The alert log. It is the watchdog's primary channel: every alert is written down
+        // whether or not the notification landed, so the board can show what happened while
+        // it was closed. Only a new field and a new read route — the client is untouched.
+        const limit = Number(url.searchParams.get('limit')) || 20;
+        sendJson(response, 200, await service.getWatchdogAlerts({ limit }));
+        return;
+      }
+
       if (pathname === '/api/chat/duty' && method === 'GET') {
         // The duty rounds, grouped. The Host chat side panel shows one session, so it
         // never shows the rounds — and the rounds are the user seeing the boss work.

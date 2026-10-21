@@ -12,6 +12,7 @@ import {
 import { buildDutyRounds } from './duty-rounds.mjs';
 import { DutyIntent } from './duty-intent.mjs';
 import { ManagedProjects } from './managed-projects.mjs';
+import { readAlerts } from './watchdog-alerts.mjs';
 
 /**
  * The single domain service of the Mini App.
@@ -184,6 +185,22 @@ export class ProjectService {
     if (!this.patrol) return [];
     const findings = await this.patrol.list();
     return buildDutyRounds(findings, { limit: options.limit ?? 20 });
+  }
+
+  /**
+   * The watchdog's alert log — the channel that survives a closed board.
+   *
+   * The file is written whether or not the notification landed, so it is the only record of
+   * what the watchdog saw while nobody was looking. The board reads it back and shows the
+   * last few entries.
+   *
+   * @param {{ limit?:number }} [options]
+   * @returns {Promise<{ alerts: import('./watchdog-alerts.mjs').AlertRecord[] }>}
+   */
+  async getWatchdogAlerts(options = {}) {
+    const dir = this.patrol?.dataDir ?? null;
+    if (!dir) return { alerts: [] };
+    return { alerts: await readAlerts(dir, options.limit ?? 20) };
   }
 
   /**
@@ -381,6 +398,9 @@ export class ProjectService {
     const findings = this.patrol ? await this.patrol.list() : [];
     const dismissed = await this.persistence.listDismissed();
     const duty = await this.dutyBlock({ config: patrolConfig, findings, dismissed });
+    // The alert log rides along with the duty state: one line on the overview can say
+    // "the boss went quiet at 03:20" without the user having to open the log.
+    const alerts = await this.getWatchdogAlerts({ limit: 3 });
     return {
       generatedAt: Date.now(),
       kpi: buildKpi(snapshot.cards, inbox),
@@ -393,7 +413,7 @@ export class ProjectService {
       internalProjectCount: snapshot.internalProjectCount,
       dataWarning: snapshot.dataWarning,
       // Whether the boss is on duty, when it last reported, and whether it has gone quiet.
-      duty,
+      duty: { ...duty, alerts: alerts.alerts },
     };
   }
 
