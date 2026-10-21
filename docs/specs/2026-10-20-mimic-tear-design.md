@@ -1870,7 +1870,9 @@ node 侧**没有写 cron 状态的能力**（§26.2 的约束：运行时库只�
 ## 28. 值班心跳：node 侧备选路径（2026-10-22 已实施）
 
 
-> **执行状态（2026-10-22 06:3x）**：**已实现、已发布**（node 侧心跳 + 覆盖边界）。
+> **执行状态（2026-10-22 07:2x 更正）**：这一版**在生产上从未生效过**——大哥 07:0x 直读发现两个缺陷：`now` 变成 NaN 使心跳恒判 healthy；硬编码的 cron id 指向 05:57 已删除的那一代，链的证据根本读不到（读不到 ≠ 没出事）。
+> - **已修**：时间戳改用 `Number.isFinite` 兜底（`Number(undefined)` 是 NaN，而 `??` 兜不住 NaN）；值班链改**按名字串联两代 cron**（历史证据不丢，累计漏班数不因换靶清零）；目标 cron 钉在 `patrol-config.json` 的 `dutyCronId`，指向已删定义时显式报 `heartbeat_misconfigured`，**不再静默 healthy**。
+> - 覆盖边界不变：只覆盖「板面开着 + 投递链断了」，**覆盖不了「板面关着」**。
 > - 落点：`miniapp/node/duty-heartbeat.mjs`（新增）+ `view-model.mjs` 的 `computeDutyEvidence` 加两个尾段字段（`pendingTail` / `blankTail`）+ `project-service.mjs` 的 `duty` 块加 `heartbeat` 字段 + `server.mjs` 起 5 分钟一次的定时器。
 > - **覆盖边界（§28.3 的原话仍然成立）**：node 侧最多覆盖「**板面开着、cron 投递链断了**」，**覆盖不了「板面关着」**——板面关着就没有 node 进程、没有定时器。补齐那一半需要宿主侧的能力，不是 node 侧能做的。
 > - 与缺口一/缺口二互补：缺口一让证据看得见、缺口二让通知到得了、本节让值班**跑得起来**（且只在板面开着时）。

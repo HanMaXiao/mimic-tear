@@ -5,7 +5,7 @@
 - **本轮只出方案，不写码**（大哥 03:0x 指令：先交方案 + 验收标准，别直接写码）
 - 归属：本方案不碰 `client/` 与 spec §6（UI/UX 线）。落在 `miniapps/mimic-tear/miniapp/node/`、`tests/`、`docs/plans/`
 - 上游证据来源：`~/.minimax/v2/sqlite/runtime-state.sqlite`（只读）、`schtasks /query`、已发布副本
-- **状态（2026-10-22 06:3x 补记）**：**缺口一已实现并发布**（`bda22d9` / `385a733` / `0ae0ce4` / `82ced7b`）；**缺口二文件侧已实现并发布**（`c77d992` / `79590fe` / `144dce7` / `f19b0b9`），计划任务那半因环境权限做不成并按 §2.4 回退；**§28 值班心跳（片 3）已实现并发布**（落点 `miniapp/node/duty-heartbeat.mjs`，覆盖边界见规格 §28.3）。
+- **状态（2026-10-22 07:2x 补记）**：**缺口一已实现并发布**（`bda22d9` / `385a733` / `0ae0ce4` / `82ced7b`）；**缺口二文件侧已实现并发布**（`c77d992` / `79590fe` / `144dce7` / `f19b0b9`）；**§28 值班心跳（片 3）已实现并发布**（落点 `miniapp/node/duty-heartbeat.mjs`）——**但首版在生产上从未生效**，07:2x 修掉两个缺陷（`now` 的 NaN；硬编码的 cron id 指向 05:57 已删除的那一代）。值班链改**按名字串联两代 cron**，目标 cron 钉在 `patrol-config.json` 的 `dutyCronId`。
 - **缺口二（2026-10-22 06:1x 补记）：文件侧已做并已发布**（告警文件改 JSONL + 每次告警都写 + 看板补看 + `--no-notify` 无头模式；B2–B6 已验）。**计划任务那半做不成**：S4U 实测建不起来（`schtasks /create` → `ERROR: Access is denied.`），按 §2.4 自带回退走，多触发器是同一个权限原因。
 
 ---
