@@ -1,68 +1,107 @@
 /*
- * MiniMax Code visual baseline for the Mimic Tear board.
- * Semantic colour variables only, restrained surfaces, 12px cards / 8px controls,
- * light and dark both readable, no gradients, no neon, no remote assets.
+ * Mimic Tear — 值更台 (duty desk) visual system.
+ *
+ * The board is a night duty station for an agent that supervises other agents. Two
+ * registers, deliberately kept apart:
+ *
+ * - the CONSOLE (rail, header, KPIs, tables) is machine chrome: neutral grounds, hairline
+ *   rules, engraved labels, tabular figures. Nothing here is decorative.
+ * - the DOCUMENTS (the boss's handover reports, the decisions on your desk) are paper:
+ *   a warmer ground, a severity edge, and a serif face (仿宋) for the prose, because a
+ *   report is a document and a document does not read like a dashboard row.
+ *
+ * House rules (kept from the previous baseline): neutral palette, semantic colour only
+ * for state, 12px cards / 8px controls, no gradients, no neon, no emoji, no remote
+ * assets, light and dark share one variable set.
  */
+
+:root {
+  /* Type: the console speaks in DIN-like signage, the documents speak in 仿宋. */
+  --mcode-console: 'Bahnschrift', 'DIN Alternate', 'Arial Narrow', 'Segoe UI Variable Display',
+    system-ui, 'Microsoft YaHei UI', sans-serif;
+  --mcode-ui: 'Microsoft YaHei UI', 'PingFang SC', 'Hiragino Sans GB', 'Source Han Sans SC',
+    'Noto Sans CJK SC', system-ui, sans-serif;
+  --mcode-document: 'FangSong', 'STFangsong', 'Songti SC', 'SimSun', serif;
+  --mcode-mono: 'Cascadia Mono', 'JetBrains Mono', ui-monospace, SFMono-Regular, Consolas, monospace;
+}
 
 :root,
 [data-theme='light'] {
-  --mcode-bg: #ffffff;
-  --mcode-bg-secondary: #f5f5f5;
+  --mcode-bg: #eff1f2;
+  --mcode-bg-secondary: #e5e8ea;
   --mcode-surface: #ffffff;
-  --mcode-surface-muted: #fafafa;
-  --mcode-text: #171717;
-  --mcode-text-muted: #666666;
-  --mcode-text-subtle: #adadad;
-  --mcode-border: #0a0a0a14;
-  --mcode-border-strong: #0a0a0af2;
-  --mcode-accent: #0094fc;
-  --mcode-success: #04b54b;
-  --mcode-warning: #f56811;
-  --mcode-danger: #f73646;
-  --mcode-primary-action-bg: #171717;
+  --mcode-surface-muted: #f5f6f7;
+  --mcode-text: #12161a;
+  --mcode-text-muted: #59636c;
+  --mcode-text-subtle: #8b959e;
+  --mcode-border: #dce0e3;
+  --mcode-border-strong: #b4bcc2;
+  --mcode-accent: #1a5fb4;
+  --mcode-success: #1c7a4e;
+  --mcode-warning: #a2610c;
+  --mcode-danger: #c0392b;
+  --mcode-primary-action-bg: #12161a;
   --mcode-primary-action-text: #ffffff;
-  --mcode-shadow: 0 0 20px rgb(10 10 10 / 8%);
+  --mcode-shadow: 0 1px 2px rgb(18 22 26 / 6%), 0 10px 28px rgb(18 22 26 / 10%);
+  --mcode-paper: #faf8f2;
+  --mcode-paper-border: #e6e1d4;
+  --mcode-paper-ink: #1b2026;
+  --mcode-lamp: #c8891b;
+  --mcode-lamp-soft: #f6ead1;
+  --mcode-rule: #e6e9eb;
   color-scheme: light;
 }
 
 [data-theme='dark'] {
-  --mcode-bg: #171717;
-  --mcode-bg-secondary: #1c1c1c;
-  --mcode-surface: #262626;
-  --mcode-surface-muted: #262626;
-  --mcode-text: #ededed;
-  --mcode-text-muted: #949494;
-  --mcode-text-subtle: #666666;
-  --mcode-border: #ffffff14;
-  --mcode-border-strong: #fffffff2;
-  --mcode-accent: #0077d9;
-  --mcode-success: #009c3d;
-  --mcode-warning: #e25507;
-  --mcode-danger: #e31937;
-  --mcode-primary-action-bg: #ffffff;
-  --mcode-primary-action-text: #171717;
-  --mcode-shadow: 0 0 20px rgb(0 0 0 / 40%);
+  --mcode-bg: #0e1216;
+  --mcode-bg-secondary: #131920;
+  --mcode-surface: #161c23;
+  --mcode-surface-muted: #1b222a;
+  --mcode-text: #e6ebef;
+  --mcode-text-muted: #97a2ac;
+  --mcode-text-subtle: #6a757f;
+  --mcode-border: #232c35;
+  --mcode-border-strong: #3a4650;
+  --mcode-accent: #6ba6f5;
+  --mcode-success: #47b287;
+  --mcode-warning: #d9a244;
+  --mcode-danger: #e0705f;
+  --mcode-primary-action-bg: #e6ebef;
+  --mcode-primary-action-text: #0e1216;
+  --mcode-shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 12px 30px rgb(0 0 0 / 48%);
+  --mcode-paper: #1c232b;
+  --mcode-paper-border: #2c353e;
+  --mcode-paper-ink: #e6ebef;
+  --mcode-lamp: #e0a748;
+  --mcode-lamp-soft: #3a2e18;
+  --mcode-rule: #1f272f;
   color-scheme: dark;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
-    --mcode-bg: #171717;
-    --mcode-bg-secondary: #1c1c1c;
-    --mcode-surface: #262626;
-    --mcode-surface-muted: #262626;
-    --mcode-text: #ededed;
-    --mcode-text-muted: #949494;
-    --mcode-text-subtle: #666666;
-    --mcode-border: #ffffff14;
-    --mcode-border-strong: #fffffff2;
-    --mcode-accent: #0077d9;
-    --mcode-success: #009c3d;
-    --mcode-warning: #e25507;
-    --mcode-danger: #e31937;
-    --mcode-primary-action-bg: #ffffff;
-    --mcode-primary-action-text: #171717;
-    --mcode-shadow: 0 0 20px rgb(0 0 0 / 40%);
+    --mcode-bg: #0e1216;
+    --mcode-bg-secondary: #131920;
+    --mcode-surface: #161c23;
+    --mcode-surface-muted: #1b222a;
+    --mcode-text: #e6ebef;
+    --mcode-text-muted: #97a2ac;
+    --mcode-text-subtle: #6a757f;
+    --mcode-border: #232c35;
+    --mcode-border-strong: #3a4650;
+    --mcode-accent: #6ba6f5;
+    --mcode-success: #47b287;
+    --mcode-warning: #d9a244;
+    --mcode-danger: #e0705f;
+    --mcode-primary-action-bg: #e6ebef;
+    --mcode-primary-action-text: #0e1216;
+    --mcode-shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 12px 30px rgb(0 0 0 / 48%);
+    --mcode-paper: #1c232b;
+    --mcode-paper-border: #2c353e;
+    --mcode-paper-ink: #e6ebef;
+    --mcode-lamp: #e0a748;
+    --mcode-lamp-soft: #3a2e18;
+    --mcode-rule: #1f272f;
     color-scheme: dark;
   }
 }
@@ -71,34 +110,41 @@
   box-sizing: border-box;
 }
 
+html,
+body {
+  height: 100%;
+}
+
 body {
   margin: 0;
   padding: 0;
   background: var(--mcode-bg);
   color: var(--mcode-text);
-  font-family: ui-sans-serif, -apple-system, system-ui, 'Segoe UI', Helvetica, Arial, sans-serif;
+  font-family: var(--mcode-ui);
   font-size: 14px;
   line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
 }
 
 code,
 .mono {
-  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--mcode-mono);
   font-size: 12px;
 }
 
 h1 {
   margin: 0;
-  font-size: 18px;
-  line-height: 28px;
+  font-size: 15px;
+  line-height: 22px;
   font-weight: 600;
 }
 
 h2 {
   margin: 0;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 500;
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
 }
 
 h3 {
@@ -120,48 +166,79 @@ select {
   color: inherit;
 }
 
+a {
+  color: var(--mcode-accent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+:focus-visible {
+  outline: 2px solid var(--mcode-accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
 /* ---------- shell ---------- */
 
 .app-shell {
   display: grid;
-  grid-template-columns: 200px minmax(0, 1fr);
-  min-height: 100vh;
+  grid-template-columns: 236px minmax(0, 1fr);
+  /* The row is bounded, so the body can never grow past the window: the conversation's
+     composer stays on screen instead of being pushed off the bottom. */
+  grid-template-rows: minmax(0, 1fr);
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
 }
 
 .app-body {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  min-height: 100vh;
+  min-height: 0;
 }
 
-/* ---------- sidebar ---------- */
+/* ---------- rail ---------- */
 
 .app-sidebar {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 16px 12px;
+  padding: 18px 14px 14px;
   border-right: 1px solid var(--mcode-border);
   background: var(--mcode-bg-secondary);
+  min-height: 0;
 }
 
 .app-sidebar__brand {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 0 8px 14px;
+  padding: 0 6px 18px;
   color: var(--mcode-text);
   text-decoration: none;
-  font-size: 15px;
-  font-weight: 500;
+}
+
+.app-sidebar__names {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
 }
 
 .app-sidebar__name {
   margin: 0;
   font-size: 15px;
-  line-height: 22px;
-  font-weight: 500;
+  line-height: 20px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.app-sidebar__latin {
+  font-family: var(--mcode-console);
+  font-size: 9px;
+  line-height: 13px;
+  letter-spacing: 0.2em;
+  color: var(--mcode-text-subtle);
 }
 
 .app-sidebar__nav {
@@ -171,15 +248,33 @@ select {
 }
 
 .app-sidebar__nav a {
-  display: flex;
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    'label badge'
+    'latin badge';
   align-items: center;
-  gap: 6px;
+  column-gap: 8px;
   padding: 7px 10px;
   border-radius: 8px;
   color: var(--mcode-text-muted);
   text-decoration: none;
-  font-size: 14px;
-  transition: background-color 150ms ease-out, color 150ms ease-out;
+  transition: background-color 140ms ease-out, color 140ms ease-out;
+}
+
+/* The active slot is marked twice: a filled plate and a tick on its edge. */
+.app-sidebar__nav a::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 2px;
+  height: 0;
+  border-radius: 0 2px 2px 0;
+  background: var(--mcode-accent);
+  transform: translateY(-50%);
+  transition: height 160ms ease-out;
 }
 
 .app-sidebar__nav a:hover {
@@ -190,75 +285,269 @@ select {
 .app-sidebar__nav a[aria-current='page'] {
   background: var(--mcode-surface);
   color: var(--mcode-text);
-  box-shadow: inset 2px 0 0 var(--mcode-accent);
+  box-shadow: inset 0 0 0 1px var(--mcode-border);
+}
+
+.app-sidebar__nav a[aria-current='page']::before {
+  height: 18px;
+}
+
+.nav__label {
+  grid-area: label;
+  font-size: 13.5px;
+  line-height: 19px;
+}
+
+.nav__latin {
+  grid-area: latin;
+  font-family: var(--mcode-console);
+  font-size: 8.5px;
+  line-height: 11px;
+  letter-spacing: 0.18em;
+  color: var(--mcode-text-subtle);
+}
+
+.app-sidebar__nav a[aria-current='page'] .nav__latin {
+  color: var(--mcode-accent);
 }
 
 .app-sidebar__foot {
   margin-top: auto;
-  padding: 12px 8px 0;
+  padding: 14px 6px 0;
   border-top: 1px solid var(--mcode-border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
-.app-sidebar__foot .app-toggle {
-  width: 100%;
+/* ---------- switch ---------- */
+
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--mcode-text-muted);
+  font-size: 12.5px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.switch input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.switch__track {
+  position: relative;
+  flex: none;
+  width: 30px;
+  height: 17px;
+  border: 1px solid var(--mcode-border-strong);
+  border-radius: 999px;
+  background: var(--mcode-surface-muted);
+  transition: background-color 160ms ease-out, border-color 160ms ease-out;
+}
+
+.switch__knob {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: var(--mcode-surface);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 22%);
+  transition: transform 160ms ease-out;
+}
+
+.switch input:checked + .switch__track {
+  background: var(--mcode-accent);
+  border-color: var(--mcode-accent);
+}
+
+.switch input:checked + .switch__track .switch__knob {
+  transform: translateX(13px);
+}
+
+.switch input:focus-visible + .switch__track {
+  outline: 2px solid var(--mcode-accent);
+  outline-offset: 2px;
 }
 
 /* ---------- header ---------- */
 
 .app-header {
+  flex: none;
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 24px;
   flex-wrap: wrap;
-  padding: 10px 24px;
+  padding: 11px 24px;
   border-bottom: 1px solid var(--mcode-border);
   background: var(--mcode-bg);
+}
+
+.app-header__title {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.app-header__name {
+  font-size: 15px;
+  line-height: 21px;
+  font-weight: 600;
+}
+
+.app-header__context {
+  color: var(--mcode-text-subtle);
+  font-size: 12px;
+  line-height: 17px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .app-header__actions {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   flex-wrap: wrap;
 }
 
-.app-toggle {
-  display: inline-flex;
+.app-header__rule {
+  width: 1px;
+  height: 18px;
+  background: var(--mcode-border);
+}
+
+/* ---------- the duty lamp ---------- */
+
+/*
+ * The mark and the lamp are the same drop. The rail's is the name; the header's is the
+ * pulse — it fills while the boss is on duty and stays empty when nobody is watching.
+ */
+/*
+ * The lamp has two states and they are told apart by how full the drop is: full means
+ * the boss is on duty and filed a round on time, a low guttering drop means he is late.
+ * The sentence next to it carries the detail; the lamp carries the signal you can read
+ * without reading.
+ *
+ * The lamp follows the duty facts only. The 「大哥在岗」 switch is not its input: that
+ * switch gates the board's own patrol loop, while the duty handover stamp is written by
+ * the duty cron alone and keeps moving whether the switch is on or off.
+ */
+.drop {
+  flex: none;
+  color: var(--mcode-text-muted);
+}
+
+.drop__shape {
+  fill: none;
+  stroke: currentColor;
+}
+
+.drop__fill {
+  fill: currentColor;
+  stroke: none;
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  transform: scaleY(0.3);
+  transition: transform 520ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 240ms ease-out;
+}
+
+.drop--mark .drop__fill {
+  opacity: 0.1;
+  transform: scaleY(1);
+}
+
+[data-duty='live'] .drop--lamp {
+  color: var(--mcode-lamp);
+}
+
+[data-duty='live'] .drop--lamp .drop__fill {
+  opacity: 1;
+  transform: scaleY(1);
+}
+
+[data-duty='stale'] .drop--lamp {
+  color: var(--mcode-warning);
+}
+
+[data-duty='stale'] .drop--lamp .drop__fill {
+  opacity: 1;
+  transform: scaleY(0.34);
+  animation: lamp-flicker 2.6s ease-in-out infinite;
+}
+
+@keyframes lamp-flicker {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.3;
+  }
+}
+
+.duty {
+  display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 8px;
+  min-width: 0;
+}
+
+.duty__text {
   color: var(--mcode-text-muted);
   font-size: 12px;
-  white-space: nowrap;
-  cursor: pointer;
+  line-height: 18px;
 }
 
-.app-toggle input {
-  width: 14px;
-  height: 14px;
-  accent-color: var(--mcode-accent);
-  cursor: pointer;
-}
-
-.app-toggle:focus-within {
-  outline: 2px solid var(--mcode-accent);
-  outline-offset: 2px;
-  border-radius: 4px;
-}
+/* ---------- status ---------- */
 
 .app-status {
-  color: var(--mcode-text-muted);
-  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--mcode-text-subtle);
+  font-family: var(--mcode-console);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+}
+
+.app-status::before {
+  content: '';
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--mcode-text-subtle);
 }
 
 .app-status[data-state='live'] {
   color: var(--mcode-success);
 }
 
+.app-status[data-state='live']::before {
+  background: var(--mcode-success);
+}
+
 .app-status[data-state='error'] {
   color: var(--mcode-danger);
 }
 
+.app-status[data-state='error']::before {
+  background: var(--mcode-danger);
+}
+
 .badge {
+  grid-area: badge;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -268,8 +557,9 @@ select {
   border-radius: 999px;
   background: var(--mcode-danger);
   color: #ffffff;
-  font-size: 11px;
-  line-height: 18px;
+  font-family: var(--mcode-console);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* ---------- layout ---------- */
@@ -278,56 +568,109 @@ select {
   margin: 16px 24px 0;
   padding: 10px 14px;
   border: 1px solid var(--mcode-danger);
+  border-left-width: 3px;
   border-radius: 8px;
   background: var(--mcode-surface);
   color: var(--mcode-danger);
   font-size: 13px;
 }
 
+.app-warning--inline {
+  margin: 0;
+}
+
 main {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   padding: 24px;
   max-width: 1240px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
 .view {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 22px;
   min-width: 0;
+  flex: 1 0 auto;
+  min-height: 100%;
 }
 
 .view[hidden] {
   display: none;
 }
 
+/*
+ * The conversation owns the whole stage: it is given the window's height outright, so
+ * the composer sits on the bottom edge and the transcript scrolls inside it. Every other
+ * view is a document — it takes the height it needs, and the stage scrolls.
+ */
+#view-chat {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
 .section {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   min-width: 0;
 }
 
 .section__head {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.section__head h2 {
+  position: relative;
+  padding-left: 10px;
+}
+
+/* A tick in front of the title: the section is a slot on the board, not a floating label. */
+.section__head h2::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--mcode-border-strong);
 }
 
 .section__head .count {
-  color: var(--mcode-text-muted);
+  color: var(--mcode-text-subtle);
   font-size: 12px;
 }
 
-/* The boss went quiet. This is the one line on the board that must be noticed. */
-.section__head .count[data-duty-state='stale'] {
-  color: var(--mcode-warning);
-  font-weight: 500;
+.section__more {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--mcode-text-muted);
+  text-decoration: none;
+}
+
+.section__more:hover {
+  color: var(--mcode-accent);
+  text-decoration: underline;
 }
 
 .section__actions {
   margin-left: auto;
   display: flex;
-  gap: 8px;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.section__note {
+  margin-top: -2px;
 }
 
 /* ---------- kpi ---------- */
@@ -339,31 +682,80 @@ main {
 }
 
 .kpi {
-  padding: 16px 20px;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 14px 16px 12px;
   border: 1px solid var(--mcode-border);
   border-radius: 12px;
   background: var(--mcode-surface);
+  color: inherit;
+  text-decoration: none;
+  transition: background-color 140ms ease-out, border-color 140ms ease-out;
+}
+
+/* The state colour is spent on one edge, not on the whole card. */
+.kpi::before {
+  content: '';
+  position: absolute;
+  left: -1px;
+  top: 13px;
+  bottom: 13px;
+  width: 2px;
+  border-radius: 0 2px 2px 0;
+  background: transparent;
+}
+
+.kpi--warning::before {
+  background: var(--mcode-warning);
+}
+
+.kpi--danger::before {
+  background: var(--mcode-danger);
+}
+
+.kpi--link:hover,
+.kpi--link:focus-visible {
+  background: var(--mcode-surface-muted);
+  border-color: var(--mcode-border-strong);
 }
 
 .kpi__label {
   color: var(--mcode-text-muted);
   font-size: 12px;
-  line-height: 16px;
+  line-height: 18px;
 }
 
 .kpi__value {
-  margin-top: 2px;
-  font-size: 26px;
-  line-height: 32px;
+  font-family: var(--mcode-console);
+  font-size: 30px;
+  line-height: 36px;
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
 }
 
-.kpi--danger .kpi__value {
-  color: var(--mcode-danger);
+.kpi__foot {
+  color: var(--mcode-text-subtle);
+  font-size: 11.5px;
+  line-height: 16px;
+}
+
+/* A readout holds a state, not a count: it keeps the tile's baseline but not its scale. */
+.kpi__readout {
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+  font-size: 15px;
 }
 
 .kpi--warning .kpi__value {
   color: var(--mcode-warning);
+}
+
+.kpi--danger .kpi__value {
+  color: var(--mcode-danger);
 }
 
 /* ---------- panels ---------- */
@@ -392,6 +784,41 @@ main {
   padding: 0;
 }
 
+/*
+ * Paper.
+ *
+ * A panel that holds what someone wrote — the boss's handover reports, the decisions he
+ * filed for you — is a document, not a console readout. It gets a warmer ground so the
+ * difference is structural and not only typographic. Everything that holds structured
+ * facts (counts, tables, trees) stays on the console surface.
+ */
+.panel--paper {
+  background: var(--mcode-paper);
+  border-color: var(--mcode-paper-border);
+}
+
+.panel--paper .item {
+  border-top-color: var(--mcode-paper-border);
+}
+
+.panel--paper .item__body.doc {
+  color: var(--mcode-paper-ink);
+}
+
+.panel--paper .tag {
+  border-color: var(--mcode-paper-border);
+}
+
+.panel--paper .inbox-group__head {
+  background: color-mix(in srgb, var(--mcode-text) 5%, var(--mcode-paper));
+  border-bottom-color: var(--mcode-paper-border);
+  color: var(--mcode-text-muted);
+}
+
+.panel--paper .inbox-group + .inbox-group {
+  border-top-color: var(--mcode-paper-border);
+}
+
 /* ---------- table ---------- */
 
 table {
@@ -402,17 +829,20 @@ table {
 }
 
 thead th {
-  padding: 8px 20px;
+  padding: 9px 20px;
   background: var(--mcode-surface-muted);
+  border-bottom: 1px solid var(--mcode-border);
   color: var(--mcode-text-muted);
+  font-size: 12px;
   font-weight: 500;
+  letter-spacing: 0.08em;
   text-align: left;
   white-space: nowrap;
 }
 
 tbody td {
-  padding: 10px 20px;
-  border-top: 1px solid var(--mcode-border);
+  padding: 11px 20px;
+  border-top: 1px solid var(--mcode-rule);
   vertical-align: middle;
 }
 
@@ -434,6 +864,17 @@ tbody tr:hover {
   background: var(--mcode-surface-muted);
 }
 
+tbody td a {
+  color: var(--mcode-text);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+tbody td a:hover {
+  color: var(--mcode-accent);
+  text-decoration: underline;
+}
+
 td.numeric,
 th.numeric {
   text-align: right;
@@ -441,6 +882,7 @@ th.numeric {
 }
 
 .table-scroll {
+  position: relative;
   overflow-x: auto;
   max-width: 100%;
   min-width: 0;
@@ -451,13 +893,14 @@ th.numeric {
 .status {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
   white-space: nowrap;
 }
 
 .status__dot {
-  width: 8px;
-  height: 8px;
+  flex: none;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   background: var(--mcode-text-subtle);
 }
@@ -478,12 +921,13 @@ th.numeric {
   background: var(--mcode-text-subtle);
 }
 
+/* The kind of a thing is a quiet outline; its severity is a filled square chip. */
 .tag {
   display: inline-flex;
   align-items: center;
   padding: 1px 8px;
+  border: 1px solid var(--mcode-border);
   border-radius: 999px;
-  background: var(--mcode-surface-muted);
   color: var(--mcode-text-muted);
   font-size: 12px;
   line-height: 18px;
@@ -491,23 +935,35 @@ th.numeric {
 }
 
 .tag--high {
-  background: color-mix(in srgb, var(--mcode-danger) 14%, transparent);
+  border-color: transparent;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--mcode-danger) 13%, transparent);
   color: var(--mcode-danger);
+  font-weight: 600;
 }
 
 .tag--medium {
-  background: color-mix(in srgb, var(--mcode-warning) 14%, transparent);
+  border-color: transparent;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--mcode-warning) 16%, transparent);
   color: var(--mcode-warning);
+  font-weight: 600;
 }
 
 .tag--low {
+  border-color: transparent;
+  border-radius: 4px;
   background: var(--mcode-surface-muted);
   color: var(--mcode-text-muted);
+  font-weight: 600;
 }
 
 .tag--done {
-  background: color-mix(in srgb, var(--mcode-success) 14%, transparent);
+  border-color: transparent;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--mcode-success) 13%, transparent);
   color: var(--mcode-success);
+  font-weight: 600;
 }
 
 /* ---------- list ---------- */
@@ -517,18 +973,81 @@ th.numeric {
   flex-direction: column;
 }
 
+/* The inbox is read high to low; the group head states the order out loud, and the
+   group — not the row — carries the colour. */
+.inbox-group {
+  position: relative;
+}
+
+.inbox-group + .inbox-group {
+  border-top: 1px solid var(--mcode-rule);
+}
+
+.inbox-group::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--mcode-border-strong);
+}
+
+.inbox-group--high::before {
+  background: var(--mcode-danger);
+}
+
+.inbox-group--medium::before {
+  background: var(--mcode-warning);
+}
+
+.inbox-group--low::before {
+  background: var(--mcode-border-strong);
+}
+
+.inbox-group__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 20px 9px 23px;
+  background: var(--mcode-surface-muted);
+  border-bottom: 1px solid var(--mcode-rule);
+  color: var(--mcode-text-subtle);
+  font-size: 11.5px;
+  line-height: 18px;
+}
+
+.inbox-group__severity {
+  font-weight: 600;
+}
+
+.inbox-group--high .inbox-group__severity {
+  color: var(--mcode-danger);
+}
+
+.inbox-group--medium .inbox-group__severity {
+  color: var(--mcode-warning);
+}
+
+.inbox-group--low .inbox-group__severity {
+  color: var(--mcode-text-muted);
+}
+
 .item {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 14px 20px;
-  border-top: 1px solid var(--mcode-border);
+  gap: 7px;
+  padding: 15px 20px 15px 23px;
+  border-top: 1px solid var(--mcode-rule);
 }
 
 .item:first-child {
   border-top: none;
 }
 
+/* The severity is a label, not a stripe: one chip says it, and the inbox spends the
+   colour once per group instead of once per row. */
 .item__head {
   display: flex;
   align-items: center;
@@ -543,6 +1062,16 @@ th.numeric {
 .item__body {
   color: var(--mcode-text-muted);
   font-size: 13px;
+  max-width: 76ch;
+}
+
+/* Prose on the board is a document, and a document is set in 仿宋. */
+.doc {
+  font-family: var(--mcode-document);
+  font-size: 14px;
+  line-height: 1.85;
+  color: var(--mcode-paper-ink);
+  letter-spacing: 0.01em;
 }
 
 /* Why an item left the desk: you marked it known, or the boss withdrew it. */
@@ -559,11 +1088,12 @@ th.numeric {
 .item__actions {
   display: flex;
   gap: 8px;
-  margin-top: 4px;
+  flex-wrap: wrap;
+  margin-top: 2px;
 }
 
 .item--acknowledged {
-  opacity: 0.55;
+  opacity: 0.6;
 }
 
 /* ---------- buttons ---------- */
@@ -577,14 +1107,15 @@ th.numeric {
   padding: 0 12px;
   border: 1px solid var(--mcode-border);
   border-radius: 8px;
-  background: var(--mcode-surface-muted);
+  background: var(--mcode-surface);
   color: var(--mcode-text);
   font-size: 13px;
   cursor: pointer;
-  transition: background-color 150ms ease-out, border-color 150ms ease-out;
+  transition: background-color 140ms ease-out, border-color 140ms ease-out, color 140ms ease-out;
 }
 
 .btn:hover {
+  background: var(--mcode-surface-muted);
   border-color: var(--mcode-border-strong);
 }
 
@@ -604,11 +1135,23 @@ th.numeric {
   color: var(--mcode-primary-action-text);
 }
 
+.btn--primary:hover {
+  background: var(--mcode-primary-action-bg);
+  border-color: var(--mcode-primary-action-bg);
+  opacity: 0.88;
+}
+
 .btn--text {
   height: 28px;
-  padding: 0 6px;
+  padding: 0 8px;
   border-color: transparent;
   background: transparent;
+  color: var(--mcode-accent);
+}
+
+.btn--text:hover {
+  background: var(--mcode-surface-muted);
+  border-color: transparent;
   color: var(--mcode-accent);
 }
 
@@ -624,12 +1167,25 @@ th.numeric {
   font-size: 12px;
 }
 
+tbody td .btn {
+  height: 26px;
+  padding: 0 9px;
+  font-size: 12px;
+  color: var(--mcode-text-muted);
+  background: transparent;
+}
+
+tbody td .btn:hover {
+  color: var(--mcode-text);
+  background: var(--mcode-surface);
+}
+
 /* ---------- forms ---------- */
 
 .field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 5px;
 }
 
 .field__label {
@@ -641,15 +1197,16 @@ th.numeric {
 .field textarea {
   width: 100%;
   min-height: 36px;
-  padding: 7px 10px;
+  padding: 8px 11px;
   border: 1px solid var(--mcode-border);
   border-radius: 8px;
   background: var(--mcode-bg);
 }
 
 .field textarea {
-  min-height: 88px;
+  min-height: 96px;
   resize: vertical;
+  line-height: 1.7;
 }
 
 .field input:focus-visible,
@@ -657,6 +1214,77 @@ th.numeric {
   outline: 2px solid var(--mcode-accent);
   outline-offset: 1px;
   border-color: var(--mcode-accent);
+}
+
+.filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.filter__label {
+  color: var(--mcode-text-subtle);
+  font-size: 12px;
+}
+
+.select-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.select-wrap::after {
+  content: '';
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  border-right: 1.4px solid var(--mcode-text-muted);
+  border-bottom: 1.4px solid var(--mcode-text-muted);
+  transform: translateY(-70%) rotate(45deg);
+  pointer-events: none;
+}
+
+.select {
+  height: 30px;
+  max-width: 210px;
+  padding: 0 26px 0 10px;
+  border: 1px solid var(--mcode-border);
+  border-radius: 8px;
+  background: var(--mcode-surface);
+  color: var(--mcode-text);
+  font-size: 12.5px;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  text-overflow: ellipsis;
+}
+
+.select:hover {
+  border-color: var(--mcode-border-strong);
+}
+
+.select:focus-visible {
+  outline: 2px solid var(--mcode-accent);
+  outline-offset: 2px;
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--mcode-text-muted);
+  font-size: 12.5px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.check input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--mcode-accent);
+  cursor: pointer;
 }
 
 /* ---------- org tree ---------- */
@@ -670,8 +1298,8 @@ th.numeric {
 .tree ul {
   list-style: none;
   margin: 0;
-  padding-left: 20px;
-  border-left: 1px solid var(--mcode-border);
+  padding-left: 22px;
+  border-left: 1px solid var(--mcode-rule);
 }
 
 .tree__row {
@@ -683,7 +1311,10 @@ th.numeric {
 }
 
 .tree__name {
-  font-weight: 500;
+  font-family: var(--mcode-console);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
 }
 
 .tree__title {
@@ -717,13 +1348,14 @@ th.numeric {
   gap: 8px;
   width: 100%;
   padding: 7px 10px;
-  border: none;
+  border: 1px solid transparent;
   border-radius: 8px;
   background: transparent;
   color: var(--mcode-text-muted);
   text-align: left;
   font-size: 13px;
   cursor: pointer;
+  transition: background-color 140ms ease-out, color 140ms ease-out;
 }
 
 .domain-nav button:hover {
@@ -732,7 +1364,8 @@ th.numeric {
 }
 
 .domain-nav button[aria-pressed='true'] {
-  background: var(--mcode-surface-muted);
+  background: var(--mcode-surface);
+  border-color: var(--mcode-border);
   color: var(--mcode-text);
   font-weight: 500;
 }
@@ -740,16 +1373,17 @@ th.numeric {
 .domain-nav .count {
   margin-left: auto;
   color: var(--mcode-text-subtle);
-  font-size: 12px;
+  font-family: var(--mcode-console);
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
 
 .skill-row {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 10px 20px;
-  border-top: 1px solid var(--mcode-border);
+  gap: 3px;
+  padding: 11px 20px;
+  border-top: 1px solid var(--mcode-rule);
 }
 
 .skill-row:first-child {
@@ -757,7 +1391,10 @@ th.numeric {
 }
 
 .skill-row__name {
-  font-weight: 500;
+  font-family: var(--mcode-console);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
 }
 
 .skill-row__desc {
@@ -767,14 +1404,10 @@ th.numeric {
 
 /* ---------- chat ---------- */
 
-#view-chat {
-  min-height: calc(100vh - 108px);
-}
-
 .chat {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
   flex: 1;
   min-width: 0;
   min-height: 0;
@@ -783,16 +1416,17 @@ th.numeric {
 .chat__log {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 16px;
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  padding-bottom: 8px;
+  padding-bottom: 4px;
 }
 
 .chat__intro {
   color: var(--mcode-text-muted);
   font-size: 13px;
-  line-height: 20px;
+  line-height: 22px;
   max-width: 56ch;
 }
 
@@ -807,8 +1441,8 @@ th.numeric {
 .chat__msg {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  max-width: 70ch;
+  gap: 5px;
+  max-width: 68ch;
 }
 
 .chat__msg--me {
@@ -822,7 +1456,8 @@ th.numeric {
 
 .chat__who {
   color: var(--mcode-text-subtle);
-  font-size: 12px;
+  font-size: 11px;
+  letter-spacing: 0.12em;
 }
 
 .chat__bubble {
@@ -830,9 +1465,14 @@ th.numeric {
   border: 1px solid var(--mcode-border);
   border-radius: 12px;
   background: var(--mcode-surface);
-  font-size: 13px;
-  line-height: 20px;
+  font-size: 13.5px;
+  line-height: 1.75;
   overflow-wrap: anywhere;
+}
+
+/* The boss's line carries an edge; yours is a flat, filled block on the right. */
+.chat__msg--boss .chat__bubble {
+  border-left: 2px solid var(--mcode-border-strong);
 }
 
 .chat__msg--me .chat__bubble {
@@ -840,7 +1480,24 @@ th.numeric {
 }
 
 .chat__msg--streaming .chat__bubble {
-  border-style: dashed;
+  border-color: var(--mcode-accent);
+}
+
+.chat__msg--streaming .chat__bubble::after {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 13px;
+  margin-left: 4px;
+  background: var(--mcode-accent);
+  vertical-align: -2px;
+  animation: caret 1s steps(2, start) infinite;
+}
+
+@keyframes caret {
+  50% {
+    opacity: 0;
+  }
 }
 
 .chat__tools {
@@ -854,35 +1511,39 @@ th.numeric {
   border: 1px solid var(--mcode-border);
   border-radius: 999px;
   color: var(--mcode-text-subtle);
-  font-size: 12px;
+  font-family: var(--mcode-console);
+  font-size: 11px;
+  letter-spacing: 0.04em;
 }
 
 .chat__tool--failed {
   color: var(--mcode-danger);
+  border-color: color-mix(in srgb, var(--mcode-danger) 40%, transparent);
 }
 
 .chat__ask {
   align-self: flex-start;
-  max-width: 70ch;
-  padding: 12px 14px;
-  border: 1px solid var(--mcode-border-strong);
+  max-width: 68ch;
+  padding: 14px 16px;
+  border: 1px solid var(--mcode-paper-border);
   border-radius: 12px;
-  background: var(--mcode-surface);
+  background: var(--mcode-paper);
 }
 
 .chat__ask-title {
-  margin: 0 0 8px;
-  font-size: 13px;
-  font-weight: 500;
+  margin: 0 0 10px;
+  font-size: 13.5px;
+  font-weight: 600;
 }
 
 .chat__step {
-  margin-bottom: 10px;
+  margin-bottom: 12px;
 }
 
 .chat__question {
-  margin: 0 0 6px;
-  font-size: 13px;
+  margin: 0 0 8px;
+  font-size: 13.5px;
+  line-height: 1.7;
 }
 
 .chat__options {
@@ -892,32 +1553,25 @@ th.numeric {
 }
 
 .chat__option {
-  padding: 6px 10px;
+  padding: 6px 11px;
   border: 1px solid var(--mcode-border);
   border-radius: 8px;
-  background: var(--mcode-bg);
+  background: var(--mcode-surface);
   color: var(--mcode-text);
   font-size: 13px;
   cursor: pointer;
+  transition: border-color 140ms ease-out, background-color 140ms ease-out;
+}
+
+.chat__option:hover {
+  border-color: var(--mcode-border-strong);
 }
 
 .chat__option--on {
   border-color: var(--mcode-accent);
+  background: color-mix(in srgb, var(--mcode-accent) 10%, transparent);
   color: var(--mcode-accent);
-}
-
-.chat__composer {
-  display: flex;
-  gap: 8px;
-  align-items: flex-end;
-  padding: 8px;
-  border: 1px solid var(--mcode-border);
-  border-radius: 12px;
-  background: var(--mcode-surface);
-}
-
-.chat__composer:focus-within {
-  border-color: var(--mcode-accent);
+  font-weight: 500;
 }
 
 /* A line said in the Host chat side panel is marked, so the user can tell which of the two
@@ -929,6 +1583,7 @@ th.numeric {
   border-radius: 4px;
   font-size: 11px;
   font-weight: 400;
+  letter-spacing: 0;
   color: var(--mcode-text-muted);
 }
 
@@ -941,7 +1596,47 @@ th.numeric {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-  padding: 0 8px 4px;
+}
+
+.chat__composer {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  padding: 7px 7px 7px 12px;
+  border: 1px solid var(--mcode-border);
+  border-radius: 12px;
+  background: var(--mcode-surface);
+  transition: border-color 140ms ease-out;
+}
+
+.chat__composer:focus-within {
+  border-color: var(--mcode-accent);
+}
+
+.chat__composer textarea {
+  flex: 1;
+  min-width: 0;
+  min-height: 26px;
+  max-height: 140px;
+  padding: 4px 2px;
+  border: 0;
+  background: transparent;
+  color: var(--mcode-text);
+  font: inherit;
+  font-size: 13.5px;
+  line-height: 22px;
+  resize: none;
+}
+
+.chat__composer textarea:focus {
+  outline: none;
+}
+
+.chat__hint {
+  margin-top: -6px;
+  color: var(--mcode-text-subtle);
+  font-size: 11px;
+  text-align: right;
 }
 
 /* ---------- duty rounds ---------- */
@@ -951,8 +1646,9 @@ th.numeric {
  * happened whether or not anyone was talking: a duty round is not something the
  * boss said to you, and it must not be mistaken for a reply.
  *
- * Only the newest round is open; the rest collapse to a one-line summary, so the
- * conversation keeps the screen. The conversation is the main surface here.
+ * They are paper, not console: a warmer ground, a stamped time, and the findings set
+ * in 仿宋. Only the newest round is open; the rest collapse to a one-line summary, so the
+ * conversation keeps the screen.
  */
 .chat__duty:empty {
   display: none;
@@ -961,29 +1657,36 @@ th.numeric {
 .chat__duty {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  max-height: 40vh;
+  gap: 7px;
+  max-height: 38vh;
   overflow-y: auto;
-  padding: 8px 8px 0;
+  /* The reports give way before the conversation does: they are a standing record, the
+     transcript is the reason the page is open. */
+  flex: 0 1 auto;
+  min-height: 0;
 }
 
-.chat__duty-title {
-  font-size: 12px;
+.chat__duty-label {
+  font-family: var(--mcode-console);
+  font-size: 10.5px;
+  line-height: 15px;
+  letter-spacing: 0.16em;
   color: var(--mcode-text-muted);
 }
 
 .chat__duty-round {
-  border: 1px solid var(--mcode-border);
-  border-radius: 8px;
-  background: var(--mcode-surface);
+  border: 1px solid var(--mcode-paper-border);
+  border-radius: 10px;
+  background: var(--mcode-paper);
+  color: var(--mcode-paper-ink);
 }
 
 .chat__duty-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  padding: 8px 10px;
+  gap: 10px;
+  padding: 9px 13px;
   cursor: pointer;
   list-style: none;
 }
@@ -994,73 +1697,92 @@ th.numeric {
 }
 
 .chat__duty-round[open] .chat__duty-head {
-  border-bottom: 1px solid var(--mcode-border);
+  border-bottom: 1px solid var(--mcode-paper-border);
 }
 
 .chat__duty-head:hover .chat__duty-when {
   color: var(--mcode-accent);
+  border-color: var(--mcode-accent);
 }
 
 .chat__duty-when {
-  font-size: 12px;
+  flex: none;
+  padding: 1px 7px;
+  border: 1px solid var(--mcode-paper-border);
+  border-radius: 4px;
+  font-family: var(--mcode-console);
+  font-size: 10.5px;
   font-weight: 600;
+  letter-spacing: 0.12em;
+  color: var(--mcode-text-muted);
+  transition: color 140ms ease-out, border-color 140ms ease-out;
 }
 
 .chat__duty-counts {
   font-size: 12px;
-  color: var(--mcode-text-muted);
+  color: var(--mcode-text-subtle);
 }
 
 .chat__duty-list {
   margin: 0;
-  padding: 8px 10px;
+  padding: 10px 13px 12px;
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 7px;
 }
 
 .chat__duty-item {
   display: flex;
   align-items: baseline;
-  gap: 6px;
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--mcode-text-muted);
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--mcode-paper-ink);
+}
+
+.chat__duty-item::before {
+  content: '';
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 1px;
+  background: var(--mcode-text-subtle);
+  transform: translateY(-3px);
+}
+
+.chat__duty-item--high::before {
+  background: var(--mcode-danger);
+}
+
+.chat__duty-item--medium::before {
+  background: var(--mcode-warning);
+}
+
+.chat__duty-item--low::before {
+  background: var(--mcode-text-subtle);
 }
 
 .chat__duty-title {
-  color: var(--mcode-text);
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--mcode-document);
+  font-size: 14px;
+  line-height: 22px;
 }
 
 .chat__duty-project,
 .chat__duty-tag {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-size: 11px;
-  color: var(--mcode-text-muted);
+  color: var(--mcode-text-subtle);
 }
 
 .chat__duty-item--high .chat__duty-title {
   color: var(--mcode-danger);
-}
-
-.chat__composer textarea {
-  flex: 1;
-  min-width: 0;
-  min-height: 24px;
-  max-height: 140px;
-  padding: 2px 4px;
-  border: 0;
-  background: transparent;
-  color: var(--mcode-text);
-  font: inherit;
-  font-size: 13px;
-  line-height: 20px;
-  resize: none;
-}
-
-.chat__composer textarea:focus {
-  outline: none;
 }
 
 /* ---------- states ---------- */
@@ -1082,36 +1804,6 @@ th.numeric {
   color: var(--mcode-text-muted);
 }
 
-/* ---------- dialog ---------- */
-
-dialog {
-  padding: 0;
-  border: none;
-  border-radius: 12px;
-  background: var(--mcode-surface);
-  color: var(--mcode-text);
-  box-shadow: var(--mcode-shadow);
-  max-width: 520px;
-  width: calc(100% - 32px);
-}
-
-dialog::backdrop {
-  background: rgb(0 0 0 / 32%);
-}
-
-dialog .panel {
-  border: none;
-  border-radius: 12px;
-}
-
-dialog select {
-  height: 36px;
-  padding: 0 10px;
-  border: 1px solid var(--mcode-border);
-  border-radius: 8px;
-  background: var(--mcode-bg);
-}
-
 .state {
   padding: 32px 20px;
   color: var(--mcode-text-muted);
@@ -1123,7 +1815,7 @@ dialog select {
 }
 
 .empty {
-  padding: 24px 20px;
+  padding: 26px 20px;
   color: var(--mcode-text-muted);
   text-align: center;
   font-size: 13px;
@@ -1147,6 +1839,45 @@ dialog select {
   }
 }
 
+/* ---------- dialog ---------- */
+
+dialog {
+  padding: 0;
+  border: none;
+  border-radius: 12px;
+  background: var(--mcode-surface);
+  color: var(--mcode-text);
+  box-shadow: var(--mcode-shadow);
+  max-width: 520px;
+  width: calc(100% - 32px);
+}
+
+dialog::backdrop {
+  background: rgb(0 0 0 / 38%);
+}
+
+dialog .panel {
+  border: none;
+  border-radius: 12px;
+}
+
+.dispatch__body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+dialog select {
+  height: 36px;
+  width: 100%;
+  padding: 0 30px 0 10px;
+  border: 1px solid var(--mcode-border);
+  border-radius: 8px;
+  background: var(--mcode-bg);
+  appearance: none;
+  -webkit-appearance: none;
+}
+
 /* ---------- toast ---------- */
 
 .toast-host {
@@ -1162,6 +1893,7 @@ dialog select {
 .toast {
   padding: 10px 14px;
   border: 1px solid var(--mcode-border);
+  border-left: 3px solid var(--mcode-border-strong);
   border-radius: 8px;
   background: var(--mcode-surface);
   box-shadow: var(--mcode-shadow);
@@ -1169,13 +1901,13 @@ dialog select {
 }
 
 .toast--error {
-  border-color: var(--mcode-danger);
+  border-left-color: var(--mcode-danger);
   color: var(--mcode-danger);
 }
 
 /* ---------- responsive ---------- */
 
-@media (max-width: 900px) {
+@media (max-width: 1100px) {
   .kpi-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1185,37 +1917,76 @@ dialog select {
   }
 }
 
-@media (max-width: 768px) {
+@media (max-width: 860px) {
   main {
-    padding: 16px;
+    padding: 18px 16px;
   }
 
   .app-header {
-    padding: 12px 16px;
+    padding: 10px 16px;
+    gap: 10px;
+    align-items: flex-start;
   }
 
-  /* The sidebar becomes a top strip on a narrow screen. */
+  /* The duty line and the actions share one row: the sentence wraps, the buttons stay put. */
+  .app-header__actions {
+    flex: 1 1 100%;
+    justify-content: flex-end;
+    align-items: flex-start;
+  }
+
+  .app-header__rule {
+    display: none;
+  }
+
+  .duty {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .duty__text {
+    font-size: 11.5px;
+    line-height: 17px;
+  }
+
+  /* The rail becomes a top strip on a narrow screen. */
   .app-shell {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
   }
 
   .app-sidebar {
     flex-direction: row;
     align-items: center;
     flex-wrap: wrap;
-    gap: 8px;
-    padding: 10px 12px;
+    gap: 10px;
+    padding: 10px 14px;
     border-right: 0;
     border-bottom: 1px solid var(--mcode-border);
   }
 
   .app-sidebar__brand {
-    padding: 0 8px 0 0;
+    padding: 0 6px 0 0;
+  }
+
+  .app-sidebar__names {
+    display: none;
   }
 
   .app-sidebar__nav {
     flex-direction: row;
     flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .app-sidebar__nav a {
+    grid-template-columns: auto auto;
+    grid-template-areas: 'label badge';
+    padding: 6px 9px;
+  }
+
+  .nav__latin {
+    display: none;
   }
 
   .app-sidebar__foot {
@@ -1223,10 +1994,20 @@ dialog select {
     margin-left: auto;
     padding: 0;
     border-top: 0;
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
   }
 
-  .kpi-row {
-    grid-template-columns: minmax(0, 1fr);
+  /* On a phone the reports must not eat the conversation. */
+  .chat__duty {
+    max-height: 28vh;
+  }
+}
+
+@media (max-width: 520px) {
+  .app-status {
+    display: none;
   }
 }
 

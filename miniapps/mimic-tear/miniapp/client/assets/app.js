@@ -34,9 +34,15 @@ const state = {
   projectId: null,
   domain: null,
   filterProject: '',
+  filterKind: '',
   pendingOnly: true,
   loading: false,
   error: null,
+  // The route currently on screen. The header names the section, so the client has to
+  // know where it is without re-reading the URL on every repaint.
+  view: 'chat',
+  // The board's last word on the duty boss. The lamp in the header is driven by it.
+  duty: null,
   // The project and session the dispatch dialog is currently aimed at. The dialog must
   // remember its own target: deriving it from the current route silently sends the
   // instruction to whichever project was opened last.
@@ -62,6 +68,24 @@ const state = {
 };
 
 const el = (id) => document.getElementById(id);
+
+/**
+ * Add or remove one class.
+ *
+ * The class list is edited as a string rather than through `classList`, because the DOM
+ * shim the client tests run against has a plain `className` and no `classList` — this
+ * works the same in both.
+ *
+ * @param {any} node
+ * @param {string} name
+ * @param {boolean} on
+ */
+function setClass(node, name, on) {
+  const classes = new Set(String(node.className || '').split(/\s+/).filter(Boolean));
+  if (on) classes.add(name);
+  else classes.delete(name);
+  node.className = [...classes].join(' ');
+}
 
 /* ------------------------------------------------------------------ utils */
 
@@ -103,6 +127,11 @@ const STATE_LABEL = {
 };
 
 const SEVERITY_LABEL = { high: '高', medium: '中', low: '低' };
+
+/** The runtime speaks in raw states; the board speaks in words. */
+const GOAL_STATUS_LABEL = { active: '进行中', paused: '已暂停', done: '已完成', failed: '失败', unknown: '未知' };
+
+const QUESTION_STATUS_LABEL = { pending: '待答', answered: '已答', dismissed: '已忽略', unknown: '未知' };
 
 /**
  * Label for how old a plan state snapshot is.
@@ -227,9 +256,15 @@ function renderKpi(overview) {
   el('kpi-pending').textContent = kpi.pendingDecisions;
   el('kpi-errors').textContent = kpi.errors;
 
+  // Zero is not an alarm. The state colour is spent only when there is something on the
+  // desk — a board that paints "0" in red teaches the eye to ignore red.
+  setClass(el('kpi-tile-pending'), 'kpi--warning', kpi.pendingDecisions > 0);
+  setClass(el('kpi-tile-errors'), 'kpi--danger', kpi.errors > 0);
+
   const badge = el('inbox-badge');
   badge.textContent = kpi.pendingDecisions;
   badge.hidden = kpi.pendingDecisions === 0;
+  renderHeaderContext();
 }
 
 /**
@@ -331,14 +366,14 @@ async function applyRecommendation(item) {
 
 function attentionItemHtml(item) {
   return `
-    <div class="item${item.acknowledged ? ' item--acknowledged' : ''}">
+    <div class="item item--${escapeHtml(item.severity)}${item.acknowledged ? ' item--acknowledged' : ''}">
       <div class="item__head">
         <span class="tag tag--${item.severity}">${SEVERITY_LABEL[item.severity] ?? item.severity}</span>
         <span class="tag">${KIND_LABEL[item.kind] ?? item.kind}</span>
         <span class="item__title">${escapeHtml(item.title)}</span>
         <span class="item__meta">${escapeHtml(item.projectName)} · ${waitingLabel(item.createdAt)}</span>
       </div>
-      <p class="item__body">${escapeHtml(item.body)}</p>
+      <p class="item__body doc">${escapeHtml(item.body)}</p>
       ${acknowledgedNoteHtml(item)}
       <div class="item__actions">${itemActionsHtml(item)}</div>
     </div>`;
@@ -363,6 +398,39 @@ function renderAttention(overview) {
 }
 
 /**
+ * The duty lamp.
+ *
+ * The board's own mark, filled while the boss is watching. The rail carries the same drop
+ * as the product's name; this one is the pulse, and it is the only coloured thing in the
+ * header — so a glance at the top of the window answers the question the board exists to
+ * answer: is anybody actually on duty?
+ *
+ * @param {'live'|'stale'|'off'|null} lamp
+ */
+function setDutyLamp(lamp) {
+  const root = document.documentElement;
+  if (!root || typeof root.setAttribute !== 'function') return;
+  if (lamp) root.setAttribute('data-duty', lamp);
+  else root.removeAttribute('data-duty');
+}
+
+/**
+ * What the lamp should show.
+ *
+ * The lamp is a duty signal, so it follows the duty facts and nothing else. The
+ * 「大哥在岗」 switch is *not* the source: `enabled` only gates the board's own patrol
+ * loop, while the duty handover stamp (`lastRunAt`) is written by the duty cron alone
+ * and keeps moving whether the switch is on or off. Driving the lamp from the switch
+ * would make it contradict the sentence right next to it.
+ *
+ * @returns {'live'|'stale'|null} `null` means the board has no duty facts yet.
+ */
+function currentDutyLamp() {
+  if (state.duty === null) return null;
+  return state.duty.stale ? 'stale' : 'live';
+}
+
+/**
  * Show whether the boss is on duty.
  *
  * The boss runs on its own schedule, so the board has to make its state visible: a stale
@@ -372,9 +440,12 @@ function renderAttention(overview) {
  */
 function renderDutyStatus(duty) {
   const node = el('duty-status');
+  state.duty = duty ?? null;
+
   if (!duty) {
     node.textContent = '';
     node.removeAttribute('data-duty-state');
+    setDutyLamp(currentDutyLamp());
     return;
   }
   const since = duty.lastRunAt ? relativeTime(duty.lastRunAt) : '尚未巡检';
@@ -385,14 +456,16 @@ function renderDutyStatus(duty) {
 
   if (duty.stale) {
     node.textContent = duty.neverRan
-      ? `· 大哥尚未巡检 · 值班可能没启动${tail}`
-      : `· 大哥可能掉线 · 上次巡检 ${since}${tail}`;
+      ? `大哥尚未巡检 · 值班可能没启动${tail}`
+      : `大哥可能掉线 · 上次巡检 ${since}${tail}`;
     node.setAttribute('data-duty-state', 'stale');
+    setDutyLamp(currentDutyLamp());
     return;
   }
 
   node.removeAttribute('data-duty-state');
-  node.textContent = `· 大哥值班中 · 上次巡检 ${since}${tail}`;
+  node.textContent = `大哥值班中 · 上次巡检 ${since}${tail}`;
+  setDutyLamp(currentDutyLamp());
 }
 
 function projectRowHtml(project) {
@@ -438,17 +511,51 @@ function renderProjects(overview) {
 
 function inboxItemHtml(item) {
   return `
-    <div class="item${item.acknowledged ? ' item--acknowledged' : ''}">
+    <div class="item item--${escapeHtml(item.severity)}${item.acknowledged ? ' item--acknowledged' : ''}">
       <div class="item__head">
-        <span class="tag tag--${item.severity}">${SEVERITY_LABEL[item.severity] ?? item.severity}</span>
         <span class="tag">${KIND_LABEL[item.kind] ?? item.kind}</span>
         <span class="item__title">${escapeHtml(item.title)}</span>
         <span class="item__meta">${escapeHtml(item.projectName)} · ${relativeTime(item.createdAt)}</span>
       </div>
-      <p class="item__body">${escapeHtml(item.body)}</p>
+      <p class="item__body doc">${escapeHtml(item.body)}</p>
       ${acknowledgedNoteHtml(item)}
       <div class="item__actions">${itemActionsHtml(item)}</div>
     </div>`;
+}
+
+/** The order the desk is read in: the loudest first. */
+const SEVERITY_ORDER = ['high', 'medium', 'low'];
+
+/**
+ * The inbox, grouped by severity.
+ *
+ * A flat list makes the reader do the sorting. The desk has a natural order — high
+ * first — so the board states it instead of leaving it implied.
+ *
+ * @param {Array<any>} items
+ * @returns {string}
+ */
+function inboxGroupsHtml(items) {
+  const groups = SEVERITY_ORDER
+    .map((severity) => ({ severity, items: items.filter((item) => item.severity === severity) }))
+    .filter((group) => group.items.length > 0);
+
+  // An item with a severity the board does not know about still has to be shown.
+  const unknown = items.filter((item) => !SEVERITY_ORDER.includes(item.severity));
+  if (unknown.length) groups.push({ severity: 'low', items: unknown });
+
+  return groups
+    .map(
+      (group) => `
+      <div class="inbox-group inbox-group--${escapeHtml(group.severity)}">
+        <p class="inbox-group__head">
+          <span class="inbox-group__severity">${escapeHtml(SEVERITY_LABEL[group.severity] ?? group.severity)}</span>
+          <span>${group.items.length} 项</span>
+        </p>
+        ${group.items.map(inboxItemHtml).join('')}
+      </div>`,
+    )
+    .join('');
 }
 
 function renderInbox() {
@@ -463,8 +570,20 @@ function renderInbox() {
   filter.innerHTML = `<option value="">全部项目</option>${filterOptions}`;
   filter.value = currentFilter;
 
+  // The kind filter: the inbox holds several kinds of thing, and hunting through all of
+  // them to find one kind is the reason the list felt endless.
+  const kinds = [...new Set(state.inbox.map((item) => item.kind))];
+  const kindSelect = el('inbox-kind');
+  const currentKind = kindSelect.value;
+  kindSelect.innerHTML = '<option value="">全部类型</option>'
+    + kinds
+      .map((kind) => `<option value="${escapeHtml(kind)}">${escapeHtml(KIND_LABEL[kind] ?? kind)}</option>`)
+      .join('');
+  kindSelect.value = currentKind;
+
   const items = state.inbox.filter((item) => {
     if (state.filterProject && String(item.projectId) !== state.filterProject) return false;
+    if (state.filterKind && item.kind !== state.filterKind) return false;
     if (state.pendingOnly && item.acknowledged) return false;
     return true;
   });
@@ -485,7 +604,8 @@ function renderInbox() {
     list.innerHTML = '<div class="empty">没有待处理事项。</div>';
     return;
   }
-  list.innerHTML = items.map(inboxItemHtml).join('');
+  list.innerHTML = inboxGroupsHtml(items);
+  renderHeaderContext();
 }
 
 function treeNodeHtml(node) {
@@ -517,16 +637,26 @@ function renderProject() {
   el('project-path').textContent = project.path;
 
   const sessions = countTreeNodes(detail.orgTree);
-  el('project-kpi').innerHTML = [
-    { label: '状态', value: HEALTH_LABEL[project.health] ?? project.health, tone: '' },
+
+  // The health is a word, not a number: it is read as a state, with the same dot the
+  // project table uses, so the two views speak the same language.
+  const readouts = [
+    {
+      label: '状态',
+      html: `<span class="kpi__readout"><span class="status status--${escapeHtml(project.health)}">
+        <span class="status__dot" aria-hidden="true"></span>${escapeHtml(HEALTH_LABEL[project.health] ?? project.health)}
+      </span></span>`,
+      tone: '',
+    },
     { label: '会话', value: project.sessionCount, tone: '' },
-    { label: '待决策', value: project.pendingQuestions, tone: 'kpi--warning' },
-    { label: '异常会话', value: project.erroredSessions, tone: 'kpi--danger' },
-  ]
+    { label: '待决策', value: project.pendingQuestions, tone: project.pendingQuestions > 0 ? 'kpi--warning' : '' },
+    { label: '异常会话', value: project.erroredSessions, tone: project.erroredSessions > 0 ? 'kpi--danger' : '' },
+  ];
+  el('project-kpi').innerHTML = readouts
     .map(
       (kpi) => `<div class="kpi ${kpi.tone}">
-        <p class="kpi__label">${kpi.label}</p>
-        <p class="kpi__value">${escapeHtml(kpi.value)}</p>
+        <p class="kpi__label">${escapeHtml(kpi.label)}</p>
+        ${kpi.html ?? `<p class="kpi__value">${escapeHtml(kpi.value)}</p>`}
       </div>`,
     )
     .join('');
@@ -542,7 +672,7 @@ function renderProject() {
         .map(
           (goal) => `<div class="item">
             <div class="item__head">
-              <span class="tag ${goal.status === 'active' ? 'tag--done' : ''}">${escapeHtml(goal.status)}</span>
+              <span class="tag ${goal.status === 'active' ? 'tag--done' : goal.status === 'paused' ? 'tag--high' : ''}">${escapeHtml(GOAL_STATUS_LABEL[goal.status] ?? goal.status)}</span>
               <span class="item__title">${escapeHtml(goal.objective)}</span>
             </div>
             <p class="item__meta">${goal.tokensUsed} tokens · ${Math.round((goal.timeUsedSeconds ?? 0) / 60)} 分钟</p>
@@ -552,8 +682,16 @@ function renderProject() {
     : '<div class="empty">该项目没有进行中的 Goal。</div>';
 
   const planTasks = detail.plan?.tasks ?? [];
+  // How the plan actually stands. A plan log can be months old, so the age is said out
+  // loud next to the counts — a stale task state is a historical fact, not a live signal.
+  const planCounts = planTasks.reduce((counts, task) => {
+    counts[task.state] = (counts[task.state] ?? 0) + 1;
+    return counts;
+  }, {});
   el('plan-count').textContent = planTasks.length
-    ? `${planTasks.length} 个任务${planAgeLabel(detail.project.planUpdatedAt)}`
+    ? `${planTasks.length} 个任务 · 完成 ${planCounts.done ?? 0} · 进行中 ${planCounts.producing ?? 0}`
+      + (planCounts.blocked ? ` · 阻塞 ${planCounts.blocked}` : '')
+      + planAgeLabel(detail.project.planUpdatedAt)
     : '';
   el('plan-list').innerHTML = planTasks.length
     ? planTasks
@@ -575,7 +713,7 @@ function renderProject() {
         .map(
           (question) => `<div class="item">
             <div class="item__head">
-              <span class="tag ${question.status === 'pending' ? 'tag--high' : 'tag--done'}">${escapeHtml(question.status)}</span>
+              <span class="tag ${question.status === 'pending' ? 'tag--high' : 'tag--done'}">${escapeHtml(QUESTION_STATUS_LABEL[question.status] ?? question.status)}</span>
               <span class="item__title">${escapeHtml(question.sessionTitle ?? question.sessionId)}</span>
             </div>
             <p class="item__body mono">${escapeHtml(question.id)}</p>
@@ -583,6 +721,7 @@ function renderProject() {
         )
         .join('')
     : '<div class="empty">该项目没有待答问题。</div>';
+  renderHeaderContext();
 }
 
 function countTreeNodes(nodes) {
@@ -635,6 +774,7 @@ function renderSkills() {
         )
         .join('')
     : '<div class="empty">该领域下没有技能。</div>';
+  renderHeaderContext();
 }
 
 /* -------------------------------------------------------------------- chat */
@@ -681,7 +821,7 @@ function dutyRoundsHtml(rounds) {
         <ul class="chat__duty-list">${lines}</ul>
       </details>`;
   }).join('');
-  return `<div class="chat__duty-title">大哥的值班交班</div>${items}`;
+  return `<div class="chat__duty-label">大哥的值班交班</div>${items}`;
 }
 
 /**
@@ -998,6 +1138,59 @@ const VIEWS = {
   skills: 'view-skills',
 };
 
+/**
+ * Name the section in the header, and say what is in it.
+ *
+ * The header used to be an empty strip with three buttons on it, so the board never told
+ * you where you were. It now carries the section's name and one fact about it — the count
+ * you would otherwise have to go and find.
+ *
+ * @param {string} title
+ * @param {string} context
+ */
+function setHeader(title, context) {
+  el('view-title').textContent = title;
+  el('view-context').textContent = context;
+}
+
+/**
+ * Refresh the header's context line for the section on screen.
+ */
+function renderHeaderContext() {
+  const view = state.view;
+  if (view === 'project') {
+    const detail = state.project;
+    if (!detail) {
+      setHeader('项目详情', '正在加载…');
+      return;
+    }
+    const project = detail.project;
+    // The project keeps its own name on the page; the header names the section, so the
+    // two never say the same thing twice.
+    setHeader(
+      '项目详情',
+      `${HEALTH_LABEL[project.health] ?? project.health} · ${project.sessionCount} 个会话 · ${project.pendingQuestions} 项待决策`,
+    );
+    return;
+  }
+  if (view === 'overview') {
+    const kpi = state.overview?.kpi;
+    setHeader('总览', kpi ? `${kpi.projects} 个项目 · ${kpi.active} 个在推进` : '正在加载…');
+    return;
+  }
+  if (view === 'inbox') {
+    const pending = (state.inbox ?? []).filter((item) => !item.acknowledged).length;
+    setHeader('决策收件箱', `${pending} 项待你处理`);
+    return;
+  }
+  if (view === 'skills') {
+    const scan = state.skills;
+    setHeader('能力库', scan ? `${scan.total} 个技能 · ${scan.groups.length} 个领域` : '正在加载…');
+    return;
+  }
+  setHeader('对话', '大哥的交班与对话');
+}
+
 function currentRoute() {
   const hash = window.location.hash.replace(/^#\/?/, '');
   const [name, param] = hash.split('/');
@@ -1023,6 +1216,8 @@ function showView(name) {
     if (link.dataset.nav === name) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');
   }
+  state.view = name;
+  renderHeaderContext();
 }
 
 async function renderRoute() {
@@ -1084,6 +1279,9 @@ async function refresh() {
     state.inbox = inbox.items ?? [];
     state.error = null;
     renderWarning(overview.dataWarning);
+    // The duty state is the one thing the header shows on every section, so it is read
+    // from the snapshot on its own — it must not wait for the rest of the board to change.
+    renderDutyStatus(overview.duty);
     if (overviewChanged(overview)) {
       renderKpi(overview);
       renderAttention(overview);
@@ -1113,6 +1311,7 @@ function connectStream() {
 
   eventSource.addEventListener('snapshot', (event) => {
     state.overview = JSON.parse(event.data);
+    renderDutyStatus(state.overview?.duty);
     if (overviewChanged(state.overview)) {
       renderKpi(state.overview);
       renderAttention(state.overview);
@@ -1124,6 +1323,7 @@ function connectStream() {
 
   eventSource.addEventListener('update', (event) => {
     state.overview = JSON.parse(event.data);
+    renderDutyStatus(state.overview?.duty);
     if (overviewChanged(state.overview)) {
       renderKpi(state.overview);
       renderAttention(state.overview);
@@ -1434,6 +1634,25 @@ el('chat-form').addEventListener('submit', (event) => {
   void sendChat(text);
 });
 
+/**
+ * Enter sends, Shift + Enter breaks the line.
+ *
+ * The board is written in Chinese, so the input is mostly used with an IME running. While
+ * a candidate is being composed, Enter belongs to the IME — it confirms the word, it does
+ * not send the message. `isComposing` and the legacy keyCode 229 are both checked for
+ * that reason.
+ */
+el('chat-input').addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter' || event.shiftKey || event.isComposing || event.keyCode === 229) return;
+  event.preventDefault();
+  const form = el('chat-form');
+  if (typeof form.requestSubmit === 'function') {
+    form.requestSubmit();
+    return;
+  }
+  form.dispatchEvent({ type: 'submit', preventDefault() {} });
+});
+
 el('chat-open-host').addEventListener('click', () => {
   void openBossInHostPanel();
 });
@@ -1447,6 +1666,11 @@ el('domain-nav').addEventListener('click', (event) => {
 
 el('inbox-filter').addEventListener('change', (event) => {
   state.filterProject = event.target.value;
+  renderInbox();
+});
+
+el('inbox-kind').addEventListener('change', (event) => {
+  state.filterKind = event.target.value;
   renderInbox();
 });
 
