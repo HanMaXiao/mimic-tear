@@ -124,6 +124,72 @@ if (command === 'manage') {
   process.exit(0);
 }
 
+if (command === 'duty-cron') {
+  // The pin that says which cron definition is the duty cron.
+  //
+  // The node side only reads `dutyCronId`; when the scheduler is re-pointed, the new
+  // definition has a new id, and this is the one place that can be updated properly —
+  // "remember to hand-edit the board's JSON" is not a procedure anyone keeps.
+  const action = positionalArgs()[1] ?? 'show';
+  const requestedId = positionalArgs()[2] ?? '';
+  try {
+    const { resolveDutyChain } = await import('./duty-chain.mjs');
+    const config = await patrol.getConfig();
+    const definitions = store.listCronDefinitions();
+    const chain = resolveDutyChain(definitions, { pinnedCronId: config.dutyCronId ?? null });
+    const pinnedDefinition = config.dutyCronId
+      ? definitions.find((d) => d.cronId === config.dutyCronId)
+      : null;
+    const pinnedStale = Boolean(pinnedDefinition?.deletedAt);
+
+    if (action === 'show') {
+      print({
+        pinnedCronId: config.dutyCronId ?? null,
+        chain: {
+          name: chain.name,
+          cronIds: chain.cronIds,
+          activeCronIds: chain.activeCronIds,
+          active: chain.active,
+          reason: chain.reason,
+          targetCronId: chain.targetCronId,
+          targetSessionId: chain.targetSessionId,
+        },
+        hint: pinnedStale
+          ? `钉住的 cron 已被删除（${new Date(pinnedDefinition.deletedAt).toISOString()}），请改成 ${chain.targetCronId ?? '（没有活着的同名 cron）'}`
+          : (config.dutyCronId
+            ? null
+            : `还没钉任何 cron；建议钉 ${chain.targetCronId ?? '（没有活着的同名 cron）'}`),
+      });
+    } else if (action === 'set') {
+      const target = String(requestedId ?? '').trim();
+      if (!target) throw new Error('用法：duty-cron set <cron-id>');
+      const definition = definitions.find((d) => d.cronId === target);
+      if (!definition) throw new Error(`没有这个 cron：${target}`);
+      if (definition.deletedAt) {
+        throw new Error(`这个 cron 已被删除（${new Date(definition.deletedAt).toISOString()}），`
+          + '钉它只会让心跳一直报 misconfigured');
+      }
+      const next = await patrol.setConfig({ dutyCronId: target });
+      print({
+        ok: true,
+        dutyCronId: next.dutyCronId,
+        name: definition.name,
+        targetSessionId: definition.targetSessionId,
+      });
+    } else {
+      process.stderr.write('用法：duty-cron | duty-cron set <cron-id>\n');
+      store.close();
+      process.exit(2);
+    }
+  } catch (error) {
+    process.stderr.write(`${error?.message ?? error}\n`);
+    store.close();
+    process.exit(2);
+  }
+  store.close();
+  process.exit(0);
+}
+
 if (command === 'facts') {
   const projects = store.listProjects();
   const visibleIds = new Set(projects.map((p) => p.id));
