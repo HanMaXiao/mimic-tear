@@ -25,6 +25,7 @@ import { readPlan } from './plan-store.mjs';
 import { buildDutyStatus, buildInbox, buildOrgTree, buildPatrolBrief, buildProjectCards } from './view-model.mjs';
 import { PatrolStore } from './patrol-store.mjs';
 import { Persistence } from './persistence.mjs';
+import { ManagedProjects } from './managed-projects.mjs';
 
 const args = process.argv.slice(2);
 const command = args.find((arg) => !arg.startsWith('--')) ?? 'facts';
@@ -56,9 +57,35 @@ function positionalArgs() {
 
 const store = RuntimeStore.open(dbPath);
 const patrol = new PatrolStore(dataDir);
+const managed = new ManagedProjects(dataDir);
 
 if (command === 'paths') {
-  print({ dataDir, dbPath, findings: patrol.findingsPath, answered: patrol.answeredPath, config: patrol.configPath });
+  print({ dataDir, dbPath, findings: patrol.findingsPath, answered: patrol.answeredPath, config: patrol.configPath, managed: managed.path });
+  store.close();
+  process.exit(0);
+}
+
+if (command === 'manage') {
+  const action = positionalArgs()[1] ?? 'list';
+  const name = positionalArgs()[2] ?? '';
+  const reason = positionalArgs().slice(3).join(' ');
+  try {
+    if (action === 'list') {
+      print({ managed: await managed.list() });
+    } else if (action === 'add') {
+      print({ managed: await managed.add(name, reason) });
+    } else if (action === 'remove') {
+      print({ managed: await managed.remove(name, reason) });
+    } else {
+      process.stderr.write('用法：manage list | manage add <项目名> "<大老板的原话>" | manage remove <项目名> "<理由>"\n');
+      store.close();
+      process.exit(2);
+    }
+  } catch (error) {
+    process.stderr.write(`${error?.message ?? error}\n`);
+    store.close();
+    process.exit(2);
+  }
   store.close();
   process.exit(0);
 }
@@ -162,6 +189,10 @@ if (command === 'facts') {
       answered: join(dataDir, 'patrol-answered.json'),
       db: dbPath,
     },
+    // Which projects the boss is allowed to manage. The user grants this explicitly; the
+    // boss never widens it on its own. Anything not on this list is out of bounds, however
+    // broken or long-idle it looks.
+    managed: await managed.list(),
     // What the boss already filed in earlier runs. Without this it would re-report the
     // same stuck project on every tick.
     alreadyReported: previousFindings.map((finding) => ({

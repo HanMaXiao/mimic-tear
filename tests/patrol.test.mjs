@@ -415,6 +415,32 @@ test('patrol', async (t) => {
     }
   });
 
+  await t.test('CLI 的 facts 带出管辖名单：大哥每轮都要知道自己管哪些项目', () => {
+    const dir = tmpDir();
+    const dbPath = makeRuntimeDb(dir);
+    const dataDir = join(dir, 'data');
+    try {
+      // Nobody has granted jurisdiction yet, so the list is empty — the boss must not
+      // assume it manages anything.
+      const empty = runCli(dbPath, dataDir);
+      assert.deepEqual(empty.managed, [], '没有授权就没有管辖');
+
+      // The user names a project; the boss may now manage it.
+      runCli(dbPath, dataDir, ['manage', 'add', 'Dungeon-Chesser', '大老板 2026-10-21 指示：让大哥盯 Dungeon-Chesser']);
+
+      const granted = runCli(dbPath, dataDir);
+      assert.equal(granted.managed.length, 1);
+      assert.equal(granted.managed[0].name, 'Dungeon-Chesser');
+      assert.match(granted.managed[0].reason, /大老板/, '名单必须带上大老板的原话');
+
+      // And the user takes it back.
+      runCli(dbPath, dataDir, ['manage', 'remove', 'Dungeon-Chesser', '大老板说这个项目先不用管']);
+      assert.deepEqual(runCli(dbPath, dataDir).managed, [], '撤销后名单要空');
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
   await t.test('报告解析：容忍格式偏差', () => {
     const parsed = parsePatrolReport([
       '巡检结论：两件事',
