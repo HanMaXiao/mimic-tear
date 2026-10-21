@@ -654,7 +654,10 @@ export async function start(context) {
   // board is open — the Mini App is on-demand — and that ceiling is the whole point of
   // `duty-heartbeat.mjs`: it covers "the board is open and the cron's chain broke", not
   // "the board is closed".
-  const { runDutyHeartbeat, DUTY_CRON_ID, HEARTBEAT_CHECK_INTERVAL_MS } = await import('./duty-heartbeat.mjs');
+  // The cron the heartbeat watches is resolved inside it, from `patrol-config.json`'s
+  // `dutyCronId` — the node side must not pin an id here: the scheduler re-points by
+  // creating a new definition, and a pinned id goes stale without saying so.
+  const { runDutyHeartbeat, HEARTBEAT_CHECK_INTERVAL_MS } = await import('./duty-heartbeat.mjs');
   const heartbeatTimer = setInterval(() => {
     void (async () => {
       try {
@@ -664,7 +667,6 @@ export async function start(context) {
           store,
           sessionId: stored?.sessionId ?? null,
           agent: context.agent ?? null,
-          cronId: DUTY_CRON_ID,
         });
       } catch (error) {
         context.logger.warn('mimic-tear.heartbeat.failed', { message: error?.message });
