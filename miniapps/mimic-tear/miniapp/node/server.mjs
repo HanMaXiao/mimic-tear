@@ -650,6 +650,29 @@ export async function start(context) {
   }, PATROL_CHECK_INTERVAL_MS);
   patrolTimer.unref?.();
 
+  // The duty heartbeat: a fallback for a broken host-side duty cron. It only runs while the
+  // board is open — the Mini App is on-demand — and that ceiling is the whole point of
+  // `duty-heartbeat.mjs`: it covers "the board is open and the cron's chain broke", not
+  // "the board is closed".
+  const { runDutyHeartbeat, DUTY_CRON_ID, HEARTBEAT_CHECK_INTERVAL_MS } = await import('./duty-heartbeat.mjs');
+  const heartbeatTimer = setInterval(() => {
+    void (async () => {
+      try {
+        const stored = await persistence.getBossSession();
+        await runDutyHeartbeat({
+          dataDir: context.dataDir,
+          store,
+          sessionId: stored?.sessionId ?? null,
+          agent: context.agent ?? null,
+          cronId: DUTY_CRON_ID,
+        });
+      } catch (error) {
+        context.logger.warn('mimic-tear.heartbeat.failed', { message: error?.message });
+      }
+    })();
+  }, HEARTBEAT_CHECK_INTERVAL_MS);
+  heartbeatTimer.unref?.();
+
   let disposed = false;
   const dispose = async () => {
     if (disposed) return;

@@ -517,6 +517,9 @@ export function computeDutyEvidence(input) {
       currentStale: Boolean(input?.currentStale),
       observedSlots: 0,
       coveredSlots: 0,
+      // The tail is empty too: with no handover at all there is nothing to be late about.
+      pendingTail: { slots: 0, since: null, runs: [] },
+      blankTail: { slots: 0, since: null, firstSlot: null },
     };
   }
 
@@ -555,15 +558,46 @@ export function computeDutyEvidence(input) {
   // Rounds scheduled after the last handover are not inside any gap: they are the failure
   // that is still going on, and the liveness verdict is what reports it.
   const lastDelivered = delivered[delivered.length - 1];
-  const trailingSlots = new Set(
-    pending.filter((run) => run.createdAt > lastDelivered).map((run) => slotOf(run.createdAt)),
-  );
+  const pendingTailRuns = pending.filter((run) => run.createdAt > lastDelivered);
+  const trailingSlots = new Set(pendingTailRuns.map((run) => slotOf(run.createdAt)));
+
+  // The tail splits into two kinds, and they need different answers:
+  //  - `pendingTail`: the scheduler created a run but never delivered it. The host knows
+  //    about that round and may still deliver it, so a second duty round for the same slot
+  //    would double the spend.
+  //  - `blankTail`: nobody created a run at all. Only these can be covered from outside,
+  //    because nobody is going to deliver them.
+  const lastSlot = slotOf(lastDelivered);
+  const nowSlot = slotOf(now);
+  const pendingSlots = new Set(pending.map((run) => slotOf(run.createdAt)));
+  const blankSlots = [];
+  for (let slot = lastSlot + 1; slot < nowSlot; slot += 1) {
+    if (pendingSlots.has(slot)) continue;
+    blankSlots.push(slot);
+  }
 
   const lastGap = gaps.length ? gaps[gaps.length - 1] : null;
 
   return {
     missedRounds: gaps.reduce((sum, gap) => sum + gap.missedRounds, 0) + trailingSlots.size,
     lastGap,
+    // The tail after the last handover, split by what the host did about it.
+    pendingTail: {
+      slots: trailingSlots.size,
+      since: pendingTailRuns.length ? Math.min(...pendingTailRuns.map((run) => run.createdAt)) : null,
+      runs: pendingTailRuns.map((run) => ({
+        runId: run.id,
+        status: run.status,
+        createdAt: run.createdAt,
+        retryAttempt: run.retryAttempt ?? 0,
+        error: run.error ?? null,
+      })),
+    },
+    blankTail: {
+      slots: blankSlots.length,
+      since: blankSlots.length ? anchor + blankSlots[0] * periodMs : null,
+      firstSlot: blankSlots.length ? blankSlots[0] : null,
+    },
     // The gap is still worth reporting when it ended inside the evidence window: that is
     // exactly the case where a late handover erased it.
     erasedOutage: Boolean(lastGap && lastGap.missedRounds > 0 && now - lastGap.to < evidenceWindowMs),

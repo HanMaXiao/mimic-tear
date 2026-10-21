@@ -116,7 +116,19 @@ export class ProjectService {
       intent,
       now: Date.now(),
     });
-    return { ...duty, watching: [...watching] };
+    // The duty heartbeat's own state: whether the host's cron chain is broken, and
+    // whether the heartbeat filled a slot nobody created. Only a new field — the board
+    // shows it, the client is untouched.
+    // The heartbeat's own state file — not the runtime database. The board polls the
+    // overview every few seconds, and a failed runtime read there would surface as a data
+    // warning on every poll; the heartbeat's five-minute tick is the right cadence for
+    // this anyway, and it writes what it saw.
+    const { getDutyHeartbeatStatus } = await import('./duty-heartbeat.mjs');
+    const heartbeat = await getDutyHeartbeatStatus({
+      dataDir: this.patrol?.dataDir ?? null,
+    });
+
+    return { ...duty, watching: [...watching], heartbeat };
   }
 
   /**
