@@ -920,6 +920,22 @@ th.numeric {
   border-color: var(--mcode-accent);
 }
 
+/* A line said in the Host chat side panel is marked, so the user can tell which of the two
+   views it came from. */
+.chat__from-host {
+  margin-left: 6px;
+  padding: 0 5px;
+  border: 1px solid var(--mcode-border);
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--mcode-text-muted);
+}
+
+.chat__msg--host .chat__bubble {
+  border-style: dashed;
+}
+
 /* The row above the composer: a way into the Host's own chat side panel. */
 .chat__actions {
   display: flex;

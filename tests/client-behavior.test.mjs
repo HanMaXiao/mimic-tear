@@ -280,6 +280,9 @@ async function loadClient(options = {}) {
     else if (path.startsWith('/api/projects')) payload = { projects: PROJECTS };
     else if (path.startsWith('/api/dispatch')) payload = { dispatchId: 'd1', status: 'queued' };
     else if (path.startsWith('/api/chat/session')) payload = { bossSessionId: 'mvs_boss_1', agent: 'boss' };
+    else if (path.startsWith('/api/chat/session')) payload = { bossSessionId: 'mvs_boss_1', agent: 'boss' };
+    else if (path.startsWith('/api/chat/history')) payload = { messages: [] };
+    else if (path.startsWith('/api/chat/duty')) payload = { rounds: [] };
     else if (path.startsWith('/api/chat')) payload = { status: 'started', bossSessionId: 'mvs_boss_1' };
     return { ok: true, status: 200, text: async () => JSON.stringify(payload) };
   };
@@ -837,6 +840,38 @@ test('client behavior (DOM shim)', async (t) => {
     // conversation off the screen.
     const openCount = (html.match(/<details[^>]*\sopen[^>]*>/g) || []).length;
     assert.equal(openCount, 1, '只有最新一轮展开');
+  });
+
+  await t.test('侧栏里说的话，Mini App 也能看到（两边是同一个会话）', async () => {
+    // The Host chat side panel and the Mini App show the same runtime session. The page
+    // must therefore show what was said in the panel — otherwise the two views disagree
+    // about the conversation, which is worse than either one alone.
+    const client = await loadClient();
+    await client.settle();
+
+    // The server pushes the transcript when the session changes.
+    client.fireSse('chat.history', {
+      messages: [
+        { id: 'm1', role: 'user', text: '从宿主侧栏说的话', source: 'communication', createdAt: 1000 },
+        { id: 'm2', role: 'assistant', text: '大哥在侧栏里的回复', source: 'communication', createdAt: 1100 },
+      ],
+    });
+    await client.settle();
+
+    const html = client.element('chat-log').innerHTML;
+    assert.match(html, /从宿主侧栏说的话/, '侧栏里说的话要出现在 Mini App 里');
+    assert.match(html, /大哥在侧栏里的回复/, '侧栏里大哥的回复也要出现');
+    // And it is marked, so the user can tell which view it came from.
+    assert.match(html, /chat__from-host/, '侧栏来的消息要有标记');
+  });
+
+  await t.test('页面刷新后对话记录还在（记录在运行时会话里，不在页面里）', async () => {
+    const client = await loadClient();
+    await client.settle();
+
+    // The page reads the transcript back on load.
+    const historyCall = client.calls.find((c) => c.url.startsWith('/api/chat/history'));
+    assert.ok(historyCall, '页面启动时必须拉一次会话历史');
   });
 
   await t.test('?theme=light 能强制浅色主题（发布出去的 CSS 本来就有这个钩子）', async () => {    const client = await loadClient({ search: '?theme=light' });

@@ -99,6 +99,17 @@ CREATE TABLE local_runtime_background_tasks (
   record_json TEXT,
   delivered_at_ms INTEGER
 );
+CREATE TABLE local_runtime_message_rows (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id TEXT,
+  msg_id TEXT,
+  role TEXT,
+  turn_id TEXT,
+  created_at_ms INTEGER,
+  data_json TEXT,
+  source TEXT,
+  source_context_json TEXT
+);
 `;
 
 /** Create an isolated temp directory. Caller is responsible for cleanup. */
@@ -211,6 +222,28 @@ export function makeRuntimeDb(dir) {
   tasks.run('bg-ok', 'sess-alpha-lead', 'bash', 'succeeded', 8000, 8500, 8500);
   tasks.run('bg-fail', 'sess-beta-lead', 'bash', 'failed', 7000, 7500, 7500);
   tasks.run('bg-cancel', 'sess-beta-lead', 'bash', 'canceled', 6000, 6500, 6500);
+
+  // Conversation rows. Two of them come through the Mini App's own channel and one through
+  // the Host chat — the same session, two doors in.
+  const messages = db.prepare(
+    `INSERT INTO local_runtime_message_rows
+       (session_id, msg_id, role, turn_id, created_at_ms, data_json, source)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const message = (content, at, source, role) => JSON.stringify({
+    msg_id: `m-${at}`,
+    role,
+    msg_type: 1,
+    timestamp: at,
+    msg_content: content,
+    turn_id: 'turn-1',
+  });
+  messages.run('sess-alpha-lead', 'm-1', 'user', 'turn-1', 1000,
+    message('从 Mini App 说的话', 1000, 'miniapp', 'user'), 'miniapp');
+  messages.run('sess-alpha-lead', 'm-2', 'assistant', 'turn-1', 1100,
+    message('大哥的回复', 1100, 'miniapp', 'assistant'), 'miniapp');
+  messages.run('sess-alpha-lead', 'm-3', 'user', 'turn-2', 2000,
+    message('从宿主侧栏说的话', 2000, 'communication', 'user'), 'communication');
 
   db.close();
   return dbPath;

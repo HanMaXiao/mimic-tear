@@ -22,6 +22,7 @@ const API = {
   chatAnswer: '/api/chat/answer',
   chatSession: '/api/chat/session',
   chatDuty: '/api/chat/duty',
+  chatHistory: '/api/chat/history',
   stream: '/api/stream',
 };
 
@@ -44,7 +45,20 @@ const state = {
   // being written right now; `question` is the questionnaire the boss is waiting on.
   // `bossSessionId` is the boss's own session, needed to open the same conversation in the
   // Host's chat side panel.
-  chat: { messages: [], streaming: null, tools: [], question: null, answers: {}, bossSessionId: null, duty: [] },
+  //
+  // `transcript` is the authoritative list, read back from the runtime session. The Host
+  // chat side panel writes to the same session, so the transcript is what keeps the two
+  // views in step — and what makes the conversation survive a page reload.
+  chat: {
+    messages: [],
+    streaming: null,
+    tools: [],
+    question: null,
+    answers: {},
+    bossSessionId: null,
+    duty: [],
+    transcript: [],
+  },
 };
 
 const el = (id) => document.getElementById(id);
@@ -699,8 +713,8 @@ function chatMessageHtml(message) {
     .map((tool) => `<span class="chat__tool${tool.ok === false ? ' chat__tool--failed' : ''}">${escapeHtml(tool.name)}</span>`)
     .join('');
   return `
-    <article class="chat__msg chat__msg--${mine ? 'me' : 'boss'}">
-      <span class="chat__who">${mine ? '你' : '大哥'}</span>
+    <article class="chat__msg chat__msg--${mine ? 'me' : 'boss'}${message.fromHost ? ' chat__msg--host' : ''}">
+      <span class="chat__who">${mine ? '你' : '大哥'}${message.fromHost ? '<span class="chat__from-host">侧栏</span>' : ''}</span>
       <div class="chat__bubble">${escapeHtml(message.text || '').replace(/\n/g, '<br />')}</div>
       ${tools ? `<div class="chat__tools">${tools}</div>` : ''}
     </article>`;
@@ -760,16 +774,31 @@ function selectChatOption(stepId, optionId) {
 function renderChat() {
   const log = el('chat-log');
   if (!log) return;
-  const { messages, streaming } = state.chat;
+  const { streaming } = state.chat;
+  // The transcript from the runtime session is the truth: the Host chat side panel writes
+  // to the same session, so anything said there belongs in this list. The locally-held
+  // `messages` are the optimistic bubbles (a message you just sent, shown before the
+  // runtime has committed it) and are drawn on top.
+  const transcript = state.chat.transcript.map((m) => ({
+    role: m.role === 'user' ? 'user' : 'boss',
+    text: m.text,
+    fromHost: m.source === 'communication',
+  }));
+  // The optimistic bubbles may still be around when the transcript already contains the
+  // same lines (the runtime commits a turn a moment after it finishes). Showing both would
+  // double every line, so a local bubble whose text is already in the transcript is dropped.
+  const inTranscript = new Set(transcript.map((m) => `${m.role} ${m.text}`));
+  const local = state.chat.messages.filter((m) => !inTranscript.has(`${m.role} ${m.text ?? ''}`));
+  const shown = [...transcript, ...local];
   let html;
-  if (!messages.length) {
+  if (!shown.length) {
     html = `
       <div class="chat__intro">
         <p>大哥在。</p>
         <p class="chat__intro-hint">告诉他哪个项目有什么需求、要盯紧谁、什么时候开始、什么时候停。他做的事会直接出现在这里——他在哪个项目上动了什么、给谁派了工。</p>
       </div>`;
   } else {
-    html = messages.map(chatMessageHtml).join('');
+    html = shown.map(chatMessageHtml).join('');
   }
   // The tools show up while the turn is still running: "seeing what the boss is doing"
   // means seeing it now, not after it finishes. A tool call can also arrive before the
@@ -794,6 +823,30 @@ function renderChat() {
   // they happened whether or not anyone was talking to it.
   const duty = el('chat-duty');
   if (duty) duty.innerHTML = dutyRoundsHtml(state.chat.duty);
+}
+
+/**
+ * Load the conversation from the runtime session.
+ *
+ * The transcript is the Host's. The side panel and this page show the same session, so
+ * reading it back is what keeps the two views in step — and what makes the conversation
+ * survive a reload.
+ *
+ * @param {{ keepLocal?: boolean }} [options] `keepLocal` leaves the optimistic bubbles in
+ *   place — used right after a turn ends, while the runtime may not have committed the
+ *   exchange yet.
+ */
+async function loadChatHistory(options = {}) {
+  try {
+    const payload = await request(API.chatHistory);
+    state.chat.transcript = Array.isArray(payload?.messages) ? payload.messages : [];
+    // The runtime now holds the committed exchange, so the optimistic bubbles have served
+    // their purpose — keeping them would show every line twice.
+    if (!options.keepLocal) state.chat.messages = [];
+  } catch {
+    state.chat.transcript = [];
+  }
+  renderChat();
 }
 
 /**
@@ -1082,6 +1135,17 @@ function connectStream() {
     void refreshProjectIfVisible();
   });
 
+  eventSource.addEventListener('chat.history', (event) => {
+    // Something was said in the conversation — possibly in the Host chat side panel, which
+    // writes to the same session but does not go through this page's SSE. The transcript
+    // is re-read so both views show the same thing.
+    const payload = JSON.parse(event.data);
+    state.chat.transcript = Array.isArray(payload?.messages) ? payload.messages : [];
+    // The local optimistic bubbles have been committed to the session by now.
+    state.chat.messages = [];
+    renderChat();
+  });
+
   eventSource.addEventListener('duty', (event) => {
     // A duty round happened while the board was open. The rounds are the user seeing the
     // boss walk between projects, so they belong in the conversation, not only in the inbox.
@@ -1155,6 +1219,11 @@ function connectStream() {
     state.chat.streaming = null;
     state.chat.tools = [];
     renderChat();
+    // The turn is over, so the runtime now holds the committed exchange. Re-read it: the
+    // transcript is the truth, and the local bubbles were only ever a stand-in for it.
+    // The local bubbles are kept until the transcript actually contains this turn, so a
+    // slow commit does not make the reply vanish.
+    void loadChatHistory({ keepLocal: true });
     void refresh();
   });
 
@@ -1481,4 +1550,5 @@ renderChat();
 void renderRoute();
 void loadPatrolConfig();
 void loadDutyRounds();
+void loadChatHistory();
 connectStream();

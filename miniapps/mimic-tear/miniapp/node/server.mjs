@@ -5,6 +5,7 @@ import { extname, join, normalize, resolve, sep } from 'node:path';
 
 import { boardPatrolAction, isPatrolDue, stampBoardPatrol } from './patrol-scheduler.mjs';
 import { dutyAnnouncementNeeded } from './duty-announce.mjs';
+import { chatHistoryChanged } from './chat-history.mjs';
 
 /**
  * The Mini App's HTTP surface: a small REST API plus one SSE stream, and the static Client.
@@ -266,6 +267,15 @@ export function createApp(deps) {
         // never shows the rounds — and the rounds are the user seeing the boss work.
         const rounds = await service.getDutyRounds();
         sendJson(response, 200, { rounds });
+        return;
+      }
+
+      if (pathname === '/api/chat/history' && method === 'GET') {
+        // The transcript lives in the runtime, not in the Mini App. Reading it back is what
+        // lets the page show what was said in the Host chat side panel — and what makes the
+        // conversation survive a reload.
+        const messages = await service.getChatHistory();
+        sendJson(response, 200, { messages });
         return;
       }
 
@@ -538,12 +548,25 @@ export async function start(context) {
   context.logger.info('mimic-tear.runtime.listening', { port: context.listen.port });
 
   // Poll the runtime revision and push a new snapshot when anything changed.
+  //
+  // The conversation is watched separately: a message said in the Host chat side panel does
+  // not move the runtime revision (no session, goal or task changed), so the revision alone
+  // would never notice it. The message count is the cheap detector for "something was said".
   let lastRevision = service.currentRevision();
+  let lastChatMessageCount = 0;
   const timer = setInterval(() => {
     void (async () => {
       try {
         const revision = service.currentRevision();
-        if (revision === lastRevision) return;
+        if (revision === lastRevision) {
+          // The revision is quiet, but the conversation may not be.
+          const chatCount = await service.getChatMessageCount();
+          if (chatHistoryChanged(chatCount, lastChatMessageCount).changed) {
+            lastChatMessageCount = chatCount;
+            app.broadcast('chat.history', { messages: await service.getChatHistory() });
+          }
+          return;
+        }
         lastRevision = revision;
         const overview = await service.getOverview();
         app.broadcast('update', overview);

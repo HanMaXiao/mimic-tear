@@ -59,6 +59,42 @@ const REVISION_SQL = `
     (SELECT COALESCE(MAX(latest_activity_at_ms), 0) FROM local_runtime_projects) AS project_max
 `;
 
+/**
+ * Conversation rows for one session.
+ *
+ * The transcript lives in the runtime database, not in the Mini App. That is what makes the
+ * Host chat side panel and the Mini App two views of one thread: the panel shows the same
+ * session, and the Mini App can read back what was said there.
+ */
+const MESSAGE_SQL = `
+  SELECT msg_id, role, turn_id, created_at_ms, data_json, source
+    FROM local_runtime_message_rows
+   WHERE session_id = ?
+   ORDER BY created_at_ms ASC
+`;
+
+/**
+ * Pull the readable text out of a stored message payload.
+ *
+ * The payload is JSON with the body under `msg_content`, but a malformed row must not
+ * take the whole transcript down — an unreadable message becomes an empty one.
+ *
+ * @param {unknown} dataJson
+ * @returns {string}
+ */
+function extractMessageText(dataJson) {
+  if (typeof dataJson !== 'string' || !dataJson) return '';
+  try {
+    const parsed = JSON.parse(dataJson);
+    if (parsed && typeof parsed.msg_content === 'string') return parsed.msg_content;
+    if (parsed && typeof parsed.content === 'string') return parsed.content;
+    if (typeof parsed === 'string') return parsed;
+    return '';
+  } catch {
+    return '';
+  }
+}
+
 export class RuntimeStore {
   /** @type {DatabaseSync | null} */
   #db = null;
@@ -217,6 +253,51 @@ export class RuntimeStore {
         endedAt: row.ended_at_ms,
       }),
     );
+  }
+
+  /**
+   * The conversation of one session, oldest first.
+   *
+   * Only the plain text of each message is kept: the raw payload also carries thinking,
+   * token accounting and context telemetry, none of which belongs on the page.
+   *
+   * @param {string} sessionId
+   * @returns {Array<{id:string, role:string, text:string, source:string, createdAt:number}>}
+   */
+  listSessionMessages(sessionId) {
+    const id = String(sessionId ?? '').trim();
+    if (!id) return [];
+    return this.#query(MESSAGE_SQL, [id], (row) => ({
+      id: row.msg_id ?? '',
+      role: row.role ?? '',
+      text: extractMessageText(row.data_json),
+      // 'miniapp' = said through the Mini App; 'communication' = said in the Host chat.
+      source: row.source ?? '',
+      createdAt: row.created_at_ms ?? 0,
+    }));
+  }
+
+  /**
+   * How many messages a session holds.
+   *
+   * This is the cheap change detector: a count that moves means something was said, whether
+   * in the Mini App or in the Host chat side panel.
+   *
+   * @param {string} sessionId
+   * @returns {number}
+   */
+  countSessionMessages(sessionId) {
+    const id = String(sessionId ?? '').trim();
+    if (!id || !this.#db) return 0;
+    try {
+      const row = this.#db
+        .prepare('SELECT COUNT(*) AS c FROM local_runtime_message_rows WHERE session_id = ?')
+        .get(id);
+      return Number(row?.c ?? 0);
+    } catch (error) {
+      this.#error = `读取会话消息数失败：${error?.message ?? String(error)}`;
+      return 0;
+    }
   }
 
   /**

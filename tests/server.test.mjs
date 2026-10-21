@@ -37,6 +37,22 @@ function makeFakeService() {
     async getDispatch(id) {
       return id === 'd1' ? { id: 'd1', status: 'done' } : null;
     },
+    async getChatHistory() {
+      return [
+        { id: 'm1', role: 'user', text: '从宿主侧栏说的话', source: 'communication', createdAt: 1000 },
+        { id: 'm2', role: 'assistant', text: '大哥在侧栏里的回复', source: 'communication', createdAt: 1100 },
+      ];
+    },
+    async getChatMessageCount() {
+      return 2;
+    },
+    async getDutyRounds() {
+      return [{
+        startedAt: 1792507304400,
+        findings: [{ id: 'p1', severity: 'high', title: '一条交班结论', projectName: 'alpha', acknowledged: false, acknowledgedBy: null }],
+        counts: { high: 1, medium: 0, low: 0 },
+      }];
+    },
     async prepareDispatch(body) {
       if (!body?.instruction) {
         const error = new Error('下达的指令不能为空');
@@ -308,6 +324,34 @@ test('server', async (t) => {
       assert.ok(Array.isArray(payload.rounds), '要返回轮次数组');
       assert.equal(payload.rounds.length, 1);
       assert.equal(payload.rounds[0].findings[0].title, '一条交班结论');
+    } finally {
+      await server.close();
+    }
+  });
+
+  await t.test('会话历史接口：侧栏里说的话要能读出来', async () => {
+    const server = await startTestServer();
+    try {
+      const response = await get(server.port, '/api/chat/history');
+      assert.equal(response.status, 200);
+      const payload = await response.json();
+      assert.ok(Array.isArray(payload.messages), '要返回消息数组');
+      assert.equal(payload.messages.length, 2);
+      // The source tells the page which view a line came from.
+      assert.equal(payload.messages[0].source, 'communication');
+      assert.equal(payload.messages[0].text, '从宿主侧栏说的话');
+    } finally {
+      await server.close();
+    }
+  });
+
+  await t.test('值班交班汇报：接口能拿到轮次', async () => {
+    const server = await startTestServer();
+    try {
+      const response = await get(server.port, '/api/chat/duty');
+      assert.equal(response.status, 200);
+      const payload = await response.json();
+      assert.ok(Array.isArray(payload.rounds), '要返回轮次数组');
     } finally {
       await server.close();
     }

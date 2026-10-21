@@ -115,6 +115,37 @@ export class ProjectService {
   }
 
   /**
+   * The boss's conversation, read back from the runtime.
+   *
+   * The transcript is the Host's, not the Mini App's: the same session shows up in the
+   * Host chat side panel and here. Reading it back is what lets the Mini App show what was
+   * said in the side panel — and what makes the transcript survive a page reload.
+   *
+   * @returns {Promise<Array<{id:string, role:string, text:string, source:string, createdAt:number}>>}
+   */
+  async getChatHistory() {
+    const stored = await this.persistence.getBossSession();
+    if (!stored?.sessionId) return [];
+    const messages = this.store.listSessionMessages(stored.sessionId);
+    // The boss's own turns are the interesting half; the user's side is already on screen.
+    return messages;
+  }
+
+  /**
+   * How many messages the boss's session holds.
+   *
+   * The count is the cheap change detector: when it moves, something was said — in the
+   * Mini App or in the Host chat side panel.
+   *
+   * @returns {Promise<number>}
+   */
+  async getChatMessageCount() {
+    const stored = await this.persistence.getBossSession();
+    if (!stored?.sessionId) return 0;
+    return this.store.countSessionMessages(stored.sessionId);
+  }
+
+  /**
    * Update the boss's proactive patrol settings.
    * @param {{ enabled?: boolean, intervalMinutes?: number }} patch
    */
