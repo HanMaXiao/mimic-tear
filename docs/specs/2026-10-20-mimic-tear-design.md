@@ -1857,5 +1857,7 @@ node 侧**没有写 cron 状态的能力**（§26.2 的约束：运行时库只�
 | `patrol-cli facts` 的 `duty` 块 | `mode=on-duty` / `resting=false` / `nextDueAt` / `overdueMinutes=0` / `watching=["Mimic Tear"]` |
 | 项目卡的 `duty` 块 | `mode` / `resting` / `since` / `requestedBy` / `watching` |
 | 意图文件默认行为 | 不存在 → `on-duty`；坏 JSON → `on-duty`；写完不留临时文件 |
+| 已发布副本 `~/.minimax/plugins/mimic-tear` | **同步前落后 8 个文件**（含 10-22 02:52 那次「废键自愈」修复 `patrol-store.mjs`，一直没发布）→ 同步后与仓库**逐字节一致（0 处不一致）** |
+| 实机自检 | 写 `resting` → 已发布 watchdog 读到 `mode=resting` / `action=none` → 复位 `on-duty` |
 | 全量测试 | **271 项全绿**（251 既有 + 20 新增，四个新文件） |
 | 提交 | `3e5ae4a` 意图文件 / `d894889` 事实表与项目卡 / `00ff638` 写意图的路由 / `29752ca` watchdog 认歇着 |
