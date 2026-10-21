@@ -291,6 +291,22 @@ test('D2：钉着活着的 cron 时，判定与按活 cron 手工算的一致', 
   assert.deepEqual(chain.cronIds.sort(), ['live-cron', 'old-cron']);
 });
 
+test('D2：内置种子已删、配置没钉时，不该报 misconfigured', () => {
+  // The built-in seed points at a definition that has since been deleted. It is only a
+  // hint for finding the family — treating it as a pin would make every install that has
+  // not pinned anything yet report "misconfigured" and stop the heartbeat.
+  const definitions = [
+    { cronId: '672fde94-0c52-466d-831e-e2919f49b64a', name: '大哥值班巡检', deletedAt: NOW - 60 * MINUTE, targetSessionId: 'mvs_old', schedulerId: 'sched-old' },
+    { cronId: 'live-cron', name: '大哥值班巡检', deletedAt: null, targetSessionId: 'mvs_live', schedulerId: 'sched-live' },
+  ];
+  const chain = resolveDutyChain(definitions, { seedCronId: '672fde94-0c52-466d-831e-e2919f49b64a' });
+
+  assert.equal(chain.active, true, '种子不是钉子：没钉就该按名字找活的那个');
+  assert.equal(chain.reason, 'ok');
+  assert.equal(chain.targetCronId, 'live-cron');
+  assert.equal(chain.pinnedCronId, null);
+});
+
 test('D2：不钉任何 id 时，按名字找到活着的那个', () => {
   const chain = resolveDutyChain(DEFINITIONS, {});
   assert.equal(chain.active, true);
