@@ -22,7 +22,7 @@ import { join, resolve } from 'node:path';
 
 import { RuntimeStore } from './runtime-store.mjs';
 import { readPlan } from './plan-store.mjs';
-import { buildDutyStatus, buildInbox, buildOrgTree, buildPatrolBrief, buildProjectCards } from './view-model.mjs';
+import { buildDutyStatus, buildInbox, buildOrgTree, buildPatrolBrief, buildProjectCards, projectName } from './view-model.mjs';
 import { PatrolStore } from './patrol-store.mjs';
 import { Persistence } from './persistence.mjs';
 import { ManagedProjects } from './managed-projects.mjs';
@@ -71,11 +71,35 @@ if (command === 'manage') {
   const reason = positionalArgs().slice(3).join(' ');
   try {
     if (action === 'list') {
-      print({ managed: await managed.list() });
+      print({ managed: await managedList() });
     } else if (action === 'add') {
-      print({ managed: await managed.add(name, reason) });
+      const resolution = resolveProject(name, store.listProjects());
+      if (!resolution.project) {
+        // A grant that names nothing governs nothing, and the boss would never find out:
+        // it would just report "当前无管辖项目" every round. Refuse, and say what does exist.
+        const known = [...new Set(store.listProjects().map((project) => projectName(project.workspaceDir)))];
+        const hint = resolution.candidates.length
+          ? `名字像是这些：${resolution.candidates.join(' / ')}`
+          : `当前的项目名有：${known.join(' / ')}`;
+        throw new Error(`没有叫「${name}」的项目，这份授权会落空。${hint}`);
+      }
+      const list = await managed.add(name, reason, {
+        projectId: resolution.project.id,
+        path: resolution.project.path,
+      });
+      print({ ok: true, granted: resolution.project.name, path: resolution.project.path, managed: list });
     } else if (action === 'remove') {
-      print({ managed: await managed.remove(name, reason) });
+      const before = await managed.list();
+      const onList = before.some((entry) => entry.name === String(name ?? '').trim());
+      const list = await managed.remove(name, reason);
+      // Revoking by a name that is not on the list changes nothing. That is idempotent, but
+      // it is also how a typo leaves the jurisdiction in place — so say it out loud.
+      print({
+        ok: true,
+        removed: onList,
+        managed: list,
+        warning: onList ? null : `名单里没有「${name}」，什么都没变——核对项目名是否逐字一致`,
+      });
     } else {
       process.stderr.write('用法：manage list | manage add <项目名> "<大老板的原话>" | manage remove <项目名> "<理由>"\n');
       store.close();
@@ -112,6 +136,41 @@ if (command === 'facts') {
   const answered = await patrol.listAnswered();
   const answeredIds = new Set(answered.map((item) => item.requestId));
   const previousFindings = await patrol.list();
+
+  // The jurisdiction list, each entry resolved against the live project set. A grant whose
+  // name no longer points at a project is shown as `matched: false` — the boss has to be
+  // able to see that its authority is empty without guessing.
+  const managedEntries = await managedList();
+  const managedNames = new Set(
+    managedEntries.filter((entry) => entry.matched).map((entry) => entry.projectName ?? entry.name),
+  );
+
+  // The sessions the boss may talk to. Without these a grant is just a name on a list:
+  // the boss would have to dig through the runtime to find out who to send a message to.
+  const goalBySession = new Map(goals.map((goal) => [goal.sessionId, goal]));
+  const ownerSessionsByProject = new Map();
+  for (const card of cards) {
+    ownerSessionsByProject.set(
+      card.id,
+      sessions
+        .filter((session) => session.projectId === card.id)
+        .map((session) => {
+          const goal = goalBySession.get(session.id);
+          return {
+            id: session.id,
+            title: session.title,
+            agentName: session.agentName,
+            status: session.status,
+            updatedAt: session.updatedAt,
+            isRoot: session.parentSessionId == null,
+            visibility: session.visibility,
+            goalId: goal?.id ?? null,
+            goalStatus: goal?.status ?? null,
+            goalObjective: goal ? String(goal.objective).slice(0, 100) : null,
+          };
+        }),
+    );
+  }
 
   const sessionById = new Map(sessions.map((s) => [s.id, s]));
   const projectById = new Map(projects.map((p) => [p.id, p]));
@@ -192,7 +251,7 @@ if (command === 'facts') {
     // Which projects the boss is allowed to manage. The user grants this explicitly; the
     // boss never widens it on its own. Anything not on this list is out of bounds, however
     // broken or long-idle it looks.
-    managed: await managed.list(),
+    managed: managedEntries,
     // What the boss already filed in earlier runs. Without this it would re-report the
     // same stuck project on every tick.
     alreadyReported: previousFindings.map((finding) => ({
@@ -221,16 +280,33 @@ if (command === 'facts') {
       answeredAt: item.answeredAt,
       answer: item.answer,
     })),
-    projects: cards.map((card) => ({
-      id: card.id,
-      name: card.name,
-      path: card.path,
-      health: card.health,
-      sessions: card.sessionCount,
-      pendingQuestions: card.pendingQuestions,
-      erroredSessions: card.erroredSessions,
-      lastActivityAt: card.lastActivityAt,
-    })),
+    projects: cards.map((card) => {
+      const inScope = managedNames.has(card.name);
+      const ownerSessions = ownerSessionsByProject.get(card.id) ?? [];
+      // The default target: the most recently active root session. The boss still judges
+      // which one is the right one — this is a starting point, not an answer.
+      const ownerSessionId = ownerSessions.find((session) => session.isRoot)?.id ?? null;
+      return {
+        id: card.id,
+        name: card.name,
+        path: card.path,
+        health: card.health,
+        sessions: card.sessionCount,
+        pendingQuestions: card.pendingQuestions,
+        erroredSessions: card.erroredSessions,
+        lastActivityAt: card.lastActivityAt,
+        // Is this project inside the boss's jurisdiction?
+        managed: inScope,
+        ...(inScope
+          ? {
+            ownerSessionId,
+            // The sessions the boss may talk to. Only in-scope projects carry them — a grant
+            // outside the jurisdiction is not something to act on.
+            ownerSessions,
+          }
+          : {}),
+      };
+    }),
     decisions: runtimeItems.map((item) => ({
       id: item.id,
       kind: item.kind,
@@ -337,6 +413,63 @@ process.exit(2);
 
 function print(value) {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+/**
+ * Resolve a project name the way the board names it: the last path segment of the workspace.
+ *
+ * The jurisdiction list matches on that name, so a name that resolves to nothing is a grant
+ * that silently governs nothing — the boss would dutifully report "当前无管辖项目" every round
+ * without ever learning that the name was the problem. So the CLI refuses such a grant
+ * instead of accepting it.
+ *
+ * @param {string} name
+ * @param {Array<{ id:number, workspaceDir:string }>} projects
+ * @returns {{ project: { id:number, name:string, path:string }|null, candidates: string[] }}
+ */
+function resolveProject(name, projects) {
+  const wanted = String(name ?? '').trim();
+  const rows = (projects ?? []).map((project) => ({
+    id: project.id,
+    name: projectName(project.workspaceDir),
+    path: project.workspaceDir,
+  }));
+  const exact = rows.find((row) => row.name === wanted) ?? null;
+  if (exact) return { project: exact, candidates: [] };
+
+  // Only useful when the name is close but not right: same letters, different case, or one
+  // name inside the other. A wild guess is worse than none.
+  const needle = wanted.toLowerCase();
+  const candidates = rows
+    .map((row) => row.name)
+    .filter((candidate) => {
+      const lower = candidate.toLowerCase();
+      return lower === needle || lower.includes(needle) || needle.includes(lower);
+    });
+  return { project: null, candidates: [...new Set(candidates)] };
+}
+
+/**
+ * The jurisdiction list, each entry resolved against the live project set.
+ *
+ * `matched: false` means the grant names something that is not a project — the boss has
+ * authority over nothing there, and must say so instead of quietly doing nothing.
+ *
+ * @returns {Promise<Array<object>>}
+ */
+async function managedList() {
+  const entries = await managed.list();
+  const projects = store.listProjects();
+  return entries.map((entry) => {
+    const resolved = resolveProject(entry.name, projects);
+    return {
+      ...entry,
+      matched: resolved.project !== null,
+      projectId: resolved.project?.id ?? entry.projectId ?? null,
+      projectName: resolved.project?.name ?? null,
+      path: resolved.project?.path ?? entry.path ?? null,
+    };
+  });
 }
 
 function extractQuestion(requestJson) {

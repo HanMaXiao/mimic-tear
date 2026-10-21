@@ -33,6 +33,21 @@ function runCli(dbPath, dataDir, args = ['facts']) {
   return JSON.parse(stdout);
 }
 
+/**
+ * Run the CLI expecting it to fail, and hand back what it said.
+ *
+ * A refused grant is a real outcome the boss has to be able to read, so the refusal
+ * carries as much meaning as the grant.
+ */
+function runCliExpectFailure(dbPath, dataDir, args) {
+  try {
+    runCli(dbPath, dataDir, args);
+  } catch (error) {
+    return { status: error.status ?? 1, stderr: String(error.stderr ?? ''), stdout: String(error.stdout ?? '') };
+  }
+  throw new Error('命令本该失败，却成功了');
+}
+
 function makeService(bossOverrides = {}) {
   const dir = tmpDir();
   const dbPath = makeRuntimeDb(dir);
@@ -426,16 +441,102 @@ test('patrol', async (t) => {
       assert.deepEqual(empty.managed, [], '没有授权就没有管辖');
 
       // The user names a project; the boss may now manage it.
-      runCli(dbPath, dataDir, ['manage', 'add', 'Dungeon-Chesser', '大老板 2026-10-21 指示：让大哥盯 Dungeon-Chesser']);
+      runCli(dbPath, dataDir, ['manage', 'add', 'alpha', '大老板 2026-10-21 指示：让大哥盯 alpha']);
 
       const granted = runCli(dbPath, dataDir);
       assert.equal(granted.managed.length, 1);
-      assert.equal(granted.managed[0].name, 'Dungeon-Chesser');
+      assert.equal(granted.managed[0].name, 'alpha');
       assert.match(granted.managed[0].reason, /大老板/, '名单必须带上大老板的原话');
 
       // And the user takes it back.
-      runCli(dbPath, dataDir, ['manage', 'remove', 'Dungeon-Chesser', '大老板说这个项目先不用管']);
+      runCli(dbPath, dataDir, ['manage', 'remove', 'alpha', '大老板说这个项目先不用管']);
       assert.deepEqual(runCli(dbPath, dataDir).managed, [], '撤销后名单要空');
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  await t.test('授权给了一个不存在的项目名：必须当场拒绝，不能静默落空', () => {
+    const dir = tmpDir();
+    const dbPath = makeRuntimeDb(dir);
+    const dataDir = join(dir, 'data');
+    try {
+      // A grant that names nothing governs nothing, and the boss would only ever report
+      // "当前无管辖项目" without ever learning the name was the problem. Refuse it.
+      const failure = runCliExpectFailure(dbPath, dataDir, [
+        'manage', 'add', 'Dungeon-Chesser', '大老板 2026-10-21 指示：让大哥盯 Dungeon-Chesser',
+      ]);
+      assert.equal(failure.status, 2, '名字对不上要报错退出');
+      assert.match(failure.stderr, /落空|没有叫/, '错误信息要说清授权没落地');
+      assert.deepEqual(runCli(dbPath, dataDir).managed, [], '失败的授权不能留在名单上');
+
+      // The correct name still works.
+      runCli(dbPath, dataDir, ['manage', 'add', 'alpha', '大老板指示']);
+      assert.equal(runCli(dbPath, dataDir).managed.length, 1);
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  await t.test('授权要能对上项目：名单带出匹配结果，落在哪个项目上一目了然', () => {
+    const dir = tmpDir();
+    const dbPath = makeRuntimeDb(dir);
+    const dataDir = join(dir, 'data');
+    try {
+      runCli(dbPath, dataDir, ['manage', 'add', 'alpha', '大老板指示']);
+
+      const granted = runCli(dbPath, dataDir);
+      assert.equal(granted.managed[0].matched, true, '这份授权要落在真实项目上');
+      assert.equal(granted.managed[0].projectName, 'alpha');
+      assert.equal(granted.managed[0].projectId, 1);
+      assert.equal(granted.managed[0].path, 'D:/projects/alpha');
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  await t.test('撤销一个不存在的名字：什么都不变，但要说出"没变"', () => {
+    const dir = tmpDir();
+    const dbPath = makeRuntimeDb(dir);
+    const dataDir = join(dir, 'data');
+    try {
+      runCli(dbPath, dataDir, ['manage', 'add', 'alpha', '大老板指示']);
+      // A typo in a revocation leaves the jurisdiction in place — the boss keeps managing
+      // a project the user thought they had released. The command must say so.
+      const result = runCli(dbPath, dataDir, ['manage', 'remove', 'Alpah', '大老板说不用管了']);
+      assert.equal(result.removed, false, '名字不在名单上就是没撤销');
+      assert.match(result.warning ?? '', /什么都没变/, '要说清撤销没有生效');
+      assert.equal(runCli(dbPath, dataDir).managed.length, 1, '原授权必须还在');
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  await t.test('管辖范围内的项目要能查出该跟谁说话：ownerSessions 带着会话 id', () => {
+    const dir = tmpDir();
+    const dbPath = makeRuntimeDb(dir);
+    const dataDir = join(dir, 'data');
+    try {
+      runCli(dbPath, dataDir, ['manage', 'add', 'alpha', '大老板指示']);
+
+      const facts = runCli(dbPath, dataDir);
+      const alpha = facts.projects.find((project) => project.name === 'alpha');
+      const beta = facts.projects.find((project) => project.name === 'beta');
+
+      assert.equal(alpha.managed, true, '在名单里的项目要标出来');
+      assert.equal(beta.managed, false, '不在名单里的项目不算管辖范围');
+      assert.equal(beta.ownerSessions, undefined, '名单外的项目不带会话入口——那是越权的入口');
+
+      // The boss needs the session id to send a message to; a name on a list is not a door.
+      const ids = alpha.ownerSessions.map((session) => session.id);
+      assert.ok(ids.includes('sess-alpha-lead'), '要带出主会话的 id');
+      assert.equal(alpha.ownerSessionId, 'sess-alpha-lead', '默认对接对象是主会话');
+
+      const lead = alpha.ownerSessions.find((session) => session.id === 'sess-alpha-lead');
+      assert.equal(lead.isRoot, true, '要能分出主会话和子任务');
+      assert.equal(lead.status, 'started');
+      assert.equal(lead.goalId, 'goal-1', '要带着 goal，才能判断这条线在跑什么');
+      assert.equal(lead.goalStatus, 'active');
     } finally {
       cleanupDir(dir);
     }

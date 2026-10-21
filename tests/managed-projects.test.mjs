@@ -79,4 +79,23 @@ test('managed projects (jurisdiction)', async (t) => {
     writeFileSync(join(store.dataDir, 'managed-projects.json'), '{ this is not json', 'utf8');
     assert.deepEqual(await store.list(), []);
   });
+
+  await t.test('授权要记下落在哪个项目上：名字对上了，指向也得留着', async () => {
+    const store = makeStore();
+    await store.add('alpha', '大老板指示', { projectId: 1, path: 'D:/projects/alpha' });
+    const list = await store.list();
+    assert.equal(list[0].projectId, 1);
+    assert.equal(list[0].path, 'D:/projects/alpha');
+  });
+
+  await t.test('重新授权要能改掉指错的指向——改对名字就是这么改的', async () => {
+    const store = makeStore();
+    await store.add('alpha', '第一次', { projectId: 1, path: 'D:/projects/alpha' });
+    await store.add('alpha', '第二次', { projectId: 7, path: 'D:/projects/alpha-2' });
+    const list = await store.list();
+    assert.equal(list.length, 1, '同一条授权，不是两条');
+    assert.equal(list[0].reason, '第二次');
+    assert.equal(list[0].projectId, 7, '重新授权要刷新指向');
+    assert.equal(list[0].path, 'D:/projects/alpha-2');
+  });
 });

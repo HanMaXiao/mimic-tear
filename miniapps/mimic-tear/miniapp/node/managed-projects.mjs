@@ -17,7 +17,8 @@ import { join } from 'node:path';
  * - The list is what makes the boundary *checkable*. The boss can be asked "which projects
  *   are you managing?" and the answer comes from a file, not from a recollection.
  *
- * @typedef {{ name:string, reason:string, since:number, addedAt:number }} ManagedProject
+ * @typedef {{ name:string, reason:string, since:number, addedAt:number,
+ *             projectId?:number, path?:string }} ManagedProject
  */
 
 /** Why an entry was added — always the user's words, never the boss's guess. */
@@ -45,9 +46,10 @@ export class ManagedProjects {
    *
    * @param {string} name project name
    * @param {string} reason why — the user's instruction, quoted
+   * @param {{ projectId?:number, path?:string }} [resolution] where that name actually points
    * @returns {Promise<ManagedProject[]>}
    */
-  async add(name, reason) {
+  async add(name, reason, resolution = {}) {
     const projectName = String(name ?? '').trim();
     const why = String(reason ?? '').trim();
     if (!projectName) throw new Error('必须写明项目名');
@@ -58,8 +60,19 @@ export class ManagedProjects {
     if (existing) {
       existing.reason = why;
       existing.addedAt = Date.now();
+      // The resolution is refreshed on a re-grant too: re-granting is how a wrong
+      // name gets corrected, so it must be able to overwrite the old pointer.
+      if (resolution.projectId != null) existing.projectId = resolution.projectId;
+      if (resolution.path) existing.path = resolution.path;
     } else {
-      all.push({ name: projectName, reason: why, since: Date.now(), addedAt: Date.now() });
+      all.push({
+        name: projectName,
+        reason: why,
+        since: Date.now(),
+        addedAt: Date.now(),
+        ...(resolution.projectId != null ? { projectId: resolution.projectId } : {}),
+        ...(resolution.path ? { path: resolution.path } : {}),
+      });
     }
     await this.#write(all);
     return all;
