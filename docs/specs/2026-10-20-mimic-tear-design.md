@@ -1780,3 +1780,82 @@ create: async ({ sessionId, objective: rawObjective, tokenBudget, kickoffAttachm
 | 全库 `token_budget` 非空的 goal | **0** |
 | `mcp_invoke('create_goal')` | `Unknown tool_name`（04:38、04:46 各一次） |
 | Mini App node 侧 `createGoal\|threadGoal\|DesktopService\|tokenBudget` | **零命中** |
+
+## 27. 值班意图文件：「歇着」是显式状态（2026-10-22）
+
+### 27.1 为什么要多这一层
+
+大哥现在的状态只有两种能从板面上看出来：交班时间戳（事实）和「多久没交班」（推论）。但**「大哥歇着」和「大哥掉线了」在事实层是同一件事**——都没有交班。板面分不出来，watchdog 也分不出来。
+
+用「没有交班」来表达「歇着」有两个坏处：
+
+- 它把**决定**伪装成**事实**。板面只能说「多久没交班」，说不清「这是你让他歇的，还是他掉了」。
+- 它没法抑制告警。歇着期间每一轮都会越过掉线阈值，于是每次歇着都会变成一次告警——显式状态就此失去意义。
+
+所以「歇着」必须是一个**带时间戳和理由的决定**，写在它自己的文件里：`duty-intent.json`。
+
+### 27.2 形状与位置
+
+| 字段 | 含义 |
+| --- | --- |
+| `mode` | `on-duty` / `resting`。只有这两种，其它值一律按 `on-duty` 读 |
+| `since` | 这个决定从什么时候起（毫秒时间戳） |
+| `requestedBy` | 谁说的（大老板的原话或标识） |
+| `note` | 为什么歇着 |
+
+位置：`plugin-data/liveboards/mimic-tear/duty-intent.json`，与 `patrol-config.json`、`managed-projects.json` 同级。
+
+**默认 on-duty**：文件不存在 = 没人做过决定 = 在岗。一个坏文件也只能读成「没人决定」。**一个损坏的文件不能把大哥关掉。**
+
+写：临时文件 + rename（原子）。板面（长驻进程）与值班路径（独立进程）会写同一个文件，半截文件读回来是「没人决定」，会把一个正在歇着的大哥悄悄放回岗位。
+
+### 27.3 两个分开的判断：事实与判断
+
+`buildDutyStatus` 现在给两个判断，口径不一样，**不能合并**：
+
+| 字段 | 是什么 | 谁读它 |
+| --- | --- | --- |
+| `stale` | **事实**：多久没交班超过阈值（`lastRunAt` + `dutyIntervalMinutes × 1.5`） | 板面值班灯 |
+| `alertable` | **判断**：事实减去「明确歇着」 | watchdog |
+
+`stale` 只跟交班戳走，**任何开关都改不了它**。`alertable = stale && mode !== 'resting'`。
+
+### 27.4 值班灯只跟值班事实走
+
+板面的值班灯（`client/assets/app.js` 的 `currentDutyLamp()`）读的是 `duty.stale`，注释写着「The lamp is a duty signal, so it follows the duty facts and nothing else」。
+
+这条规则在本节之后仍然成立：**开关不能改写灯**。要让灯变红，只能是交班事实变了（大哥真的没交班），不能是有人按了「歇着」。
+
+歇着期间的灯会亮（因为确实很久没交班），但板面同时显示「歇着」这个显式状态——用户看到的是「大哥歇着 · 上次交班 90 分钟前」，而不是「大哥掉线」。**这两句话指向不同的处置：一个是等它回来，一个是去救它。**
+
+### 27.5 通道：板面写意图 → 大哥的值班轮次读它
+
+node 侧**没有写 cron 状态的能力**（§26.2 的约束：运行时库只读、宿主 cron 定义不可写），所以意图不走 cron，走文件：
+
+| 谁 | 做什么 | 接口 |
+| --- | --- | --- |
+| 板面 | 写意图 | `POST /api/duty/intent` → `ProjectService.setDutyIntent()` |
+| 事实表 | 读意图，给大哥看 | `patrol-cli facts` → `duty.mode` / `duty.watching` |
+| 板面 | 读意图，显示在岗/歇着 | `GET /api/overview` → `duty` 块 + 每张项目卡的 `duty` 块 |
+| watchdog | 读意图，歇着时不报掉线 | `runWatchdog()` 读 `duty-intent.json` |
+
+写路由的响应语义：**写成功即 200**；看板刷新（`broadcast('update')`）是尽力而为，刷新失败不能把一次已经写成的意图变成调用方看到的错误。
+
+大哥的值班 cron 不用改：它读 `patrol-cli facts`，意图已经在事实表里。
+
+### 27.6 边界
+
+- **client/ 一个字节没碰**（`067d454` 之后那一片是 UI/UX 线的地盘）。「召唤 / 歇着」按钮、歇着时的看板文案都归 UI/UX 线；node 侧只提供字段。
+- **不写运行时库**：意图文件在板面数据目录里，与 `runtime-state.sqlite` 无关。
+- **不碰 goal 状态**（§26.4）。
+- 名单外的项目连 `watching` 都是 false（§24.7 作用域收敛）。
+
+### 27.7 实测（2026-10-22 05:05–05:10 真机）
+
+| 读数 | 值 |
+| --- | --- |
+| `patrol-cli facts` 的 `duty` 块 | `mode=on-duty` / `resting=false` / `nextDueAt` / `overdueMinutes=0` / `watching=["Mimic Tear"]` |
+| 项目卡的 `duty` 块 | `mode` / `resting` / `since` / `requestedBy` / `watching` |
+| 意图文件默认行为 | 不存在 → `on-duty`；坏 JSON → `on-duty`；写完不留临时文件 |
+| 全量测试 | **271 项全绿**（251 既有 + 20 新增，四个新文件） |
+| 提交 | `3e5ae4a` 意图文件 / `d894889` 事实表与项目卡 / `00ff638` 写意图的路由 / `29752ca` watchdog 认歇着 |
