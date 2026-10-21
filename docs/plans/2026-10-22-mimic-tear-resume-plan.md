@@ -3,7 +3,36 @@
 - 提交人：Mimic Tear 项目负责人会话（`mvs_84253a6284dc4fae89cda1470da0c306`）
 - 对应 goal：`tg_z7054lfdtrmvg9gwab`（`paused(no_progress)`，7,583,357 token / 19,622 秒 / 22 轮 / `token_budget=null`）
 - 状态核实时间：2026-10-22 02:57
-- **本文件只是方案。未 resume 任何 goal、未新开 goal、未附带执行。**
+- **本文件原为方案。片 1 已于 2026-10-22 03:41 执行完毕（提交 `4885f9c`，纯文档）；片 2 待放行。**
+
+---
+
+## 裁决补记（2026-10-22 03:0x 大哥）
+
+下面第一～七节写的是拍板前的方案与建议值。**以这一节为准**：
+
+1. **片 2 不做 A，直接落 C。** A 不成立不再是"多半"，是**确定不成立**：运行时 gateway 的 `openSession` 有两道硬校验（`root.rootSessionId !== sessionId || root.pluginId !== caller.pluginId`），值班会话 `mvs_aaec5980…` 既不是本插件的根会话、`pluginId` 也不匹配（规格 §18.3）。片 2 因此改成**纯文档交付**：把"为什么不做"写进规格——侧栏开不到值班会话是运行时归属校验的硬限制，而值班轨迹已经在 Mini App 的交班汇报区浮现（§19），两个视图各看各的。
+2. **预算下调**：片 2 从 800,000 降到 **100,000**；片 1 仍是 200,000；**总上限从 1,400,000 降到 300,000**。
+3. **片 3（刹车）不变，排第一**：查到 goal 创建入口就建带闸 goal（片 1 = 200,000）；查不到就用替代刹车（大哥逐片放行 + 累计上报 token，超限即停）。
+4. 片 1 的等待条件已解除，直接做；提交走补丁快照。
+
+### 片 3 的实测结果（2026-10-22 03:3x）
+
+**入口在**——`create_goal` 支持可选 `token_budget`，运行时在创建那一刻把它写进 `local_runtime_thread_goals.token_budget`，超限自动转 `budget_limited` 并停掉自动续跑。源码依据：
+
+- `@mavis/goal/src/tool-impls.ts:171` — `create_goal` 只拒绝已有 goal 为 `active` / `paused`，`complete` 放行；
+- `@mavis/goal/src/tool-impls.ts:188-190` — `token_budget` 原样透传进 `store.create`；
+- `@mavis/local-runtime/src/thread-goal_store.ts:184-196` — codex parity：同会话已有 goal 若 `status='complete'`，先 DELETE 再 INSERT，所以 complete 之后 create_goal 不撞 `session_id` UNIQUE；
+- `@mavis/local-runtime/src/thread-goal_store.ts:200` — `tokenBudget` 直接落库。
+
+**但这条会话建不了**，两条路都堵死：
+
+1. 本会话的工具面里只有 `get_goal` / `update_goal`，**没有 `create_goal`**（deferred 工具目录里也没有）；
+2. 本会话的 goal `tg_z7054lfdtrmvg9gwab` 是 `paused`，`update_goal(mode=status, status=complete)` 对 paused 直接拒绝（实测：`cannot update goal because it is paused`）。
+
+**因此走大哥给的替代刹车。** 本会话的 goal 处于 `paused`，**没有自动续跑**，烧钱只来自被放行的轮次——「大哥逐片放行 + 累计上报 token，超限即停」在这里就是刹车形态。片 1 = 1 轮，已完成（提交 `4885f9c`）。
+
+**要让这条会话以后能自带闸**，得先把它那个 `paused` 的旧 goal 归档（用户面两步：先 complete 再 dismiss，`dismissCompleted` 的 SQL 硬条件是 `status='complete'`），归档之后 `create_goal(token_budget=…)` 才可用。**这是用户面的动作，agent 不自己写库。**
 
 ---
 
