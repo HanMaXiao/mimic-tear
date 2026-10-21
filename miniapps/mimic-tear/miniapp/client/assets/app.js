@@ -365,15 +365,17 @@ async function applyRecommendation(item) {
 }
 
 function attentionItemHtml(item) {
+  const card = questionnaireCardText(item);
   return `
     <div class="item item--${escapeHtml(item.severity)}${item.acknowledged ? ' item--acknowledged' : ''}">
       <div class="item__head">
         <span class="tag tag--${item.severity}">${SEVERITY_LABEL[item.severity] ?? item.severity}</span>
         <span class="tag">${KIND_LABEL[item.kind] ?? item.kind}</span>
         <span class="item__title">${escapeHtml(item.title)}</span>
-        <span class="item__meta">${escapeHtml(item.projectName)} · ${waitingLabel(item.createdAt)}</span>
+        <span class="item__meta">${escapeHtml(item.projectName)} · ${waitingLabel(item.createdAt)}${requestIdMark(item)}</span>
       </div>
-      <p class="item__body doc">${escapeHtml(item.body)}</p>
+      <p class="item__body doc">${escapeHtml(card.text)}</p>
+      ${card.extra > 0 ? `<p class="item__note">另有 ${card.extra} 问 · 去回答会带上全文</p>` : ''}
       ${acknowledgedNoteHtml(item)}
       <div class="item__actions">${itemActionsHtml(item)}</div>
     </div>`;
@@ -509,15 +511,63 @@ function renderProjects(overview) {
   body.innerHTML = projects.map(projectRowHtml).join('');
 }
 
+/**
+ * The card's id, so a person can tell which card this is.
+ *
+ * Several cards can sit on the desk at once, and the body text alone does not say which
+ * one it is — the body is the question, the id is what the runtime and the boss talk
+ * about. The short form is enough to recognise a card; the full id rides along in the
+ * title so it can still be copied.
+ *
+ * @param {any} item
+ * @returns {string}
+ */
+function requestIdMark(item) {
+  const id = String(item?.requestId ?? '').trim();
+  if (!id) return '';
+  const short = id.length > 12 ? `${id.slice(0, 12)}…` : id;
+  return ` · <span class="mono" title="${escapeHtml(id)}">${escapeHtml(short)}</span>`;
+}
+
+/**
+ * The first question of a card, and how many more it carries.
+ *
+ * A card can ask several questions, and the board used to print all of them in one
+ * paragraph — which made the desk unreadable and, worse, made every card look alike. Only
+ * the first question is shown; the rest are counted, because a card that asks two things
+ * must not look like a card that asks one.
+ *
+ * Nothing is lost: the full text still travels with the item on the 「去回答」 button, so
+ * the question that gets delivered is still the whole question.
+ *
+ * @param {any} item
+ * @returns {{ text: string, extra: number }}
+ */
+function questionnaireCardText(item) {
+  const body = String(item?.body ?? '');
+  if (item?.kind !== 'questionnaire') return { text: body, extra: 0 };
+  try {
+    const steps = JSON.parse(item.requestJson ?? '')?.steps;
+    if (Array.isArray(steps) && steps.length > 0 && steps[0]?.question) {
+      return { text: String(steps[0].question), extra: steps.length - 1 };
+    }
+  } catch {
+    // A malformed payload falls back to the text the server already prepared.
+  }
+  return { text: body, extra: 0 };
+}
+
 function inboxItemHtml(item) {
+  const card = questionnaireCardText(item);
   return `
     <div class="item item--${escapeHtml(item.severity)}${item.acknowledged ? ' item--acknowledged' : ''}">
       <div class="item__head">
         <span class="tag">${KIND_LABEL[item.kind] ?? item.kind}</span>
         <span class="item__title">${escapeHtml(item.title)}</span>
-        <span class="item__meta">${escapeHtml(item.projectName)} · ${relativeTime(item.createdAt)}</span>
+        <span class="item__meta">${escapeHtml(item.projectName)} · ${relativeTime(item.createdAt)}${requestIdMark(item)}</span>
       </div>
-      <p class="item__body doc">${escapeHtml(item.body)}</p>
+      <p class="item__body doc">${escapeHtml(card.text)}</p>
+      ${card.extra > 0 ? `<p class="item__note">另有 ${card.extra} 问 · 去回答会带上全文</p>` : ''}
       ${acknowledgedNoteHtml(item)}
       <div class="item__actions">${itemActionsHtml(item)}</div>
     </div>`;
