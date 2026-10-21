@@ -191,7 +191,15 @@ export class PatrolStore {
   /** @returns {Promise<PatrolConfig>} */
   async getConfig() {
     const value = await readJson(this.configPath, {});
-    return { ...DEFAULT_CONFIG, ...(value && typeof value === 'object' ? value : {}) };
+    const stored = value && typeof value === 'object' ? value : {};
+    // Only the fields this config actually has. A key left over from a removed feature
+    // (`autoDispatch` was one — the boss decides for itself now) must not ride along in the
+    // live state file forever: it reads like a switch that still does something.
+    const config = { ...DEFAULT_CONFIG };
+    for (const key of Object.keys(DEFAULT_CONFIG)) {
+      if (stored[key] !== undefined) config[key] = stored[key];
+    }
+    return config;
   }
 
   /**

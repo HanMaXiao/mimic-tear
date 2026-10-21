@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -137,6 +137,31 @@ test('patrol', async (t) => {
       void patrol;
       store.close();
     } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  await t.test('配置里残留的废键不能复活——删掉的功能不能靠状态文件长回来', async () => {
+    const { patrol, store, dir } = makeService();
+    try {
+      // The live config file on this machine still carries `autoDispatch` from before the
+      // switch was removed. Reading it back must not resurrect the switch.
+      const configPath = join(dir, 'data', 'patrol-config.json');
+      mkdirSync(join(dir, 'data'), { recursive: true });
+      writeFileSync(configPath, JSON.stringify({ enabled: true, autoDispatch: false, legacyThing: 1 }), 'utf8');
+
+      const config = await patrol.getConfig();
+      assert.equal('autoDispatch' in config, false, '废键不能进配置');
+      assert.equal('legacyThing' in config, false, '来路不明的键也不能进配置');
+      assert.equal(config.enabled, true, '真字段照常读');
+
+      // And the next write cleans the file instead of carrying the residue forward.
+      await patrol.setConfig({ lastRunAt: 1234 });
+      const raw = JSON.parse(readFileSync(configPath, 'utf8'));
+      assert.equal('autoDispatch' in raw, false, '写回去的时候要把废键清掉');
+      assert.equal(raw.lastRunAt, 1234, '真字段不能被清掉');
+    } finally {
+      store.close();
       cleanupDir(dir);
     }
   });
