@@ -41,6 +41,10 @@ const DEFAULT_CONFIG = {
   // period (currently 30), NOT the board's patrol loop. The board's "the boss went quiet"
   // warning is derived from it, so the two must be changed together.
   dutyIntervalMinutes: 30,
+  // Which cron definition is the duty cron. The node side only reads it: when the
+  // scheduler is re-pointed, this field has to follow, or the node side keeps reading a
+  // chain that no longer exists — and "no runs" reads exactly like "nothing went wrong".
+  dutyCronId: null,
   // lastRunAt is the DUTY handover stamp, written only by the duty path (patrol-cli report).
   // The board's own patrol loop has its own stamp below: sharing one timestamp would let a
   // board-triggered patrol refresh the duty clock and hide a duty boss that is actually dead.

@@ -221,13 +221,35 @@ export class RuntimeStore {
   listCronRuns(cronId) {
     const id = String(cronId ?? '').trim();
     if (!id) return [];
+    return this.listCronRunsFor([id]);
+  }
+
+  /**
+   * The scheduled runs of several crons at once, oldest first.
+   *
+   * The duty cron was re-pointed on 2026-10-22 and the runtime created a new definition
+   * for it, so the evidence for one duty chain lives under two cron ids. Reading them
+   * together is what keeps the cumulative missed rounds from resetting at a re-point.
+   *
+   * @param {string[]} cronIds
+   * @returns {Array<{id:string, cronId:string, sessionId:string|null, status:string,
+   *                  createdAt:number, deliveredAt:number|null, failedAt:number|null,
+   *                  errorCode:number|null, error:string|null, retryAt:number|null,
+   *                  retryAttempt:number}>}
+   */
+  listCronRunsFor(cronIds) {
+    const ids = (Array.isArray(cronIds) ? cronIds : [cronIds])
+      .map((value) => String(value ?? '').trim())
+      .filter(Boolean);
+    if (!ids.length) return [];
+    const placeholders = ids.map(() => '?').join(', ');
     return this.#query(
       `SELECT run_id, cron_id, session_id, status, created_at_ms, delivered_at_ms,
               failed_at_ms, error_code, error, retry_at_ms, retry_attempt
          FROM local_runtime_v2_cron_runs
-        WHERE cron_id = ?
+        WHERE cron_id IN (${placeholders})
         ORDER BY created_at_ms ASC`,
-      [id],
+      ids,
       (row) => ({
         id: row.run_id,
         cronId: row.cron_id,
@@ -240,6 +262,39 @@ export class RuntimeStore {
         error: row.error ?? null,
         retryAt: row.retry_at_ms ?? null,
         retryAttempt: row.retry_attempt ?? 0,
+      }),
+    );
+  }
+
+  /**
+   * The cron definitions, newest first.
+   *
+   * `deleted_at_ms` is what separates a live cron from one that has been replaced: the
+   * scheduler re-points by creating a new definition and deleting the old one, so both
+   * generations stay in this table.
+   *
+   * @returns {Array<{cronId:string, schedulerId:string|null, agentName:string|null, name:string,
+   *                  targetSessionId:string|null, sessionTargetMode:string|null, revision:number|null,
+   *                  deletedAt:number|null, createdAt:number|null, updatedAt:number|null}>}
+   */
+  listCronDefinitions() {
+    return this.#query(
+      `SELECT cron_id, scheduler_id, agent_name, name, target_session_id, session_target_mode,
+              revision, deleted_at_ms, created_at_ms, updated_at_ms
+         FROM local_runtime_v2_cron_definitions
+        ORDER BY created_at_ms DESC`,
+      [],
+      (row) => ({
+        cronId: row.cron_id,
+        schedulerId: row.scheduler_id ?? null,
+        agentName: row.agent_name ?? null,
+        name: row.name ?? '',
+        targetSessionId: row.target_session_id ?? null,
+        sessionTargetMode: row.session_target_mode ?? null,
+        revision: row.revision ?? null,
+        deletedAt: row.deleted_at_ms ?? null,
+        createdAt: row.created_at_ms ?? null,
+        updatedAt: row.updated_at_ms ?? null,
       }),
     );
   }

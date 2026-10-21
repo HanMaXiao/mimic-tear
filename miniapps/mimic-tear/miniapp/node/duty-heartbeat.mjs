@@ -13,12 +13,12 @@
  *   process is alive, so it can notice and step in.
  * - It does **not** cover **"the board is closed"**. The Mini App is on-demand: with the app
  *   closed there is no node process, no timer, nothing to notice. That half is the host's
- *   job (and the watchdog scheduled task's — see the gap plan).
+ * job (and the watchdog scheduled task's — see the gap plan).
  *
  * So this is a *fallback*, not a replacement, and every conclusion it produces says which
  * half it is talking about.
  *
- * Two rules keep it from doubling the duty rounds:
+ * Three rules keep it from doubling the duty rounds:
  *
  * 1. **Only a blank slot may be filled.** If the scheduler created a run for that slot, the
  *    host knows about the round — it may be late, it may be retrying — and a second duty
@@ -26,6 +26,9 @@
  *    run at all* are the heartbeat's to fill.
  * 2. **One round per slot.** The slot that was filled is remembered in the heartbeat's own
  *    state file, so a slow tick cannot fire twice for the same slot.
+ * 3. **The chain is resolved by name, not by a hardcoded id.** A hardcoded id pointed at a
+ *    deleted cron and made every verdict read "healthy" — the failure mode that looks
+ *    exactly like "nothing went wrong". See `duty-chain.mjs`.
  */
 
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
@@ -33,15 +36,7 @@ import { join } from 'node:path';
 
 import { appendAlert } from './watchdog-alerts.mjs';
 import { computeDutyEvidence } from './view-model.mjs';
-
-/**
- * The duty cron's id.
- *
- * The same cron the watchdog watches — `watchdog.mjs` carries the same literal because it
- * has to stay a standalone script for the scheduled task, and a test asserts the two agree
- * (a silent mismatch would look exactly like "nothing went wrong").
- */
-export const DUTY_CRON_ID = '672fde94-0c52-466d-831e-e2919f49b64a';
+import { DUTY_CRON_SEED, readDutyChain } from './duty-chain.mjs';
 
 /** How often the heartbeat looks. The duty period is 30 minutes; this is finer than that. */
 export const HEARTBEAT_CHECK_INTERVAL_MS = 5 * 60_000;
@@ -60,6 +55,21 @@ export const HEARTBEAT_PROMPT = [
   '请按值班时的四件事走一遍：巡检在管的项目、记下结论、派工该派的、最后交班。',
   '交班会写回看板的值班时间戳，所以补的这一轮之后，漏掉的那段仍留在调度记录里。',
 ].join('\n');
+
+/**
+ * A timestamp, or the current one.
+ *
+ * `Number(undefined)` is NaN, and NaN is not null/undefined — so `Number(x) ?? fallback`
+ * silently produces NaN and every comparison against it is false. That is not a hypothetical:
+ * it is how the heartbeat spent its first afternoon deciding everything was healthy.
+ *
+ * @param {any} value
+ * @returns {number}
+ */
+export function resolveNow(value) {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : Date.now();
+}
 
 /**
  * Read the heartbeat's own state.
@@ -93,19 +103,27 @@ export async function writeHeartbeatState(dataDir, state) {
 }
 
 /**
- * The duty period, from the duty config.
+ * The duty period and the pinned cron id, from the duty config.
+ *
+ * `dutyCronId` is how the user pins the duty cron: when the scheduler is re-pointed, this
+ * field has to follow, or the node side keeps reading a chain that no longer exists. The
+ * node side only reads it — it never guesses which cron is current.
  *
  * @param {string} dataDir
- * @returns {Promise<number>} minutes
+ * @returns {Promise<{periodMinutes:number, dutyCronId:string|null}>}
  */
-async function readDutyPeriodMinutes(dataDir) {
+export async function readDutyConfig(dataDir) {
   try {
     const raw = await readFile(join(dataDir, CONFIG_FILE), 'utf8');
     const value = JSON.parse(raw);
     const minutes = Number(value?.dutyIntervalMinutes);
-    return Number.isFinite(minutes) && minutes > 0 ? minutes : 30;
+    const pinned = typeof value?.dutyCronId === 'string' ? value.dutyCronId.trim() : '';
+    return {
+      periodMinutes: Number.isFinite(minutes) && minutes > 0 ? minutes : 30,
+      dutyCronId: pinned || null,
+    };
   } catch {
-    return 30;
+    return { periodMinutes: 30, dutyCronId: null };
   }
 }
 
@@ -123,7 +141,7 @@ async function readDutyPeriodMinutes(dataDir) {
 export function evaluateDutyHeartbeat(input) {
   const runs = input?.runs ?? [];
   const periodMs = Number(input?.periodMs) > 0 ? Number(input.periodMs) : 30 * 60_000;
-  const now = Number(input?.now) ?? Date.now();
+  const now = resolveNow(input?.now);
   const lastTriggeredSlot = input?.lastTriggeredSlot ?? null;
 
   const evidence = computeDutyEvidence({
@@ -191,24 +209,24 @@ export function describeDutyHeartbeat(decision) {
 /**
  * The heartbeat's status, for the board.
  *
- * @param {{dataDir?:string, store?:any, now?:number, cronId?:string, periodMs?:number}} [options]
+ * @param {{dataDir?:string, store?:any, now?:number, seedCronId?:string|null, periodMs?:number}} [options]
  * @returns {Promise<any>}
  */
 export async function getDutyHeartbeatStatus(options = {}) {
   const dataDir = options.dataDir ?? null;
-  const now = Number(options.now) ?? Date.now();
-  const cronId = options.cronId ?? DUTY_CRON_ID;
-  const periodMs = Number(options.periodMs) > 0
-    ? Number(options.periodMs)
-    : (dataDir ? await readDutyPeriodMinutes(dataDir) : 30) * 60_000;
+  const now = resolveNow(options.now);
+  const config = dataDir ? await readDutyConfig(dataDir) : { periodMinutes: 30, dutyCronId: null };
+  const periodMs = Number(options.periodMs) > 0 ? Number(options.periodMs) : config.periodMinutes * 60_000;
   const state = dataDir ? await readHeartbeatState(dataDir) : {};
+  const seedCronId = options.seedCronId ?? config.dutyCronId ?? DUTY_CRON_SEED;
 
   // With a store, the state is computed live (the heartbeat's own tick does this). Without
   // one, the last observation the heartbeat wrote down is what we have — and it says when
   // it was made, so nothing is presented as fresher than it is.
-  const decision = options.store
+  const chain = options.store ? readDutyChain(options.store, { seedCronId }).chain : null;
+  const decision = chain
     ? evaluateDutyHeartbeat({
-      runs: options.store.listCronRuns(cronId),
+      runs: readDutyChain(options.store, { seedCronId }).runs,
       periodMs,
       now,
       lastTriggeredSlot: state.lastTriggeredSlot ?? null,
@@ -222,6 +240,7 @@ export async function getDutyHeartbeatStatus(options = {}) {
     since: decision ? decision.since : (state.brokenSince ?? null),
     pendingTail: decision ? decision.pendingTail : { slots: 0, since: null, runs: [] },
     blankTail: decision ? decision.blankTail : { slots: 0, since: null, firstSlot: null },
+    chain: chain ? { name: chain.name, targetCronId: chain.targetCronId, active: chain.active, reason: chain.reason } : null,
     lastTriggeredSlot: state.lastTriggeredSlot ?? null,
     lastTriggeredAt: state.lastTriggeredAt ?? null,
     lastResult: state.lastResult ?? null,
@@ -237,22 +256,61 @@ export async function getDutyHeartbeatStatus(options = {}) {
 /**
  * Run one heartbeat tick: notice a broken chain, and fill a slot nobody created.
  *
- * @param {{dataDir:string, store?:any, sessionId?:string|null, agent?:any, cronId?:string,
+ * @param {{dataDir:string, store?:any, sessionId?:string|null, agent?:any, cronId?:string|null,
  *          periodMs?:number, now?:number, prompt?:string}} [options]
  * @returns {Promise<any>}
  */
 export async function runDutyHeartbeat(options = {}) {
   const dataDir = options.dataDir;
-  const now = Number(options.now) ?? Date.now();
-  const cronId = options.cronId ?? DUTY_CRON_ID;
-  const periodMs = Number(options.periodMs) > 0
-    ? Number(options.periodMs)
-    : (await readDutyPeriodMinutes(dataDir)) * 60_000;
+  const now = resolveNow(options.now);
+  const config = await readDutyConfig(dataDir);
+  const periodMs = Number(options.periodMs) > 0 ? Number(options.periodMs) : config.periodMinutes * 60_000;
   const sessionId = options.sessionId ?? null;
   const agent = options.agent ?? null;
 
   const state = await readHeartbeatState(dataDir);
-  const runs = options.store ? options.store.listCronRuns(cronId) : [];
+  const seedCronId = options.cronId ?? config.dutyCronId ?? DUTY_CRON_SEED;
+  const { chain, runs } = readDutyChain(options.store ?? {}, { seedCronId });
+
+  // The target cron has to exist and not be deleted. If it does not, the chain is
+  // misconfigured — and saying "healthy" then would be the exact lie that cost an
+  // afternoon: a watchdog that points at a deleted cron sees no runs and reports nothing
+  // wrong. So it says so, loudly, and writes it down.
+  if (!chain.active) {
+    await appendAlert(dataDir, {
+      at: now,
+      action: 'heartbeat_misconfigured',
+      title: '仿身泪滴 · 值班心跳配置不对',
+      body: `目标 cron「${chain.name}」不存在或已被删除（reason=${chain.reason}`
+        + `${chain.pinnedCronId ? `, 配置里钉的是 ${chain.pinnedCronId}` : ''}）。`
+        + '所以 node 侧既判不出断链、也不会补位——它读的是一条不存在的链。'
+        + '修法：把 patrol-config.json 的 dutyCronId 更新成当前活着的那个 cron id。',
+      delivered: false,
+      error: chain.reason,
+      note: null,
+      gapTo: null,
+    });
+    await writeHeartbeatState(dataDir, {
+      ...state,
+      lastResult: 'misconfigured',
+      lastError: chain.reason,
+      updatedAt: now,
+    });
+    return {
+      broken: false,
+      trigger: false,
+      reason: 'misconfigured',
+      slot: null,
+      since: null,
+      evidence: null,
+      pendingTail: { slots: 0, since: null, runs: [] },
+      blankTail: { slots: 0, since: null, firstSlot: null },
+      chain,
+      triggered: false,
+      result: 'misconfigured',
+    };
+  }
+
   const decision = evaluateDutyHeartbeat({
     runs,
     periodMs,
@@ -281,15 +339,16 @@ export async function runDutyHeartbeat(options = {}) {
       lastEvidence: decision.evidence,
       updatedAt: now,
     });
-    return { ...decision, triggered: false, result: decision.reason };
+    return { ...decision, chain, triggered: false, result: decision.reason };
   }
 
   // C2: one duty round, on the session the board already knows as the boss session.
+  const targetSession = sessionId ?? chain.targetSessionId ?? null;
   const prompt = options.prompt ?? HEARTBEAT_PROMPT;
   let outcome;
   try {
     outcome = agent
-      ? await agent.run({ text: prompt, sessionId }, { onEvent: options.onEvent })
+      ? await agent.run({ text: prompt, sessionId: targetSession }, { onEvent: options.onEvent })
       : { status: 'skipped', error: '没有可用的 agent 通道', text: '' };
   } catch (error) {
     outcome = { status: 'error', error: error?.message ?? String(error), text: '' };
@@ -319,19 +378,19 @@ export async function runDutyHeartbeat(options = {}) {
       gapTo: null,
     });
     await writeHeartbeatState(dataDir, next);
-    return { ...decision, triggered: true, result: 'error', error: outcome?.error ?? '未知原因' };
+    return { ...decision, chain, triggered: true, result: 'error', error: outcome?.error ?? '未知原因' };
   }
 
   await appendAlert(dataDir, {
     at: now,
     action: 'heartbeat_run',
     title: '仿身泪滴 · 已补一轮值班',
-    body: `补位这一轮已发起（槽位 ${decision.slot}，session ${sessionId ?? '未知'}）。\n${describeDutyHeartbeat(decision)}`,
+    body: `补位这一轮已发起（槽位 ${decision.slot}，session ${targetSession ?? '未知'}）。\n${describeDutyHeartbeat(decision)}`,
     delivered: true,
     error: null,
     note: null,
     gapTo: null,
   });
   await writeHeartbeatState(dataDir, next);
-  return { ...decision, triggered: true, result: 'ok' };
+  return { ...decision, chain, triggered: true, result: 'ok' };
 }

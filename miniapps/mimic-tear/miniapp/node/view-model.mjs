@@ -499,7 +499,10 @@ export function computeDutyEvidence(input) {
   const periodMs = Number(input?.periodMs) > 0 ? Number(input.periodMs) : 30 * 60_000;
   // The ledger counts in minutes and in slots, so the period is normalised the same way.
   const periodMinutes = Math.max(1, Math.round(periodMs / 60_000));
-  const now = Number(input?.now) ?? Date.now();
+  // `Number(undefined)` is NaN, and NaN is not null/undefined — so `??` does not cover it.
+  // Every comparison against a NaN "now" is false, which is how the gap count once stayed
+  // at zero no matter what the scheduler did.
+  const now = Number.isFinite(input?.now) ? Number(input.now) : Date.now();
   const evidenceWindowMs = Number(input?.evidenceWindowMs) > 0 ? Number(input.evidenceWindowMs) : periodMs * 1.5;
 
   // Only what already happened counts. A run logged after `now` is not evidence about the

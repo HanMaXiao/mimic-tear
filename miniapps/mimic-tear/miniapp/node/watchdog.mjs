@@ -21,6 +21,11 @@
  * recorded whether or not the notification landed, and the board can read the log back
  * the next time it is opened.
  *
+ * The duty chain is resolved by **name**, not by a hardcoded cron id: the scheduler was
+ * re-pointed on 2026-10-22 and the runtime created a new cron definition for it. A
+ * hardcoded id pointed at the deleted one, and the symptom was the worst kind — no runs at
+ * all, therefore "nothing went wrong". See `duty-chain.mjs`.
+ *
  * What it deliberately does **not** do: write to the board's data, dispatch work, or write
  * to the runtime database. A watchdog that can write back is a new source of failure; this
  * one can only read a timestamp, read a log, write down what it saw, and speak.
@@ -38,6 +43,7 @@ import { sendToast } from './toast.mjs';
 import { computeDutyEvidence } from './view-model.mjs';
 import { RuntimeStore } from './runtime-store.mjs';
 import { appendAlert } from './watchdog-alerts.mjs';
+import { DUTY_CRON_SEED, readDutyChain } from './duty-chain.mjs';
 import {
   applyFailure,
   applySuccess,
@@ -65,16 +71,6 @@ const dryRun = args.includes('--dry-run');
  * only channel, which is exactly what it is for.
  */
 const noNotify = args.includes('--no-notify');
-
-/**
- * The duty cron's id.
- *
- * The run log is keyed by cron id, and the scheduler does not expose "the cron that
- * watches the boss" — so the project's own duty cron is named here. A constant beats a
- * lookup: a wrong id would silently produce no evidence at all, which looks exactly like
- * "nothing went wrong". `--cron-id` overrides it.
- */
-const DUTY_CRON_ID = '672fde94-0c52-466d-831e-e2919f49b64a';
 
 const CONFIG_FILE = 'patrol-config.json';
 const INTENT_FILE = 'duty-intent.json';
@@ -124,24 +120,34 @@ async function writeState(dir, state) {
  * The handover stamp cannot answer this: it says when the boss handed over *last*, and the
  * next handover overwrites it. The run log keeps every attempt, so the gap survives.
  *
- * @param {{dbPath:string, cronId:string, duty:any, now:number}} input
+ * The chain is resolved by name so that a re-pointed cron does not blind the watchdog: it
+ * reads every generation of the chain, merged by time.
+ *
+ * @param {{dbPath:string, cronId?:string|null, dir?:string, duty:any, now:number}} input
  * @returns {Promise<any|null>}
  */
 async function readEvidence(input) {
-  if (!input.cronId) return null;
   let store = null;
   try {
     store = RuntimeStore.open(input.dbPath);
-    const runs = store.listCronRuns(input.cronId);
-    if (!runs.length) return null;
-    return computeDutyEvidence({
-      runs,
-      periodMs: (input.duty?.dutyIntervalMinutes ?? 30) * 60_000,
-      // One threshold for the whole system: the same window the board's lamp uses.
-      evidenceWindowMs: (input.duty?.staleAfterMinutes ?? 45) * 60_000,
-      now: input.now,
-      currentStale: Boolean(input.duty?.stale),
-    });
+    const config = input.dir ? await readJson(join(input.dir, CONFIG_FILE), {}) : {};
+    const pinned = typeof config?.dutyCronId === 'string' && config.dutyCronId.trim()
+      ? config.dutyCronId.trim()
+      : null;
+    const seedCronId = input.cronId ?? pinned ?? DUTY_CRON_SEED;
+    const { chain, runs } = readDutyChain(store, { seedCronId });
+    if (!chain.active || !runs.length) return null;
+    return {
+      ...computeDutyEvidence({
+        runs,
+        periodMs: (input.duty?.dutyIntervalMinutes ?? 30) * 60_000,
+        // One threshold for the whole system: the same window the board's lamp uses.
+        evidenceWindowMs: (input.duty?.staleAfterMinutes ?? 45) * 60_000,
+        now: input.now,
+        currentStale: Boolean(input.duty?.stale),
+      }),
+      chain,
+    };
   } catch {
     return null;
   } finally {
@@ -152,7 +158,7 @@ async function readEvidence(input) {
 /**
  * Run one watchdog tick.
  *
- * @param {{dataDir?:string, now?:number, dbPath?:string, cronId?:string, noNotify?:boolean,
+ * @param {{dataDir?:string, now?:number, dbPath?:string, cronId?:string|null, noNotify?:boolean,
  *          deliver?:(message:{title:string,body:string}) => Promise<{ok:boolean,error?:string,note?:string}>}} [options]
  * @returns {Promise<{action:string, delivered:boolean, duty:any, evidence:any|null, message?:{title:string,body:string}, error?:string}>}
  */
@@ -165,7 +171,6 @@ export async function runWatchdog(options = {}) {
       ? async () => ({ ok: false, error: null, note: '通知已禁用（--no-notify）' })
       : sendToast);
   const dbPath = options.dbPath ?? runtimeDbPath;
-  const cronId = options.cronId ?? DUTY_CRON_ID;
 
   const config = await readJson(join(dir, CONFIG_FILE), {});
   // The duty intent: was the boss explicitly told to rest? A missing file means "no
@@ -174,7 +179,7 @@ export async function runWatchdog(options = {}) {
   const state = await readJson(join(dir, STATE_FILE), emptyWatchdogState());
 
   const duty = evaluateDuty(config, now, intent);
-  const evidence = await readEvidence({ dbPath, cronId, duty, now });
+  const evidence = await readEvidence({ dbPath, cronId: options.cronId ?? null, dir, duty, now });
   const action = decideAction(state, duty, evidence);
 
   const message = action === 'none' ? undefined : buildAlertMessage(action, {
@@ -256,7 +261,7 @@ export async function inspect() {
   const state = await readJson(join(dataDir, STATE_FILE), emptyWatchdogState());
   const now = Date.now();
   const duty = evaluateDuty(config, now, intent);
-  const evidence = await readEvidence({ dbPath: runtimeDbPath, cronId: DUTY_CRON_ID, duty, now });
+  const evidence = await readEvidence({ dbPath: runtimeDbPath, cronId: null, dir: dataDir, duty, now });
   return { dataDir, duty, evidence, state, action: decideAction(state, duty, evidence) };
 }
 
@@ -278,6 +283,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       missedRounds: result.evidence?.missedRounds ?? 0,
       erasedOutage: Boolean(result.evidence?.erasedOutage),
       lastGap: result.evidence?.lastGap ?? null,
+      chain: result.evidence?.chain ?? null,
       error: result.error ?? null,
     })}\n`);
   }
