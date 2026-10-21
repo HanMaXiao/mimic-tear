@@ -66,9 +66,11 @@ test('RuntimeStore', async (t) => {
   await t.test('问卷：pendingOnly 只返回未答与未忽略', () => {
     const store = RuntimeStore.open(dbPath);
 
+    // ask-1 is pending; ask-2 answered; ask-3 dismissed; ask-4 expired. An expired card
+    // can no longer be answered, so it is not waiting for anyone.
     assert.equal(store.listQuestionnaires(true).length, 1);
     assert.equal(store.listQuestionnaires(true)[0].id, 'ask-1');
-    assert.equal(store.listQuestionnaires(false).length, 3);
+    assert.equal(store.listQuestionnaires(false).length, 4);
     store.close();
   });
 

@@ -72,7 +72,11 @@ test('project-service', async (t) => {
       assert.equal(detail.orgTree[0].id, 'sess-alpha-lead');
       assert.equal(detail.orgTree[0].children.length, 2);
       assert.equal(detail.goals.length, 1);
-      assert.equal(detail.questions.length, 1);
+      // The detail view is a record, not a to-do list: it shows every questionnaire the
+      // project raised, including the expired one. Only the *counts* treat expired as done.
+      assert.equal(detail.questions.length, 2);
+      assert.equal(detail.questions.some((q) => q.status === 'expired'), true, '明细里要留得住过期卡这条记录');
+      assert.equal(detail.project.pendingQuestions, 1, '但只有真正待答的那张算数');
       assert.equal(detail.plan.tasks[0].id, 'a1');
 
       assert.equal(await service.getProject(999), null, '不存在的项目返回 null');

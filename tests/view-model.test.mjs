@@ -133,6 +133,35 @@ test('view-model', async (t) => {
     assert.equal(cards[1].pendingQuestions, 1);
   });
 
+  await t.test('过期的问卷不算未解决：它不能钉住项目，也不能在收件箱里变成待办', () => {
+    const projects = [project(1, 'D:/projects/alpha')];
+    const sessions = [session('s1', 1)];
+    // The card's window closed: it can no longer be clicked, so nobody is waiting on it.
+    const questionnaires = [questionnaire('ask-1', 's1', '{}', { status: 'expired' })];
+
+    const cards = buildProjectCards({ projects, sessions, goals: [], questionnaires, plans: new Map() });
+    assert.equal(cards[0].pendingQuestions, 0, '过期卡不算待答');
+    assert.equal(cards[0].health, 'idle', '一张过期卡不该把项目钉在 blocked');
+
+    const inbox = buildInbox({ projects, sessions, goals: [], questionnaires, plans: new Map() }, new Set());
+    assert.equal(
+      inbox.some((item) => item.kind === 'questionnaire'),
+      false,
+      '过期卡不该在收件箱里变成一条要人拍板的待办',
+    );
+
+    // A genuinely pending card still behaves as before.
+    const live = buildProjectCards({
+      projects,
+      sessions,
+      goals: [],
+      questionnaires: [questionnaire('ask-2', 's1', '{}', { status: 'pending' })],
+      plans: new Map(),
+    });
+    assert.equal(live[0].pendingQuestions, 1, '真待答卡照常计数');
+    assert.equal(live[0].health, 'blocked', '真待答卡照常阻塞');
+  });
+
   await t.test('收件箱：严重度排序，已确认项仍保留但标记 acknowledged', () => {
     const projects = [project(1, 'D:/projects/alpha')];
     const sessions = [

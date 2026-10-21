@@ -48,6 +48,21 @@
 const SEVERITY_ORDER = { high: 0, medium: 1, low: 2 };
 
 /**
+ * Whether a questionnaire is still waiting for an answer.
+ *
+ * An expired card is not an unresolved question: its window closed, nobody can click it
+ * any more, and no answer will ever arrive. Counting it as pending pins the project at
+ * `blocked` forever — on 2026-10-22 that was the whole reason Mimic Tear showed blocked
+ * while nothing was actually waiting on anyone.
+ *
+ * @param {string} status
+ * @returns {boolean}
+ */
+export function isUnresolvedQuestion(status) {
+  return status !== 'answered' && status !== 'dismissed' && status !== 'expired';
+}
+
+/**
  * Health of a project, decided by the first matching rule.
  *
  * The order encodes urgency: a project that has errored outranks one that is merely waiting,
@@ -97,7 +112,7 @@ export function buildProjectCards(input) {
 
     const projectGoals = projectSessions.flatMap((s) => goalsBySession.get(s.id) ?? []);
     const projectQuestions = projectSessions.flatMap((s) => questionsBySession.get(s.id) ?? []);
-    const pendingQuestions = projectQuestions.filter((q) => q.status !== 'answered' && q.status !== 'dismissed');
+    const pendingQuestions = projectQuestions.filter((q) => isUnresolvedQuestion(q.status));
 
     const plan = plans.get(project.id) ?? null;
     const planTasks = plan?.tasks ?? [];
@@ -195,7 +210,10 @@ export function buildInbox(input, acked, dismissed) {
 
   // A questionnaire is the boss's own question coming back.
   for (const questionnaire of questionnaires) {
-    if (questionnaire.status === 'answered' || questionnaire.status === 'dismissed') continue;
+    // An expired card can never be answered, so it is not a decision waiting for anyone.
+    // Without this it shows up as a high-severity item that only a manual `dismiss` can
+    // clear — work the board creates for itself and then has to be cleaned up by hand.
+    if (!isUnresolvedQuestion(questionnaire.status)) continue;
     const session = sessionById.get(questionnaire.sessionId);
     push({
       id: `questionnaire:${questionnaire.id}`,

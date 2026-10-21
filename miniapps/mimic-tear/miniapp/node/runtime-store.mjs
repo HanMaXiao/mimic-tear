@@ -224,8 +224,11 @@ export class RuntimeStore {
    * @param {boolean} pendingOnly when true, only questionnaires still awaiting an answer
    */
   listQuestionnaires(pendingOnly) {
+    // `expired` means the card's window closed — it can no longer be answered, so it is
+    // not "waiting for an answer". Leaving it in the pending set is what pinned a project
+    // at `blocked` for a card nobody could ever click.
     const filter = pendingOnly
-      ? " WHERE status NOT IN ('answered', 'dismissed')"
+      ? " WHERE status NOT IN ('answered', 'dismissed', 'expired')"
       : '';
     return this.#query(`${QUESTIONNAIRE_SQL}${filter} ORDER BY created_at DESC`, [], (row) => ({
       id: row.request_id,

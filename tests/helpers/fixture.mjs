@@ -212,6 +212,9 @@ export function makeRuntimeDb(dir) {
   questionnaires.run('ask-1', 'sess-alpha-lead', 'mavis', QUESTIONNAIRE, 'pending', 7000);
   questionnaires.run('ask-2', 'sess-beta-lead', 'mavis', QUESTIONNAIRE, 'answered', 6000);
   questionnaires.run('ask-3', 'sess-beta-lead', 'mavis', QUESTIONNAIRE, 'dismissed', 5000);
+  // An expired card: its window closed, nobody can click it any more. It must not count
+  // as a pending question, and it must not raise a decision item on the board.
+  questionnaires.run('ask-4', 'sess-alpha-lead', 'mavis', QUESTIONNAIRE, 'expired', 4000);
 
   const tasks = db.prepare(
     `INSERT INTO local_runtime_background_tasks
