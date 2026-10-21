@@ -161,6 +161,24 @@ test('缺口一：补交班会抹掉漏班证据', async (t) => {
     assert.equal(evidence.lastGap.attempted, true, '证据更强：调度器确实触发了，只是没投出去');
   });
 
+  await t.test('口径：时间戳的毫秒抖动不能把 390 分钟算成 389 分钟', () => {
+    // The runtime stamps handovers with a few milliseconds of jitter, so a gap that is
+    // 390 minutes on the clock can measure 389m59.98s. The count has to stay on the
+    // schedule's grid, or every gap silently loses a round.
+    const runs = [
+      { id: 'a', status: 'delivered', createdAt: NOW - 400 * MINUTE + 79, deliveredAt: NOW - 400 * MINUTE + 79 },
+      { id: 'b', status: 'delivered', createdAt: NOW - 10 * MINUTE + 59, deliveredAt: NOW - 10 * MINUTE + 59 },
+    ];
+    const evidence = computeDutyEvidence({
+      runs,
+      periodMs: PERIOD,
+      now: NOW,
+      evidenceWindowMs: 45 * MINUTE,
+    });
+    assert.equal(evidence.missedRounds, 12, '390 分钟就是 12 轮，不因毫秒抖动少一轮');
+    assert.equal(evidence.lastGap.gapMinutes, 390);
+  });
+
   await t.test('没有运行记录时证据是零，不是报错', () => {
     const evidence = computeDutyEvidence({ runs: [], periodMs: PERIOD, now: NOW });
     assert.equal(evidence.missedRounds, 0);

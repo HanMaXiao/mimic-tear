@@ -533,7 +533,10 @@ export function computeDutyEvidence(input) {
   for (let i = 1; i < delivered.length; i += 1) {
     const from = delivered[i - 1];
     const to = delivered[i];
-    const expected = Math.max(0, Math.floor((to - from) / periodMs) - 1);
+    // The timestamps carry a few milliseconds of jitter, so the number of periods is
+    // rounded rather than floored: a 390-minute gap is 13 periods, not 12.99999. Flooring
+    // here silently drops one round per gap — the count would not match the duty ledger.
+    const expected = Math.max(0, Math.round((to - from) / periodMs) - 1);
     const pendingInside = pending.filter((run) => run.createdAt >= from && run.createdAt <= to);
     if (expected === 0 && pendingInside.length === 0) continue;
     gaps.push({
