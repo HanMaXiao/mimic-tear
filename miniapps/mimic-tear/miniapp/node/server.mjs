@@ -247,6 +247,28 @@ export function createApp(deps) {
         return;
       }
 
+      if (pathname === '/api/duty/intent' && method === 'POST') {
+        // Tell the boss whether it is on duty or resting. The decision is recorded with
+        // who asked and why, and the board is refreshed right away — the duty state is
+        // not part of the runtime revision, so nothing else would move the page.
+        const body = await readBody(request);
+        const result = await service.setDutyIntent({
+          mode: body?.mode,
+          requestedBy: body?.requestedBy,
+          note: body?.note,
+        });
+        sendJson(response, 200, result);
+        // The board refreshes from the SSE stream. That refresh is best effort: the intent
+        // is already written, so a failure here must not turn a completed write into an
+        // error the caller sees.
+        try {
+          broadcast('update', await service.getOverview());
+        } catch (error) {
+          logger.warn('mimic-tear.duty.refresh.failed', { message: error?.message });
+        }
+        return;
+      }
+
       if (pathname === '/api/patrol/run' && method === 'POST') {
         // A patrol turn can take minutes, so it must not hold the HTTP request open.
         sendJson(response, 202, { status: 'started' });

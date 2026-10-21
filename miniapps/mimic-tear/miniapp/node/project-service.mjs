@@ -7,8 +7,11 @@ import {
   buildProjectCards,
   parsePatrolReport,
   questionnaireShape,
+  withDutyCards,
 } from './view-model.mjs';
 import { buildDutyRounds } from './duty-rounds.mjs';
+import { DutyIntent } from './duty-intent.mjs';
+import { ManagedProjects } from './managed-projects.mjs';
 
 /**
  * The single domain service of the Mini App.
@@ -63,6 +66,8 @@ export class ProjectService {
    *   persistence: import('./persistence.mjs').Persistence,
    *   boss: { dispatch: (input: any) => Promise<any>, patrol: (input: any) => Promise<any> },
    *   patrol?: import('./patrol-store.mjs').PatrolStore,
+   *   dutyIntent?: import('./duty-intent.mjs').DutyIntent,
+   *   managed?: import('./managed-projects.mjs').ManagedProjects,
    *   refreshSkills?: () => Promise<{ skills: any[], failures: any[] }>,
    * }} deps
    */
@@ -74,11 +79,78 @@ export class ProjectService {
     this.persistence = deps.persistence;
     this.boss = deps.boss;
     this.patrol = deps.patrol ?? null;
+    // The duty intent and the jurisdiction list live in the same directory as the duty
+    // config, so they are found next to it rather than injected twice.
+    const sharedDir = deps.patrol?.dataDir ?? deps.dutyIntent?.dataDir ?? null;
+    this.dutyIntent = deps.dutyIntent ?? (sharedDir ? new DutyIntent(sharedDir) : null);
+    this.managed = deps.managed ?? (sharedDir ? new ManagedProjects(sharedDir) : null);
     this.refreshSkills = deps.refreshSkills ?? null;
     this.skillsScannedAt = Date.now();
 
     /** Cached aggregate, invalidated by the runtime revision. */
     this.cache = null;
+  }
+
+  /**
+   * The duty state: the facts, the decision that was made, and what the boss watches.
+   *
+   * The duty intent is deliberately not part of the runtime revision: a user who tells the
+   * boss to rest has to see the board change right away, not on the next unrelated session
+   * event. So the duty state is read fresh on every call and stamped onto the cards on the
+   * way out — the cached snapshot stays a snapshot.
+   *
+   * @param {{config?:any, findings?:any[], dismissed?:any[]}} [input]
+   * @returns {Promise<any>}
+   */
+  async dutyBlock(input = {}) {
+    const [intent, managedEntries] = await Promise.all([
+      this.dutyIntent ? this.dutyIntent.read() : null,
+      this.managed ? this.managed.list() : [],
+    ]);
+    const watching = new Set(managedEntries.map((entry) => entry.name));
+    const duty = buildDutyStatus({
+      config: input.config ?? await this.getPatrolConfig(),
+      findings: input.findings ?? [],
+      dismissed: input.dismissed ?? [],
+      intent,
+      now: Date.now(),
+    });
+    return { ...duty, watching: [...watching] };
+  }
+
+  /**
+   * The current duty intent — what the boss was told to do, and by whom.
+   *
+   * @returns {Promise<{ intent: any, duty: any }>}
+   */
+  async getDutyIntent() {
+    const [intent, duty] = await Promise.all([
+      this.dutyIntent ? this.dutyIntent.read() : null,
+      this.dutyBlock(),
+    ]);
+    return { intent, duty };
+  }
+
+  /**
+   * Record the decision about the boss's duty.
+   *
+   * "Resting" is a decision with a reason, not a switch somebody flipped: the intent keeps
+   * who asked for it and since when, so the board can say *why* the boss is off duty.
+   *
+   * @param {{mode?:string, requestedBy?:string, note?:string}} input
+   * @returns {Promise<{ intent: any, duty: any }>}
+   */
+  async setDutyIntent(input = {}) {
+    if (!this.dutyIntent) {
+      throw new DomainError('duty_intent_unavailable', '当前运行时没有值班意图通道', 501);
+    }
+    const mode = input?.mode === 'resting' ? 'resting' : 'on-duty';
+    const requestedBy = typeof input?.requestedBy === 'string' && input.requestedBy.trim()
+      ? input.requestedBy.trim()
+      : null;
+    const note = typeof input?.note === 'string' ? input.note : '';
+    const intent = await this.dutyIntent.setMode(mode, { requestedBy, note });
+    return { intent, duty: await this.dutyBlock() };
   }
 
   /**
@@ -308,22 +380,20 @@ export class ProjectService {
     const patrolConfig = await this.getPatrolConfig();
     const findings = this.patrol ? await this.patrol.list() : [];
     const dismissed = await this.persistence.listDismissed();
+    const duty = await this.dutyBlock({ config: patrolConfig, findings, dismissed });
     return {
       generatedAt: Date.now(),
       kpi: buildKpi(snapshot.cards, inbox),
-      projects: snapshot.cards,
+      // The cards carry the duty state: a project says whether the boss watches it, and
+      // whether the boss is on duty at all.
+      projects: withDutyCards(snapshot.cards, duty, duty.watching),
       // Acknowledged items are known already: showing them here would make the count
       // disagree with the KPI and the inbox badge.
       attention: inbox.filter((item) => item.severity !== 'low' && !item.acknowledged),
       internalProjectCount: snapshot.internalProjectCount,
       dataWarning: snapshot.dataWarning,
       // Whether the boss is on duty, when it last reported, and whether it has gone quiet.
-      duty: buildDutyStatus({
-        config: patrolConfig,
-        findings,
-        dismissed,
-        now: Date.now(),
-      }),
+      duty,
     };
   }
 
@@ -405,7 +475,8 @@ export class ProjectService {
   /** @returns {Promise<{ projects: any[] }>} */
   async getProjects() {
     const snapshot = await this.snapshot();
-    return { projects: snapshot.cards };
+    const duty = await this.dutyBlock();
+    return { projects: withDutyCards(snapshot.cards, duty, duty.watching) };
   }
 
   /**
@@ -423,14 +494,16 @@ export class ProjectService {
     const goals = snapshot.goals.filter((g) => sessionIds.has(g.sessionId));
     const questions = snapshot.questionnaires.filter((q) => sessionIds.has(q.sessionId));
     const plan = snapshot.plans.get(id) ?? null;
+    const duty = await this.dutyBlock();
 
     return {
-      project: card,
+      project: withDutyCards([card], duty, duty.watching)[0],
       orgTree: buildOrgTree(sessions),
       goals,
       questions,
       tasks: snapshot.tasks.filter((t) => sessionIds.has(t.ownerSessionId)),
       plan,
+      duty,
     };
   }
 
