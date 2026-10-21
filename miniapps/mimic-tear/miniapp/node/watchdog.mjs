@@ -13,14 +13,20 @@
  *   2. asks `buildDutyStatus` — the board's own rule — whether the boss is alive,
  *   3. reads the scheduler's permanent run log to see whether the boss *was*: a gap the
  *      handover stamp cannot show, because the next handover overwrites it,
- *   4. says something on the desktop when the verdict flips.
+ *   4. writes every alert down (`watchdog-alert.log`, JSONL) and *then* tries to tell the
+ *      user about it with a desktop notification.
+ *
+ * The order matters: **the file is the channel, the toast is the courtesy.** A toast
+ * needs an interactive session and can be swallowed; the file cannot. So an alert is
+ * recorded whether or not the notification landed, and the board can read the log back
+ * the next time it is opened.
  *
  * What it deliberately does **not** do: write to the board's data, dispatch work, or write
  * to the runtime database. A watchdog that can write back is a new source of failure; this
- * one can only read a timestamp, read a log, and speak.
+ * one can only read a timestamp, read a log, write down what it saw, and speak.
  *
  * Usage:
- *   node watchdog.mjs [--data-dir <dir>] [--db <file>] [--cron-id <id>] [--dry-run]
+ *   node watchdog.mjs [--data-dir <dir>] [--db <file>] [--cron-id <id>] [--no-notify] [--dry-run]
  */
 
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
@@ -31,6 +37,7 @@ import { pathToFileURL } from 'node:url';
 import { sendToast } from './toast.mjs';
 import { computeDutyEvidence } from './view-model.mjs';
 import { RuntimeStore } from './runtime-store.mjs';
+import { appendAlert } from './watchdog-alerts.mjs';
 import {
   applyFailure,
   applySuccess,
@@ -50,6 +57,14 @@ const dataDir = resolve(flag('data-dir', join(homedir(), '.minimax', 'v2', 'plug
 const runtimeDbPath = resolve(flag('db', process.env.MIMIC_RUNTIME_DB
   ?? join(homedir(), '.minimax', 'v2', 'sqlite', 'runtime-state.sqlite')));
 const dryRun = args.includes('--dry-run');
+/**
+ * Headless mode: write the alert down, do not pop anything.
+ *
+ * A scheduled task that runs without an interactive session cannot show a toast anyway —
+ * trying costs a failed notification and a confusing log. With this flag the file is the
+ * only channel, which is exactly what it is for.
+ */
+const noNotify = args.includes('--no-notify');
 
 /**
  * The duty cron's id.
@@ -64,7 +79,6 @@ const DUTY_CRON_ID = '672fde94-0c52-466d-831e-e2919f49b64a';
 const CONFIG_FILE = 'patrol-config.json';
 const INTENT_FILE = 'duty-intent.json';
 const STATE_FILE = 'watchdog-state.json';
-const LOG_FILE = 'watchdog-alert.log';
 
 /**
  * @param {string} path
@@ -105,20 +119,6 @@ async function writeState(dir, state) {
 }
 
 /**
- * Append a line to the watchdog's own log.
- *
- * This is the fallback channel: if the desktop notification cannot be delivered, the fact
- * is still written down. "The notification failed" must not become "nobody ever knew".
- *
- * @param {string} dir the data directory to write into
- * @param {string} line
- */
-async function appendLog(dir, line) {
-  await mkdir(dir, { recursive: true });
-  await writeFile(join(dir, LOG_FILE), `${line}\n`, { flag: 'a', encoding: 'utf8' });
-}
-
-/**
  * The evidence of missed duty rounds, read from the scheduler's permanent run log.
  *
  * The handover stamp cannot answer this: it says when the boss handed over *last*, and the
@@ -150,30 +150,20 @@ async function readEvidence(input) {
 }
 
 /**
- * One line describing an alert, for the log file.
- *
- * @param {number} now
- * @param {string} action
- * @param {{title:string, body:string}} message
- * @param {string} note
- * @returns {string}
- */
-function formatAlertLine(now, action, message, note) {
-  const label = action === 'stale' ? '大哥掉线' : action === 'missed' ? '大哥漏班' : '大哥恢复';
-  return `[${new Date(now).toISOString()}] ${label}（${note}）\n  标题：${message.title}\n  正文：${message.body}`;
-}
-
-/**
  * Run one watchdog tick.
  *
- * @param {{dataDir?:string, now?:number, dbPath?:string, cronId?:string,
- *          deliver?:(message:{title:string,body:string}) => Promise<{ok:boolean,error?:string}>}} [options]
+ * @param {{dataDir?:string, now?:number, dbPath?:string, cronId?:string, noNotify?:boolean,
+ *          deliver?:(message:{title:string,body:string}) => Promise<{ok:boolean,error?:string,note?:string}>}} [options]
  * @returns {Promise<{action:string, delivered:boolean, duty:any, evidence:any|null, message?:{title:string,body:string}, error?:string}>}
  */
 export async function runWatchdog(options = {}) {
   const dir = options.dataDir ?? dataDir;
   const now = options.now ?? Date.now();
-  const deliver = options.deliver ?? sendToast;
+  const headless = options.noNotify ?? noNotify;
+  const deliver = options.deliver
+    ?? (headless
+      ? async () => ({ ok: false, error: null, note: '通知已禁用（--no-notify）' })
+      : sendToast);
   const dbPath = options.dbPath ?? runtimeDbPath;
   const cronId = options.cronId ?? DUTY_CRON_ID;
 
@@ -196,8 +186,9 @@ export async function runWatchdog(options = {}) {
   });
 
   if (options.dryRun) {
-    // A dry run looks; it does not touch. No toast, no state file: a preview must not
-    // consume the gap it just found, and must not claim the user was told anything.
+    // A dry run looks; it does not touch. No toast, no state file, no alert file: a
+    // preview must not consume the gap it just found, and must not claim the user was
+    // told anything.
     return { action, delivered: false, duty, evidence, message };
   }
 
@@ -215,23 +206,41 @@ export async function runWatchdog(options = {}) {
     result = { ok: false, error: error?.message ?? String(error) };
   }
 
+  // The gap this alert is about, so the same stretch is never written down twice.
+  const gapTo = action === 'missed' ? (evidence?.lastGap?.to ?? null) : null;
+
   if (result?.ok) {
-    // A missed round is evidence, not just a notification: it is written down even when
-    // the toast lands, because the handover that erased the gap is the whole story.
-    if (action === 'missed') {
-      await appendLog(dir, formatAlertLine(now, action, message, '已记录（漏班证据）'));
-    }
+    // Every alert is written down, not just the ones that failed to deliver: the file is
+    // the channel that survives a closed board and a swallowed toast.
+    await appendAlert(dir, {
+      at: now,
+      action,
+      title: message.title,
+      body: message.body,
+      delivered: true,
+      error: null,
+      note: null,
+      gapTo,
+    });
     const next = applySuccess(state, action, duty, now, evidence);
     await writeState(dir, next);
     return { action, delivered: true, duty, evidence, message };
   }
 
-  // Delivery failed: log it, keep the state where it was so the next tick retries.
+  // Delivery failed: the fact still goes down, with the reason. Keep the state where it
+  // was so the next tick tries again.
   const next = applyFailure(state, action, duty, now, evidence);
   await writeState(dir, next);
-  // The log is read by a human when the notification did not arrive, so it carries the
-  // message that *would* have been shown — not just an internal action name.
-  await appendLog(dir, formatAlertLine(now, action, message, `通知未能送达：${result?.error ?? '未知原因'}`));
+  await appendAlert(dir, {
+    at: now,
+    action,
+    title: message.title,
+    body: message.body,
+    delivered: false,
+    error: result?.error ?? null,
+    note: result?.note ?? null,
+    gapTo,
+  });
   return { action, delivered: false, duty, evidence, message, error: result?.error ?? '未知原因' };
 }
 
