@@ -15,6 +15,10 @@
  * 2. **Silence is the default.** The watchdog runs every few minutes; a watcher that
  *    shouted on every tick would be worse than no watcher at all. It speaks only when the
  *    state flips, and it says the same thing once per outage.
+ * 3. **An explicit rest is not an outage.** The verdict is `alertable`, not `stale`: a boss
+ *    somebody deliberately told to rest has not handed over *on purpose*, so the watchdog
+ *    stays quiet about it. The fact (`stale`) is left alone — the board's duty lamp still
+ *    follows it, because the lamp is a fact and the switch is not.
  */
 
 import { buildDutyStatus } from './view-model.mjs';
@@ -37,12 +41,32 @@ import { buildDutyStatus } from './view-model.mjs';
 /**
  * The duty boss's liveness, read through the board's own rule.
  *
+ * The intent is passed in rather than read here: this module decides, it does not fetch.
+ * A boss somebody explicitly told to rest is not an outage, and the board's rule already
+ * knows that — it is the difference between `stale` (the fact) and `alertable` (the verdict).
+ *
  * @param {{lastRunAt?:number|null, dutyIntervalMinutes?:number}} config
  * @param {number} [now]
+ * @param {{mode?:string, since?:number|null, requestedBy?:string|null, note?:string}|null} [intent]
  * @returns {ReturnType<typeof buildDutyStatus>}
  */
-export function evaluateDuty(config, now = Date.now()) {
-  return buildDutyStatus({ config: config ?? {}, findings: [], now });
+export function evaluateDuty(config, now = Date.now(), intent = null) {
+  return buildDutyStatus({ config: config ?? {}, findings: [], intent, now });
+}
+
+/**
+ * Whether this duty state should raise an alarm.
+ *
+ * `alertable` is the verdict: stale AND not explicitly resting. A duty object built by
+ * hand (in a test, or by an older caller) does not carry the field, so the fact is the
+ * fallback — the strict reading of "stale" rather than an accidental silence.
+ *
+ * @param {ReturnType<typeof buildDutyStatus>} duty
+ * @returns {boolean}
+ */
+function alertable(duty) {
+  if (typeof duty?.alertable === 'boolean') return duty.alertable;
+  return Boolean(duty?.stale);
 }
 
 /**
@@ -88,7 +112,7 @@ export function emptyWatchdogState() {
  */
 export function decideAction(state, duty) {
   const previous = state?.notifiedStale ?? null;
-  const current = Boolean(duty?.stale);
+  const current = alertable(duty);
 
   if (previous === null) {
     // First observation. `neverRan` means "has not started", not "has fallen over":
@@ -150,7 +174,7 @@ export function applySuccess(state, action, duty, now) {
   // Quiet tick: establish the baseline without claiming a notification happened.
   // The observed fact follows the current observation; the "told the user" flag only
   // moves when it was already set, because a quiet tick told the user nothing.
-  const established = duty?.neverRan ? false : Boolean(duty?.stale);
+  const established = duty?.neverRan ? false : alertable(duty);
   return {
     ...base,
     observedStale: established,
@@ -176,7 +200,7 @@ export function applyFailure(state, action, duty, now) {
     // The fact follows the current observation — a previous baseline of `false` must not
     // mask a boss that has since gone quiet. What stays put is the "the user has been
     // told" flag: they have not been told, so the next tick must try again.
-    observedStale: Boolean(duty?.stale),
+    observedStale: alertable(duty),
     notifiedStale: state?.notifiedStale ?? null,
     checkedAt: now,
     failedDeliveries: (state?.failedDeliveries ?? 0) + 1,

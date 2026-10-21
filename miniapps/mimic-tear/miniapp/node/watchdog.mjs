@@ -8,7 +8,8 @@
  *
  * This program is what the Windows scheduled task runs every few minutes. It:
  *
- *   1. reads the duty handover stamp from `patrol-config.json` (read-only),
+ *   1. reads the duty handover stamp from `patrol-config.json` and the duty intent from
+ *      `duty-intent.json` (both read-only),
  *   2. asks `buildDutyStatus` — the board's own rule — whether the boss is alive,
  *   3. says something on the desktop when the verdict flips.
  *
@@ -45,6 +46,7 @@ const dataDir = resolve(flag('data-dir', join(homedir(), '.minimax', 'v2', 'plug
 const dryRun = args.includes('--dry-run');
 
 const CONFIG_FILE = 'patrol-config.json';
+const INTENT_FILE = 'duty-intent.json';
 const STATE_FILE = 'watchdog-state.json';
 const LOG_FILE = 'watchdog-alert.log';
 
@@ -112,9 +114,12 @@ export async function runWatchdog(options = {}) {
   const deliver = options.deliver ?? sendToast;
 
   const config = await readJson(join(dir, CONFIG_FILE), {});
+  // The duty intent: was the boss explicitly told to rest? A missing file means "no
+  // decision", which means on duty — never an excuse to stay quiet about a dead boss.
+  const intent = await readJson(join(dir, INTENT_FILE), null);
   const state = await readJson(join(dir, STATE_FILE), emptyWatchdogState());
 
-  const duty = evaluateDuty(config, now);
+  const duty = evaluateDuty(config, now, intent);
   const action = decideAction(state, duty);
 
   if (action === 'none') {
@@ -161,8 +166,9 @@ export async function runWatchdog(options = {}) {
  */
 export async function inspect() {
   const config = await readJson(join(dataDir, CONFIG_FILE), {});
+  const intent = await readJson(join(dataDir, INTENT_FILE), null);
   const state = await readJson(join(dataDir, STATE_FILE), emptyWatchdogState());
-  const duty = evaluateDuty(config, Date.now());
+  const duty = evaluateDuty(config, Date.now(), intent);
   return { dataDir, duty, state, action: decideAction(state, duty) };
 }
 
@@ -175,7 +181,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     process.stdout.write(`${JSON.stringify({
       action: result.action,
       delivered: result.delivered,
+      // The fact (the board's lamp follows it) and the verdict (what this watchdog acts on).
       stale: result.duty.stale,
+      alertable: result.duty.alertable,
+      resting: result.duty.resting,
       ageMinutes: result.duty.ageMinutes,
       error: result.error ?? null,
     })}\n`);
