@@ -179,6 +179,31 @@ test('缺口一：补交班会抹掉漏班证据', async (t) => {
     assert.equal(evidence.lastGap.gapMinutes, 390);
   });
 
+  await t.test('口径：台账那四个窗口的数字必须对得上', () => {
+    // 大哥 05:47 从投递记录直接算出的权威数字（槽位数 = floor(跨度 / 30min) - 1）：
+    // 90m → 2、450m → 14、420m → 13、390m → 12。
+    const cases = [
+      { span: 90, missed: 2 },
+      { span: 450, missed: 14 },
+      { span: 420, missed: 13 },
+      { span: 390, missed: 12 },
+    ];
+    for (const item of cases) {
+      const from = NOW - item.span * MINUTE - 10 * MINUTE;
+      const to = from + item.span * MINUTE;
+      const evidence = computeDutyEvidence({
+        runs: [
+          { id: 'a', status: 'delivered', createdAt: from, deliveredAt: from },
+          { id: 'b', status: 'delivered', createdAt: to, deliveredAt: to },
+        ],
+        periodMs: PERIOD,
+        now: NOW,
+        evidenceWindowMs: 45 * MINUTE,
+      });
+      assert.equal(evidence.lastGap.missedRounds, item.missed, `${item.span} 分钟跨度的漏轮数`);
+    }
+  });
+
   await t.test('没有运行记录时证据是零，不是报错', () => {
     const evidence = computeDutyEvidence({ runs: [], periodMs: PERIOD, now: NOW });
     assert.equal(evidence.missedRounds, 0);

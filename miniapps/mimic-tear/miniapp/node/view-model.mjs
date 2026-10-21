@@ -497,6 +497,8 @@ export function buildDutyStatus(input) {
 export function computeDutyEvidence(input) {
   const runs = (input?.runs ?? []).filter((run) => run && typeof run.createdAt === 'number');
   const periodMs = Number(input?.periodMs) > 0 ? Number(input.periodMs) : 30 * 60_000;
+  // The ledger counts in minutes and in slots, so the period is normalised the same way.
+  const periodMinutes = Math.max(1, Math.round(periodMs / 60_000));
   const now = Number(input?.now) ?? Date.now();
   const evidenceWindowMs = Number(input?.evidenceWindowMs) > 0 ? Number(input.evidenceWindowMs) : periodMs * 1.5;
 
@@ -533,16 +535,18 @@ export function computeDutyEvidence(input) {
   for (let i = 1; i < delivered.length; i += 1) {
     const from = delivered[i - 1];
     const to = delivered[i];
-    // The timestamps carry a few milliseconds of jitter, so the number of periods is
-    // rounded rather than floored: a 390-minute gap is 13 periods, not 12.99999. Flooring
-    // here silently drops one round per gap — the count would not match the duty ledger.
-    const expected = Math.max(0, Math.round((to - from) / periodMs) - 1);
+    // The ledger's rule, verbatim: the slots that should have fired and did not —
+    // `floor(span / period) - 1`. The span is rounded to whole minutes first, because the
+    // runtime stamps handovers with a few milliseconds of jitter and a 390-minute gap
+    // measures 389m59.98s; without that step the floor drops one round per gap.
+    const gapMinutes = Math.round((to - from) / 60_000);
+    const expected = Math.max(0, Math.floor(gapMinutes / periodMinutes) - 1);
     const pendingInside = pending.filter((run) => run.createdAt >= from && run.createdAt <= to);
     if (expected === 0 && pendingInside.length === 0) continue;
     gaps.push({
       from,
       to,
-      gapMinutes: Math.round((to - from) / 60_000),
+      gapMinutes,
       missedRounds: Math.max(expected, pendingInside.length),
       attempted: pendingInside.length > 0,
     });
