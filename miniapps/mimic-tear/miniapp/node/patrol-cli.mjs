@@ -22,10 +22,11 @@ import { join, resolve } from 'node:path';
 
 import { RuntimeStore } from './runtime-store.mjs';
 import { readPlan } from './plan-store.mjs';
-import { buildDutyStatus, buildInbox, buildOrgTree, buildPatrolBrief, buildProjectCards, projectName } from './view-model.mjs';
+import { buildDutyStatus, buildInbox, buildOrgTree, buildPatrolBrief, buildProjectCards, projectName, withDutyCards } from './view-model.mjs';
 import { PatrolStore } from './patrol-store.mjs';
 import { Persistence } from './persistence.mjs';
 import { ManagedProjects } from './managed-projects.mjs';
+import { DutyIntent } from './duty-intent.mjs';
 
 const args = process.argv.slice(2);
 const command = args.find((arg) => !arg.startsWith('--')) ?? 'facts';
@@ -58,9 +59,18 @@ function positionalArgs() {
 const store = RuntimeStore.open(dbPath);
 const patrol = new PatrolStore(dataDir);
 const managed = new ManagedProjects(dataDir);
+const dutyIntent = new DutyIntent(dataDir);
 
 if (command === 'paths') {
-  print({ dataDir, dbPath, findings: patrol.findingsPath, answered: patrol.answeredPath, config: patrol.configPath, managed: managed.path });
+  print({
+    dataDir,
+    dbPath,
+    findings: patrol.findingsPath,
+    answered: patrol.answeredPath,
+    config: patrol.configPath,
+    managed: managed.path,
+    dutyIntent: dutyIntent.path,
+  });
   store.close();
   process.exit(0);
 }
@@ -144,6 +154,11 @@ if (command === 'facts') {
   const managedNames = new Set(
     managedEntries.filter((entry) => entry.matched).map((entry) => entry.projectName ?? entry.name),
   );
+
+  // What the boss was told to do next. "Resting" is an explicit decision with a timestamp
+  // and a reason, so it travels with the facts: a boss that was told to rest must know it
+  // is off duty before it decides what is worth reporting this round.
+  const dutyIntentState = await dutyIntent.read();
 
   // The sessions the boss may talk to. Without these a grant is just a name on a list:
   // the boss would have to dig through the runtime to find out who to send a message to.
@@ -241,6 +256,22 @@ if (command === 'facts') {
     }
   }
 
+  // The boss's own duty state. `missedRounds` is how the boss learns that its previous
+  // round never landed — the board can see a stale duty line, but only the boss can
+  // report what it was in the middle of doing when it dropped.
+  //
+  // `mode` is the decision that was made, `watching` is the jurisdiction list. Together
+  // they answer "what am I here to do", which no timestamp can answer.
+  const duty = {
+    ...buildDutyStatus({
+      config: await patrol.getConfig(),
+      findings: previousFindings,
+      intent: dutyIntentState,
+      now: Date.now(),
+    }),
+    watching: [...managedNames],
+  };
+
   print({
     generatedAt: Date.now(),
     paths: {
@@ -266,21 +297,15 @@ if (command === 'facts') {
       acknowledgedBy: finding.acknowledgedBy ?? null,
       note: finding.note ?? '',
     })),
-    // The boss's own duty state. `missedRounds` is how the boss learns that its previous
-    // round never landed — the board can see a stale duty line, but only the boss can
-    // report what it was in the middle of doing when it dropped.
-    duty: buildDutyStatus({
-      config: await patrol.getConfig(),
-      findings: previousFindings,
-      now: Date.now(),
-    }),
+    // The boss's own duty state — see above.
+    duty,
     alreadyAnswered: answered.map((item) => ({
       requestId: item.requestId,
       sessionId: item.sessionId,
       answeredAt: item.answeredAt,
       answer: item.answer,
     })),
-    projects: cards.map((card) => {
+    projects: withDutyCards(cards, duty, managedNames).map((card) => {
       const inScope = managedNames.has(card.name);
       const ownerSessions = ownerSessionsByProject.get(card.id) ?? [];
       // The default target: the most recently active root session. The boss still judges
@@ -297,6 +322,8 @@ if (command === 'facts') {
         lastActivityAt: card.lastActivityAt,
         // Is this project inside the boss's jurisdiction?
         managed: inScope,
+        // The boss's duty state and whether it watches this project at all.
+        duty: card.duty,
         ...(inScope
           ? {
             ownerSessionId,

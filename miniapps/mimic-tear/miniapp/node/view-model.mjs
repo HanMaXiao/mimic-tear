@@ -6,6 +6,8 @@
  * shape) directly testable without a runtime, a database, or a filesystem.
  */
 
+import { normalizeDutyIntent } from './duty-intent.mjs';
+
 /**
  * @typedef {'active'|'idle'|'blocked'|'error'} Health
  * @typedef {{ id:number, kind:string, workspaceDir:string, pinned:boolean, hidden:boolean,
@@ -41,7 +43,10 @@
  * @typedef {{ lastRunAt:number|null, intervalMinutes:number, dutyIntervalMinutes:number,
  *             findings:number, openFindings:number, withdrawn:number,
  *             staleAfterMinutes:number, stale:boolean, neverRan:boolean,
- *             ageMinutes:number|null, missedRounds:number|null }} DutyStatus
+ *             ageMinutes:number|null, missedRounds:number|null,
+ *             mode:'on-duty'|'resting', resting:boolean, modeSince:number|null,
+ *             requestedBy:string|null, intentNote:string,
+ *             alertable:boolean, nextDueAt:number|null, overdueMinutes:number|null }} DutyStatus
  */
 
 /** Inbox severities, ordered from most to least urgent. */
@@ -392,26 +397,41 @@ export function dutyStaleAfterMinutes(dutyIntervalMinutes) {
  * duty state carries its own liveness verdict: a boss that has not filed a round in time is
  * `stale`, and the client says so in words instead of a timestamp.
  *
+ * Two verdicts, deliberately kept apart:
+ *
+ * - `stale` is the **fact** — it follows the handover stamp and nothing else, which is what
+ *   the board's duty lamp reads. A switch must never be able to move it.
+ * - `alertable` is the **verdict** — it is `stale` minus an explicit rest. A boss somebody
+ *   deliberately told to rest is not an outage, so the watchdog stays quiet about it.
+ *
  * @param {{config:{lastRunAt:number|null,intervalMinutes:number,
  *                 dutyIntervalMinutes?:number},
  *          findings:Array<{acknowledged:boolean, acknowledgedBy?:string|null}>,
  *          dismissed?:Array<{id:string, reason?:string}>,
+ *          intent?:{mode?:string, since?:number|null, requestedBy?:string|null, note?:string},
  *          now?:number}} input
  * @returns {{lastRunAt:number|null, intervalMinutes:number, dutyIntervalMinutes:number,
  *            findings:number, openFindings:number, withdrawn:number,
  *            dismissed:number, staleAfterMinutes:number, stale:boolean, neverRan:boolean,
- *            ageMinutes:number|null, missedRounds:number|null}}
+ *            ageMinutes:number|null, missedRounds:number|null,
+ *            mode:'on-duty'|'resting', resting:boolean, modeSince:number|null,
+ *            requestedBy:string|null, intentNote:string,
+ *            alertable:boolean, nextDueAt:number|null, overdueMinutes:number|null}}
  */
 export function buildDutyStatus(input) {
   const config = input?.config ?? {};
   const findings = input?.findings ?? [];
   const dismissed = input?.dismissed ?? [];
   const now = input?.now ?? Date.now();
+  const intent = normalizeDutyIntent(input?.intent);
   const intervalMinutes = Number(config.intervalMinutes) > 0 ? Number(config.intervalMinutes) : 15;
   const dutyIntervalMinutes = Number(config.dutyIntervalMinutes) > 0 ? Number(config.dutyIntervalMinutes) : 30;
   const staleAfterMinutes = dutyStaleAfterMinutes(dutyIntervalMinutes);
   const lastRunAt = typeof config.lastRunAt === 'number' ? config.lastRunAt : null;
   const ageMinutes = lastRunAt === null ? null : Math.floor((now - lastRunAt) / 60_000);
+  const periodMs = dutyIntervalMinutes * 60_000;
+  // The fact: has the boss gone quiet? It is computed from the handover stamp alone.
+  const stale = lastRunAt === null || ageMinutes > staleAfterMinutes;
 
   return {
     lastRunAt,
@@ -425,14 +445,61 @@ export function buildDutyStatus(input) {
     // Raw runtime items the boss ruled out (a session error it proved is a leftover).
     dismissed: dismissed.length,
     staleAfterMinutes,
-    stale: lastRunAt === null || ageMinutes > staleAfterMinutes,
+    stale,
     neverRan: lastRunAt === null,
     ageMinutes,
     // How many duty rounds were missed since the last handover. 0 means "on time".
     // This is what tells the boss that its previous round never landed, so it can
     // report the gap instead of silently carrying on as if nothing happened.
     missedRounds: ageMinutes === null ? null : Math.max(0, Math.ceil(ageMinutes / dutyIntervalMinutes) - 1),
+    // What the boss was told to do, as opposed to what it did. `resting` is an explicit
+    // decision with a timestamp and a reason, never the absence of a handover.
+    mode: intent.mode,
+    resting: intent.mode === 'resting',
+    modeSince: intent.since,
+    requestedBy: intent.requestedBy,
+    intentNote: intent.note,
+    // Whether an alarm should fire. A boss that was explicitly told to rest is not an
+    // outage, so the watchdog stays quiet — but `stale` above is untouched by this: the
+    // duty lamp follows the facts, never the switch.
+    alertable: stale && intent.mode !== 'resting',
+    // When the next handover is expected, counted from now, and how many minutes past its
+    // own deadline we already are.
+    nextDueAt: now + periodMs,
+    overdueMinutes: lastRunAt === null
+      ? null
+      : Math.max(0, Math.ceil((now - lastRunAt - periodMs) / 60_000)),
   };
+}
+
+/**
+ * Stamp the duty state onto the project cards.
+ *
+ * The cards themselves are cached by the runtime revision, but the duty intent is not part
+ * of the runtime: a user who tells the boss to rest has to see the board change without
+ * waiting for an unrelated session to move. So the duty state is stamped on the way out,
+ * onto a copy — the cache stays a cache.
+ *
+ * `watching` says whether the boss is allowed to manage that project at all. It travels
+ * with the duty marker because "is anybody watching this" is one question, not two.
+ *
+ * @param {any[]} cards
+ * @param {ReturnType<typeof buildDutyStatus>} duty
+ * @param {Set<string>|string[]} [watching]
+ * @returns {any[]}
+ */
+export function withDutyCards(cards, duty, watching) {
+  const names = watching instanceof Set ? watching : new Set(watching ?? []);
+  return (cards ?? []).map((card) => ({
+    ...card,
+    duty: {
+      mode: duty?.mode ?? 'on-duty',
+      resting: Boolean(duty?.resting),
+      since: duty?.modeSince ?? null,
+      requestedBy: duty?.requestedBy ?? null,
+      watching: names.has(card.name),
+    },
+  }));
 }
 
 /**
