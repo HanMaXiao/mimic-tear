@@ -5,7 +5,8 @@
 - **本轮只出方案，不写码**（大哥 03:0x 指令：先交方案 + 验收标准，别直接写码）
 - 归属：本方案不碰 `client/` 与 spec §6（UI/UX 线）。落在 `miniapps/mimic-tear/miniapp/node/`、`tests/`、`docs/plans/`
 - 上游证据来源：`~/.minimax/v2/sqlite/runtime-state.sqlite`（只读）、`schtasks /query`、已发布副本
-- **状态（2026-10-22 06:0x 补记）**：**缺口一已实现、已验收、已发布**（提交 `bda22d9` 实现 / `385a733` 验收测试 / `0ae0ce4` 口径取整修正；全量 279 项全绿；已发布副本与仓库逐字节一致，并在生产触发过一次）。**缺口二未做**（本文件 §2 仍是方案）。口径已由大哥 05:47 钉死：**按槽位数**。
+- **状态（2026-10-22 06:0x 补记）**：**缺口一已实现、已验收、已发布**（提交 `bda22d9` 实现 / `385a733` 验收测试 / `0ae0ce4` 口径取整修正；全量 279 项全绿；已发布副本与仓库逐字节一致，并在生产触发过一次）。口径已由大哥 05:47 钉死：**按槽位数**。
+- **缺口二（2026-10-22 06:1x 补记）：文件侧已做并已发布**（告警文件改 JSONL + 每次告警都写 + 看板补看 + `--no-notify` 无头模式；B2–B6 已验）。**计划任务那半做不成**：S4U 实测建不起来（`schtasks /create` → `ERROR: Access is denied.`），按 §2.4 自带回退走，多触发器是同一个权限原因。
 
 ---
 
@@ -116,7 +117,10 @@ run_id | cron_id | session_id | status | created_at_ms | delivered_at_ms | faile
 
 ## 2. 缺口二：告警通道只有桌面 toast，计划任务只跑在交互式会话
 
-> **状态：未做。** 以下仍是方案。缺口一的 `missed` 状态与"送达成功也留痕"已经就位（漏班类告警现在每次都写 `watchdog-alert.log`），但**掉线类告警仍是旧行为**（只在送达失败时写）。
+> **状态：文件侧已做并发布（B2–B6 已验）；计划任务那半做不成。**
+> - **已做**：告警文件改 **JSONL**、**每次告警都写**（送达成功也写）、看板补看（`GET /api/watchdog/alerts` + 总览 `duty` 块加 `alerts`）、新增 `--no-notify` 无头模式（只写文件，不弹窗）。
+> - **做不成**：计划任务 `LogonType` 改 `S4U`。**2026-10-22 实测**：`schtasks /create /tn <探针名> /xml <S4U 版> /f` → `ERROR: Access is denied.`（非管理员不能注册 S4U 任务）。按 §2.4 自带回退：**文件侧（①②）已做**；**多触发器同样建不了**（同一个权限原因），所以回退落在「文件侧 + 看板补看」这一层。
+> - **没做的**：§2.3 的 **B1 未达成**——不是没试，是环境不允许。B2–B6 全部达成。
 
 ### 2.1 现状（实测）
 
@@ -156,7 +160,7 @@ run_id | cron_id | session_id | status | created_at_ms | delivered_at_ms | faile
 
 | # | 验收内容 | 怎么验 |
 | --- | --- | --- |
-| B1 | 任务不再依赖交互式会话 | node 跑 `schtasks /query /tn MimicTear-DutyWatchdog /xml`，断言输出里的 `<LogonType>` **不是** `InteractiveToken`（是 `S4U`） |
+| B1 | 任务不再依赖交互式会话 | node 跑 `schtasks /query /tn MimicTear-DutyWatchdog /xml`，断言输出里的 `<LogonType>` **不是** `InteractiveToken`（是 `S4U`）。**❌ 未达成（2026-10-22 实测）**：`schtasks /create` 注册 S4U 任务 → `ERROR: Access is denied.`，非管理员不允许；按 §2.4 回退 |
 | B2 | **送达成功也要留痕**（旧行为是成功就不写） | 跑一次 watchdog tick，注入一个返回 `{ok:true}` 的假 deliver → 断言 alert 文件里**有**这条告警 |
 | B3 | 送达失败也要留痕 + 记原因 | 注入抛错的 deliver → 断言 alert 文件里有失败原因与原文明文 |
 | B4 | 看板读得到 | `project-service` 暴露 `GET /api/watchdog/alerts`（读最后 N 条）→ node 断言返回条数与 JSONL 字段 |
