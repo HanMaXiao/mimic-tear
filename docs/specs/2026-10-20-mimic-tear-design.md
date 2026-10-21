@@ -1523,3 +1523,100 @@ node "<patrol-cli 路径>" manage remove <项目名> "<大老板的原话>"
 | 之后 | `listSessionMessages` 返回 **106** 条（104 → 106），`countSessionMessages` = 106 |
 
 测试 19 条，4 处断点做过变异验证（客户端不处理 `chat.history` / 变更检测恒 false / 历史接口不返回消息 / 不拉历史），确认会红。全量 243 项全绿。
+
+## 24. 管辖权要变成"能派工的东西"
+
+§22 把管辖做成了一份状态文件（`managed-projects.json`），原则是"谁管哪些项目由大老板点名，不写在提示词里"。但 2026-10-22 早上暴露了第二层问题：**名单是空的。**
+
+### 24.1 死结：有名单也不等于能派工
+
+大哥的值班台账（`~/.minimax/agents/boss/state/patrol-ledger.json`）里连着 5 轮是同一个结论：
+
+> `（本轮无派工：managed 名单仍为空）` — 零派工 / 零恢复 / 零催办 / 零排除 / 零消息。
+
+这不是失职，是**没人点名**。但它同时说明：**"有名单"和"能干活"之间还差一层**。原来那份名单有两个洞：
+
+| 洞 | 后果 |
+| --- | --- |
+| 名单只存项目**名字**，而名字必须和运行时项目名逐字相同 | 名字差一个字 → 授权**静默落空** → 大哥每轮报"当前无管辖项目"，永远不会知道自己拿的是一张空牌 |
+| `facts` 只给项目卡（名字 / 路径 / 健康度 / 会话数），**不给会话 id** | 就算名单对了，大哥也不知道该给谁发消息——它的 `session list` 绑在它自己的项目上，看不到别的项目的会话 |
+
+第二条是真正的死结：**名单是一扇没有门牌的门。**
+
+### 24.2 授权不许落空：`manage add` 校验项目名
+
+现在 `manage add <名字> "<原话>"` 会拿这个名字去运行时项目表里对（对法与看板一致：工作区路径的最后一段）：
+
+- **对不上 → 退出码 2，什么都不写**，并把真实项目名打出来：
+
+  ```
+  没有叫「Mimic-Teer」的项目，这份授权会落空。当前的项目名有：Mimic Tear / Contra-Survivor / …
+  ```
+
+- 对上了 → 名单里除了 `name` / `reason`，还记下 `projectId` 和 `path`。
+
+> 为什么不"提示一下就算了"：**落空的授权是查不出来的**。名单里躺着一条记录，`facts` 也照常显示，大哥看不出自己其实管不到任何东西。**要在写下去的那一刻就拒绝。**
+
+`manage remove` 反过来：撤销一个不存在的名字是幂等的（不报错），但返回值会说清没变：
+
+```json
+{ "ok": true, "removed": false, "warning": "名单里没有「Alpah」，什么都没变——核对项目名是否逐字一致" }
+```
+
+**撤销失败比派工失败更隐蔽**——它不报错，只有一行 warning。大老板以为收回去了，大哥还在管。
+
+### 24.3 `facts` 回显匹配结果
+
+`managed[]` 每条现在带：
+
+```json
+{
+  "name": "Mimic Tear",
+  "reason": "大老板 2026-10-22 02:38 原话：持续迭代大哥，并让大哥管你",
+  "projectId": 256,
+  "path": "D:\\Project\\AppProject\\Mimic Tear",
+  "matched": true,
+  "projectName": "Mimic Tear"
+}
+```
+
+`matched: false` = 这份授权现在管不到任何东西。大哥看到它要**报给大老板**（"写的是 X，运行时里叫 Y"），**不能自己把名字换成看起来对的那个**——名单只认点名。
+
+### 24.4 名单外的项目不带会话入口
+
+`projects[]` 里，**只有 `managed: true` 的项目**带这两样：
+
+| 字段 | 是什么 |
+| --- | --- |
+| `ownerSessionId` | 最近活动的**根会话** id（默认对接对象） |
+| `ownerSessions[]` | 该项目全部会话：`id` / `title` / `agentName` / `status` / `updatedAt` / `isRoot` / `visibility` / `goalId` / `goalStatus` / `goalObjective` |
+
+**名单外的项目根本不带 `ownerSessions` 这个键**——不给越权留入口。
+
+`ownerSessionId` 是起点不是答案：一个项目可能有多个根会话（换着开的活），大哥要自己挑——挑 `status: "started"` 的、挑挂着 `goalStatus: "active"` 的、挑 `title` 对得上要派的那件事的。
+
+### 24.5 大哥怎么用（写进技能书第十二节）
+
+`skills/mimic-tear-boss/SKILL.md` 加了「十二、拿到管辖权之后：名单要变成能派工的东西」，六条：
+
+1. `ownerSessions` 给你"找谁"，`ownerSessionId` 只是起点。
+2. `matched: false` = 授权落空 → 报错给大老板，**不自己换名字**。
+3. `manage add` 拒绝不存在的名字 → **照实报告**，不挑近似的名字加上去。
+4. `manage remove` 的 `removed: false` = 撤销没生效，**必须写进结论**。
+5. 授权要逐字引用（`reason` 里就是原话）。
+6. 拿到管辖权后的第一件事：确认那个负责人**已经收到过常驻授权**（第五节），没有就发一次。
+
+### 24.6 实测
+
+大老板 2026-10-22 02:38 原话「持续迭代大哥，并让大哥管你」→ 授予 Mimic Tear 管辖权（projectId 256）。大哥下一次值班（02:53）读到的事实表：
+
+```
+managed[0]: matched=true  projectId=256  path=D:\Project\AppProject\Mimic Tear
+Mimic Tear 卡片: managed=true  ownerSessionId=mvs_bf21987f…（就是大哥要管的那个会话）
+  mvs_bf21987f…  mavis     started  根会话  goal=active  「持续迭代大哥并让大哥接管管理」
+  mvs_84253a6…  mavis     idle    根会话  goal=paused  「创建仿身泪滴多智能体项目管理 Mini App」
+  mvs_f7241c2…  mavis     idle    根会话              「优化 miniapp 的 UI/UX」
+  ……共 8 个会话，3 个是根会话、5 个是子任务会话（isRoot=false）
+```
+
+全量测试 249 项全绿（新增 5 项：授权落空被拒、匹配结果回显、撤销没生效要说清、ownerSessions 带会话 id、授权记下指向）。
