@@ -204,6 +204,46 @@ export class RuntimeStore {
     }));
   }
 
+  /**
+   * The scheduled runs of one cron, oldest first.
+   *
+   * The runtime keeps every attempt forever, so this table is the permanent record of
+   * what the scheduler actually did — unlike the handover stamp, which the next handover
+   * overwrites. That difference is the whole point: a gap in the duty schedule is only
+   * visible here.
+   *
+   * @param {string} cronId
+   * @returns {Array<{id:string, cronId:string, sessionId:string|null, status:string,
+   *                  createdAt:number, deliveredAt:number|null, failedAt:number|null,
+   *                  errorCode:number|null, error:string|null, retryAt:number|null,
+   *                  retryAttempt:number}>}
+   */
+  listCronRuns(cronId) {
+    const id = String(cronId ?? '').trim();
+    if (!id) return [];
+    return this.#query(
+      `SELECT run_id, cron_id, session_id, status, created_at_ms, delivered_at_ms,
+              failed_at_ms, error_code, error, retry_at_ms, retry_attempt
+         FROM local_runtime_v2_cron_runs
+        WHERE cron_id = ?
+        ORDER BY created_at_ms ASC`,
+      [id],
+      (row) => ({
+        id: row.run_id,
+        cronId: row.cron_id,
+        sessionId: row.session_id ?? null,
+        status: row.status ?? 'unknown',
+        createdAt: row.created_at_ms ?? 0,
+        deliveredAt: row.delivered_at_ms ?? null,
+        failedAt: row.failed_at_ms ?? null,
+        errorCode: row.error_code ?? null,
+        error: row.error ?? null,
+        retryAt: row.retry_at_ms ?? null,
+        retryAttempt: row.retry_attempt ?? 0,
+      }),
+    );
+  }
+
   listGoals() {
     return this.#query(GOAL_SQL, [], (row) => ({
       id: row.goal_id,

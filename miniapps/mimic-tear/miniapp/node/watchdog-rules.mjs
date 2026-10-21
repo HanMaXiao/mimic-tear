@@ -5,7 +5,7 @@
  * on-demand, so when the app is closed nobody can see the "the boss went quiet" line.
  * This module answers one question — *should I say something right now?* — and nothing else.
  *
- * Two rules are load-bearing:
+ * Four rules are load-bearing:
  *
  * 1. **The liveness verdict is not re-implemented here.** `evaluateDuty` is a thin wrapper
  *    around `buildDutyStatus`, the same pure function the board and `patrol-cli` use. A
@@ -19,18 +19,25 @@
  *    somebody deliberately told to rest has not handed over *on purpose*, so the watchdog
  *    stays quiet about it. The fact (`stale`) is left alone — the board's duty lamp still
  *    follows it, because the lamp is a fact and the switch is not.
+ * 4. **Evidence is a second, separate question.** The handover stamp says whether the boss
+ *    is handing over *now*; the scheduler's run log says whether it *was*. A late handover
+ *    refreshes the stamp and hides the gap it just closed — so the gap is counted from the
+ *    run log (`computeDutyEvidence`) and reported as `missed`, once per gap.
  */
 
 import { buildDutyStatus } from './view-model.mjs';
 
 /**
- * @typedef {'stale'|'recovered'|'none'} WatchdogAction
+ * @typedef {'stale'|'missed'|'recovered'|'none'} WatchdogAction
  */
 
 /**
  * @typedef {{
  *   observedStale:boolean|null,   // the fact: is the boss quiet? (null = never observed)
  *   notifiedStale:boolean|null,   // what the user has been told (null = never told)
+ *   observedMissed:boolean|null,  // the fact: is there a gap the handover stamp hid?
+ *   notifiedMissed:boolean|null,  // what the user has been told about such a gap
+ *   reportedGaps:number[],        // the `to` timestamps of the gaps already reported
  *   staleSince:number|null,       // when the silence began
  *   lastNotifiedAt:number|null,
  *   failedDeliveries:number,
@@ -84,6 +91,9 @@ export function emptyWatchdogState() {
   return {
     observedStale: null,
     notifiedStale: null,
+    observedMissed: null,
+    notifiedMissed: null,
+    reportedGaps: [],
     staleSince: null,
     lastNotifiedAt: null,
     failedDeliveries: 0,
@@ -96,6 +106,8 @@ export function emptyWatchdogState() {
  *
  * - `none`: nothing happened; stay quiet.
  * - `stale`: the boss has gone quiet; tell the user.
+ * - `missed`: the schedule broke earlier and the next handover erased the proof; tell the
+ *   user how many rounds were lost.
  * - `recovered`: the boss is back; tell the user it is back.
  *
  * The comparison is between what the user has been told (`notifiedStale`) and what is
@@ -106,13 +118,25 @@ export function emptyWatchdogState() {
  * *already* long past the threshold (a real outage we just started watching), but stays
  * quiet about a boss that has never run at all.
  *
+ * A gap is reported **once**: the state remembers the `to` timestamp of every gap already
+ * reported, so the same empty stretch never gets announced twice.
+ *
  * @param {WatchdogState} state
  * @param {ReturnType<typeof buildDutyStatus>} duty
+ * @param {{erasedOutage?:boolean, lastGap?:{to:number, missedRounds:number}|null}} [evidence]
  * @returns {WatchdogAction}
  */
-export function decideAction(state, duty) {
+export function decideAction(state, duty, evidence) {
   const previous = state?.notifiedStale ?? null;
   const current = alertable(duty);
+
+  const gap = evidence?.lastGap ?? null;
+  const reported = state?.reportedGaps ?? [];
+  const missed = Boolean(evidence?.erasedOutage) && Boolean(gap) && !reported.includes(gap.to);
+
+  // The missed round comes first: it is the more specific news, and it is perishable — the
+  // evidence window closes, while a live outage is re-evaluated on every tick anyway.
+  if (missed) return 'missed';
 
   if (previous === null) {
     // First observation. `neverRan` means "has not started", not "has fallen over":
@@ -143,16 +167,39 @@ export function decideAction(state, duty) {
  * @param {WatchdogAction} action
  * @param {ReturnType<typeof buildDutyStatus>} duty
  * @param {number} now
+ * @param {{erasedOutage?:boolean, lastGap?:{to:number, missedRounds:number}|null}} [evidence]
  * @returns {WatchdogState}
  */
-export function applySuccess(state, action, duty, now) {
+export function applySuccess(state, action, duty, now, evidence) {
   const base = { ...state, checkedAt: now };
+
+  if (action === 'missed') {
+    const gap = evidence?.lastGap ?? null;
+    const reportedGaps = gap
+      ? [...(state?.reportedGaps ?? []), gap.to]
+      : (state?.reportedGaps ?? []);
+    return {
+      ...base,
+      // The boss is handing over now; what happened earlier is a separate fact.
+      observedStale: Boolean(duty?.stale),
+      notifiedStale: state?.notifiedStale ?? null,
+      observedMissed: true,
+      notifiedMissed: true,
+      // The gap is now on the record: the next tick must not announce it again.
+      reportedGaps,
+      staleSince: state?.staleSince ?? duty?.lastRunAt ?? now,
+      lastNotifiedAt: now,
+      failedDeliveries: 0,
+    };
+  }
 
   if (action === 'stale') {
     return {
       ...base,
       observedStale: true,
       notifiedStale: true,
+      observedMissed: Boolean(evidence?.erasedOutage),
+      notifiedMissed: state?.notifiedMissed ?? null,
       // The silence began when the boss last handed over, not when we noticed it.
       staleSince: state?.staleSince ?? duty?.lastRunAt ?? now,
       lastNotifiedAt: now,
@@ -165,6 +212,8 @@ export function applySuccess(state, action, duty, now) {
       ...base,
       observedStale: false,
       notifiedStale: false,
+      observedMissed: Boolean(evidence?.erasedOutage),
+      notifiedMissed: state?.notifiedMissed ?? null,
       staleSince: null,
       lastNotifiedAt: now,
       failedDeliveries: 0,
@@ -179,6 +228,8 @@ export function applySuccess(state, action, duty, now) {
     ...base,
     observedStale: established,
     notifiedStale: state?.notifiedStale ?? established,
+    observedMissed: Boolean(evidence?.erasedOutage),
+    notifiedMissed: state?.notifiedMissed ?? null,
   };
 }
 
@@ -186,15 +237,17 @@ export function applySuccess(state, action, duty, now) {
  * Record a *failed* notification.
  *
  * The fact is remembered (the boss *is* quiet) but the "the user has been told" flag is
- * not: the user has not been told yet, so the next tick must try again.
+ * not: the user has not been told yet, so the next tick must try again. The same holds for
+ * a missed gap: it stays off the reported list, so the next tick reports it again.
  *
  * @param {WatchdogState} state
  * @param {WatchdogAction} action
  * @param {ReturnType<typeof buildDutyStatus>} duty
  * @param {number} now
+ * @param {{erasedOutage?:boolean, lastGap?:{to:number, missedRounds:number}|null}} [evidence]
  * @returns {WatchdogState}
  */
-export function applyFailure(state, action, duty, now) {
+export function applyFailure(state, action, duty, now, evidence) {
   return {
     ...state,
     // The fact follows the current observation — a previous baseline of `false` must not
@@ -202,9 +255,23 @@ export function applyFailure(state, action, duty, now) {
     // told" flag: they have not been told, so the next tick must try again.
     observedStale: alertable(duty),
     notifiedStale: state?.notifiedStale ?? null,
+    observedMissed: Boolean(evidence?.erasedOutage),
+    notifiedMissed: state?.notifiedMissed ?? null,
     checkedAt: now,
     failedDeliveries: (state?.failedDeliveries ?? 0) + 1,
   };
+}
+
+/**
+ * A timestamp the reader can place on a clock.
+ *
+ * @param {number} timestamp
+ * @returns {string}
+ */
+function formatMoment(timestamp) {
+  const date = new Date(timestamp);
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 /**
@@ -216,13 +283,29 @@ export function applyFailure(state, action, duty, now) {
  *
  * @param {WatchdogAction} action
  * @param {{ duty: ReturnType<typeof buildDutyStatus>, staleSince:number|null, now:number,
- *           failedDeliveries?:number }} input
+ *           failedDeliveries?:number,
+ *           evidence?:{missedRounds?:number, lastGap?:{from:number,to:number,gapMinutes:number,missedRounds:number}|null} }} input
  * @returns {{ title:string, body:string }}
  */
 export function buildAlertMessage(action, input) {
   const duty = input.duty;
   const failed = input.failedDeliveries ?? 0;
   const failureNote = failed > 0 ? `（此前有 ${failed} 次通知没能送达）` : '';
+
+  if (action === 'missed') {
+    const gap = input.evidence?.lastGap ?? null;
+    const rounds = gap?.missedRounds ?? input.evidence?.missedRounds ?? 0;
+    const minutes = gap?.gapMinutes ?? 0;
+    const from = gap ? formatMoment(gap.from) : '不明';
+    const to = gap ? formatMoment(gap.to) : '不明';
+    return {
+      title: '仿身泪滴 · 大哥漏了几轮',
+      body: `从 ${from} 到 ${to} 漏了 ${rounds} 轮（间隔 ${minutes} 分钟）。`
+        + '这一段已经被后来的交班盖住了——补交班会刷新「上次交班时间」，'
+        + '所以只有调度记录还留着这段空档。'
+        + failureNote,
+    };
+  }
 
   if (action === 'recovered') {
     const downtime = input.staleSince ? Math.max(0, Math.round((input.now - input.staleSince) / 60_000)) : null;

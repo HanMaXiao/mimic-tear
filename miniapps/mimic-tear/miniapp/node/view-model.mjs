@@ -473,6 +473,100 @@ export function buildDutyStatus(input) {
 }
 
 /**
+ * The evidence of missed duty rounds.
+ *
+ * The handover stamp is a fact that the next handover overwrites: a gap in the duty
+ * schedule disappears the moment somebody hands over late. The scheduler's own run log is
+ * permanent, so the gap can still be counted — this is that count.
+ *
+ * Counting rule: **one expected slot, one missed round.** The schedule expects a handover
+ * every `periodMs`; a slot is missed when no delivered run covers it. A run that was
+ * scheduled but never delivered (pending or failed) is the *same* missed slot with stronger
+ * evidence — it is not counted twice.
+ *
+ * Gaps are bounded by the handovers on both sides, so a gap always has a `from` and a `to`.
+ * That is what makes a gap "erased": a later handover closed it, and only the run log still
+ * remembers.
+ *
+ * @param {{runs?:Array<{status?:string, createdAt?:number, deliveredAt?:number|null}>,
+ *          periodMs?:number, now?:number, evidenceWindowMs?:number, currentStale?:boolean}} input
+ * @returns {{missedRounds:number,
+ *            lastGap:{from:number,to:number,gapMinutes:number,missedRounds:number,attempted:boolean}|null,
+ *            erasedOutage:boolean, currentStale:boolean, observedSlots:number, coveredSlots:number}}
+ */
+export function computeDutyEvidence(input) {
+  const runs = (input?.runs ?? []).filter((run) => run && typeof run.createdAt === 'number');
+  const periodMs = Number(input?.periodMs) > 0 ? Number(input.periodMs) : 30 * 60_000;
+  const now = Number(input?.now) ?? Date.now();
+  const evidenceWindowMs = Number(input?.evidenceWindowMs) > 0 ? Number(input.evidenceWindowMs) : periodMs * 1.5;
+
+  // Only what already happened counts. A run logged after `now` is not evidence about the
+  // past — it would let a future handover explain an old gap.
+  const delivered = runs
+    .filter((run) => run.status === 'delivered' && typeof run.deliveredAt === 'number' && run.deliveredAt <= now)
+    .map((run) => run.deliveredAt)
+    .sort((a, b) => a - b);
+
+  if (delivered.length === 0) {
+    return {
+      missedRounds: 0,
+      lastGap: null,
+      erasedOutage: false,
+      currentStale: Boolean(input?.currentStale),
+      observedSlots: 0,
+      coveredSlots: 0,
+    };
+  }
+
+  const anchor = delivered[0];
+  const slotOf = (timestamp) => Math.floor((timestamp - anchor) / periodMs);
+
+  // Runs the scheduler tried but never delivered: missed, and the evidence is stronger.
+  const pending = runs.filter((run) => run.status !== 'delivered'
+    && typeof run.createdAt === 'number' && run.createdAt <= now);
+
+  // Gaps are bounded by the handovers that enclose them. The count is how many rounds
+  // *should* have fired inside the gap — `floor(gap / period) - 1` — because that is the
+  // number the duty ledger quotes. A run the scheduler tried but never delivered is the
+  // same round with stronger evidence, so it never adds a second count.
+  const gaps = [];
+  for (let i = 1; i < delivered.length; i += 1) {
+    const from = delivered[i - 1];
+    const to = delivered[i];
+    const expected = Math.max(0, Math.floor((to - from) / periodMs) - 1);
+    const pendingInside = pending.filter((run) => run.createdAt >= from && run.createdAt <= to);
+    if (expected === 0 && pendingInside.length === 0) continue;
+    gaps.push({
+      from,
+      to,
+      gapMinutes: Math.round((to - from) / 60_000),
+      missedRounds: Math.max(expected, pendingInside.length),
+      attempted: pendingInside.length > 0,
+    });
+  }
+
+  // Rounds scheduled after the last handover are not inside any gap: they are the failure
+  // that is still going on, and the liveness verdict is what reports it.
+  const lastDelivered = delivered[delivered.length - 1];
+  const trailingSlots = new Set(
+    pending.filter((run) => run.createdAt > lastDelivered).map((run) => slotOf(run.createdAt)),
+  );
+
+  const lastGap = gaps.length ? gaps[gaps.length - 1] : null;
+
+  return {
+    missedRounds: gaps.reduce((sum, gap) => sum + gap.missedRounds, 0) + trailingSlots.size,
+    lastGap,
+    // The gap is still worth reporting when it ended inside the evidence window: that is
+    // exactly the case where a late handover erased it.
+    erasedOutage: Boolean(lastGap && lastGap.missedRounds > 0 && now - lastGap.to < evidenceWindowMs),
+    currentStale: Boolean(input?.currentStale),
+    observedSlots: slotOf(lastDelivered) + 1,
+    coveredSlots: new Set(delivered.map(slotOf)).size,
+  };
+}
+
+/**
  * Stamp the duty state onto the project cards.
  *
  * The cards themselves are cached by the runtime revision, but the duty intent is not part
