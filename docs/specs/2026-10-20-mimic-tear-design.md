@@ -1722,3 +1722,61 @@ export function isUnresolvedQuestion(status) {
 `health` 还是 blocked 是对的——那条 paused goal 是真阻塞。**区别在于：现在这个 blocked 是真的，而不是被一张没人能点的卡撑出来的。**
 
 测试 1 条（过期卡不算未解决、不进收件箱；真待答卡照常阻塞）+ 夹具加一张过期卡 + 两处既有断言按新口径更新。全量 251 项全绿。
+
+## 26. 带闸 goal 的创建能力：宿主有，但没有出口（2026-10-22）
+
+### 26.1 事实：宿主侧确实有带预算的创建能力
+
+应用门面 `createThreadGoalApplication`（thread-goal 应用层）：
+
+```js
+create: async ({ sessionId, objective: rawObjective, tokenBudget, kickoffAttachments }) => {
+  const input = { sessionId, objective, ...(tokenBudget !== undefined ? { tokenBudget } : {}), ... };
+  const created = await integration.createGoal(input, { requireKickoffAdmission: true });
+  return toGlobalThreadGoal(created);
+}
+```
+
+`tokenBudget` 在**创建那一刻**原样落库（`store.create` → INSERT），到点自动翻 `budget_limited(token)` 并停自动续跑。**这是唯一能把闸写死在创建动作上的路径。**
+
+### 26.2 但它没有出口
+
+| 入口 | 有没有 create_goal | 证据 |
+| --- | --- | --- |
+| agent 工具表 | **没有** | `buildThreadGoalRuntimeTools` 只返回 `new UpdateGoalTool(...)` 与 `new GetGoalTool(...)`；实测本会话工具表里只有 `update_goal` / `get_goal`；`tool_search` 无命中；`mcp_invoke(tool_name='create_goal')` → `Unknown tool_name`（04:38、04:46 各一次） |
+| Mini App node 侧 | **没有** | `miniapp.json`：`agentAccess: ["session.run"]`、`hostConnectorAccess.providers: []`、`mcpEndpoints: []`；node 侧全部宿主交互只有 `boss-bridge.mjs` 让 agent 代跑 `mavis session send`；`runtime-store.mjs` 明确 `readOnly: true`，注释写着「this class NEVER opens it for writing」 |
+| 宿主自己的用户路径 | 有 | 2026-10-22 02:38 用户一句「持续迭代大哥，并让大哥管你」→ `tg_s1qx87925` 建成：objective = 用户原话、`token_budget = null`。**这条路径能否传预算未查实**（那次用户没表达预算，证据等级只能到"那次没带预算"，不能推到"这条路径不接预算"） |
+
+所以：**带预算的 goal 创建能力，宿主内部有、agent 工具表没有、Mini App node 侧没有；能碰到它的只有宿主自己的用户路径，而那条路径带不带预算未查实。**
+
+### 26.3 后果：三条路各自的实测结论
+
+| 想做的事 | 实测结论 |
+| --- | --- |
+| 给**已有** goal 加预算 | 必须 `update_goal(mode="token_budget")`。宿主守卫 `goal-budget-tool-policy` 只挡这一种模式，且只在本轮**没有真人用户文本**时挡（`genuineUserQueryText.length > 0` 即放行）→ **用户发起的回合就能改**；`session send` / cron / goal 自动续跑都不算 |
+| 给当前 goal 加预算 | 上限必须**严格大于**已记账用量（`ThreadGoalTokenBudgetExhaustedError`："Token budget must exceed accounted usage"）。上限是「随时在移动的靶」——晚 10 分钟可能就作废 |
+| **新建**一条带闸 goal | agent 侧与 Mini App node 侧都**不可达**（见 26.2） |
+
+### 26.4 判据（固化）
+
+> **在宿主把 `createGoal` 暴露给 agent 工具表（或给 Mini App node 侧一条等价的宿主能力）之前，「先建一条带闸 goal 再干活」这个前提不成立**，不要在计划里假设它已经成立。
+
+附带一条同样重要：**闸会关掉下一片的路。** `create_goal` 的 store 守卫是「replaces the previous goal only when it is complete」——`budget_limited` 也算 unfinished（`cannot create a new goal because this thread has an unfinished goal; complete the existing goal first`），而且它也 dismiss 不掉（`dismissCompleted` 的 SQL 硬条件 `AND status='complete'`）。→ **每一片必须以「收束 → 宿主结算 → 行被 DELETE」收尾**，否则下一片建不出来。
+
+### 26.5 要补的最小能力契约
+
+宿主侧能力已经齐了（26.1），缺的是**暴露**。二选一：
+
+- **agent 工具表**：把 `CreateGoalTool` 加进 `buildThreadGoalRuntimeTools` 的返回列表（它没有用户请求守卫，`token_budget` 直接透传）；或
+- **Mini App node 侧**：给 Mini App 一条等价的宿主能力（例如 `goal.create(sessionId, objective, tokenBudget)`），node 侧只做转发与校验。
+
+**不许绕**：不得用 HTTP 打内部 `createGoal` / `patchGoal` RPC 冒充用户面（越权，且绕过「用户明确请求」语义）；不得写 `runtime-state.sqlite`。运行时状态归用户面。
+
+### 26.6 实测（2026-10-22 04:38–04:47 真机）
+
+| 读数 | 值 |
+| --- | --- |
+| 本会话 goal 行 | **0**（`tg_s1qx87925` 已被宿主结算后整行 DELETE；04:17 时它还是 active / tokens 1,187,612 / turns 5 / 无闸） |
+| 全库 `token_budget` 非空的 goal | **0** |
+| `mcp_invoke('create_goal')` | `Unknown tool_name`（04:38、04:46 各一次） |
+| Mini App node 侧 `createGoal\|threadGoal\|DesktopService\|tokenBudget` | **零命中** |
