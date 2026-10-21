@@ -1455,3 +1455,71 @@ node "<patrol-cli 路径>" manage remove <项目名> "<大老板的原话>"
 ### 22.4 初始名单由大老板定
 
 名单初始为空，**由大老板点名，不推断**。这是本节最重要的一条：连"我猜你想让我管哪几个"都不算授权——昨晚我按意图推过一次，那正是同一个错误。
+
+## 23. 侧栏与 Mini App 的对话是同一个会话（2026-10-21 追加）
+
+§18 接通宿主侧栏后，有一个关系必须写清楚，否则两边会各说各话。
+
+### 23.1 事实：同一个会话，两个入口
+
+| | 指的是哪个会话 |
+| --- | --- |
+| 宿主侧栏（`agent.open`） | `mvs_90f86d83…`（`purpose = miniapp:mimic-tear`） |
+| Mini App 的 `/api/chat` | 同一个——`boss-bridge.#runTurn()` 用 `persistence.getBossSession()` 取到的就是它 |
+
+运行时库的消息行用 `source` 字段把两个入口分得很清楚（实测该会话 104 条）：
+
+| source | 含义 | 条数 |
+| --- | --- | --- |
+| `miniapp` | 从 Mini App 自己的 API 进去的 | 80 |
+| `communication` | 从宿主聊天侧栏进去的 | 24 |
+
+**所以两边共享同一份上下文**——侧栏里大哥知道的事，Mini App 里接着聊是接得上的。
+
+### 23.2 但有三个不对等
+
+**① 实时性是单向的。** SSE 只挂在 Mini App 自己的 `/api/chat` 上：
+
+- Mini App 里发消息 → 两边都看得到
+- **侧栏里发消息 → Mini App 当时不更新**（它没订阅侧栏的流）
+
+**② Mini App 的对话记录不持久。** 页面刷新后对话区为空（宿主那份一直在运行时库里，104 条随时能翻）。所以日常用侧栏更稳。
+
+**③ 值班轮次不在这个会话里。** cron 值班跑在 `mvs_aaec5980…`（`purpose = cron:boss:大哥值班巡检`），是**另一个会话**，侧栏开不到。
+
+### 23.3 补上：会话历史读回来
+
+对话记录本来就在运行时库里（那是宿主的），Mini App 之前只是**不回读**。现在回读：
+
+| 位置 | 做什么 |
+| --- | --- |
+| `RuntimeStore.listSessionMessages(sessionId)` | 读一个会话的消息（只取 `msg_content` 正文，丢掉 thinking / token 统计 / context 遥测） |
+| `RuntimeStore.countSessionMessages(sessionId)` | 消息条数——**变更检测器** |
+| `GET /api/chat/history` | 把 transcript 交给页面 |
+| `chat.history` 广播 | 会话条数变了就推 |
+
+**为什么需要单独的检测器**：侧栏里说的话**不改运行时 revision**（没有 session / goal / task 变化），所以只盯 revision 的轮询永远发现不了它。消息条数才是"有人说了话"的信号。判定抽成纯函数 `chatHistoryChanged`（`chat-history.mjs`），和 `dutyAnnouncementNeeded` 同一个理由：定时器里的逻辑单测够不到，抽出来才守得住。
+
+### 23.4 页面的对话区以 transcript 为准
+
+页面上的对话列表**以运行时的 transcript 为准**，本地乐观气泡只是它到达前的临时替身：
+
+- 发消息 → 立刻显示本地气泡（不等往返）
+- transcript 到达 → 本地气泡被 transcript 取代
+- 文本去重：本地气泡若已在 transcript 里（同角色同文本），不重复画
+
+顺带解决了一个老缺口：**页面刷新后对话记录不再为空**——transcript 从运行时读回来。
+
+侧栏来的消息带「侧栏」标记，让用户知道这句是从哪个视图说过来的。
+
+### 23.5 实测
+
+在宿主侧栏发一条消息（走 `communication` 通道，Mini App 自己的 SSE 看不到这一路）：
+
+| 时刻 | 事实 |
+| --- | --- |
+| 09:45:26 | `user` / `source=communication`「【侧栏同步验证】…」落库 |
+| 09:45:37 | `assistant` / `source=communication`「侧栏同步正常」落库 |
+| 之后 | `listSessionMessages` 返回 **106** 条（104 → 106），`countSessionMessages` = 106 |
+
+测试 19 条，4 处断点做过变异验证（客户端不处理 `chat.history` / 变更检测恒 false / 历史接口不返回消息 / 不拉历史），确认会红。全量 243 项全绿。
