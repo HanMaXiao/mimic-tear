@@ -1861,3 +1861,78 @@ node 侧**没有写 cron 状态的能力**（§26.2 的约束：运行时库只�
 | 实机自检 | 写 `resting` → 已发布 watchdog 读到 `mode=resting` / `action=none` → 复位 `on-duty` |
 | 全量测试 | **271 项全绿**（251 既有 + 20 新增，四个新文件） |
 | 提交 | `3e5ae4a` 意图文件 / `d894889` 事实表与项目卡 / `00ff638` 写意图的路由 / `29752ca` watchdog 认歇着 |
+
+## 28. 值班心跳：node 侧备选路径（只写方案，不写实现）
+
+> 2026-10-22 05:17 大哥指令：**只写方案，不写实现代码**，等放行再做。本节是判定与边界，不是设计施工图。
+
+### 28.1 它要解决什么
+
+宿主 cron 是值班链路上唯一 24×7 的触发器。它会断：2026-10-22 03:07 / 03:37 / 04:07 / 04:37 四轮全部 `status=pending`、`delivered_at_ms=null`，而 duty 指标仍报 `missedRounds=0`（`patrol-cli report` 刷新 `lastRunAt`，把漏班证据抹掉）。**投递链一断，就没人跑；没人跑，就没人交班。**
+
+备选路径要解决的是「**没人跑**」，不是「**证据看不见**」——后者是缺口一（§28.5）。
+
+### 28.2 判定表：node 侧到底能碰什么
+
+| 维度 | 事实 | 依据 |
+| --- | --- | --- |
+| 可读 | 运行时库（**只读**）：`local_runtime_v2_cron_runs`（投递证据：`status` / `delivered_at_ms` / `retry_attempt` / `session_id`）、`local_runtime_v2_cron_definitions`、`local_runtime_sessions`、`local_runtime_thread_goals`、`local_runtime_message_rows` | `runtime-store.mjs` 以 `readOnly: true` 打开；注释写着「this class NEVER opens it for writing」 |
+| 可读 | plugin-data 文件：`patrol.json` / `patrol-config.json` / `duty-intent.json` / `managed-projects.json` / `watchdog-state.json` / `watchdog-alert.log` | `PatrolStore` / `DutyIntent` / `ManagedProjects` 共用同一个目录 |
+| 可写 | **只有 plugin-data 下的文件**（原子写：临时文件 + rename） | `PatrolStore.setConfig` / `DutyIntent.write` / `ManagedProjects` |
+| 可写 | 它自己那个 HTTP 端口（`/api/*`） | `server.mjs` |
+| **不可写** | 运行时库的任何一行 | `readOnly: true` |
+| **不可写** | 宿主 cron 的定义与投递状态 | `hostConnectorAccess.providers: []`、`mcpEndpoints: []`；node 侧没有任何 cron 写入口 |
+| 可发起 | 一次 agent run：`context.agent.run({ text, sessionId })` | `miniapp.json` 的 `agentAccess: ["session.run"]`、`agentConcurrency: 4`；`miniapp-api.ts:298` 注释「Present only when the manifest declares `agentAccess: ["session.run"]`」；`boss-bridge.mjs:135` 已在用 |
+
+### 28.3 谁来触发（三个候选，以及各自的天花板）
+
+| 候选 | 触发者 | 硬约束 | 判断 |
+| --- | --- | --- | --- |
+| **A 宿主 cron**（现状） | 宿主调度器 | 投递链会断（03:07–04:37 四轮 pending）；目标是固定会话 | 主路径。备选路径存在的原因就是它会断 |
+| **B node 侧定时器** | Mini App 运行时自己起定时器，到点 `agent.run` | **`runtime.lifecycle: "on-demand"`**——板面关着就没有 node 进程，定时器根本不存在 | 只能覆盖「板面开着」的场景 |
+| **C 进程外 watchdog 写心跳请求 → node 侧捡** | 计划任务 `MimicTear-DutyWatchdog`（24×7 常驻）写 plugin-data，node 侧轮询捡起来 | 同样受 on-demand 限制：板面关着没人捡 | 与 B 同一个天花板 |
+
+**关键判据（这一节最重要的一句）：备选路径的天花板不是技术问题，是 on-demand。** Mini App 关着就没有 node 侧，node 侧的定时器与轮询都不存在。
+
+要 24×7 保活，必须有一个**进程外**的东西常驻——现在只有 watchdog 计划任务，而它是普通 node 脚本，**不是 Mini App 运行时，没有 `agentAccess`** → **进程外进程不能直接发起 session.run**。
+
+所以这条备选路径的真实覆盖范围是：
+
+> **能覆盖「板面开着、但 cron 投递链断了」；覆盖不了「板面关着」。**
+
+后者要补齐，需要宿主给 watchdog 计划任务一条等价的 `session.run` 能力（或者宿主 cron 本身足够可靠）。**这是宿主侧的要求，不在 node 侧能做的范围内**——写在这里是为了别让人以为 node 侧能兜住全部。
+
+### 28.4 失败了怎么降级
+
+| 层级 | 情况 | 降级动作 | 谁看得见 |
+| --- | --- | --- | --- |
+| L0 | 心跳按期送达，boss 交班 | 值班路径写 `lastRunAt` | 板面值班灯 |
+| L1 | `agent.run` 抛错 / 返回 error | 把失败写进 plugin-data 的告警文件——**每次都写**，不只在「通知投递失败」时写（那是缺口二） | 板面读得到 |
+| L2 | 同一段空档内连续失败 | 降级成显式的「值班断链」状态写进板面结论，**不静默** | 大老板看板 |
+| L3 | 板面关着 | node 侧不存在，无兜底；只剩 watchdog 的桌面通知 | 桌面通知 |
+| L4 | 全断 | 板面显示「值班链断」，且结论里**必须带 `run_id` / `status` / `retry_attempt`** | 大老板看板 |
+
+**贯穿全表的一条判据：证据与活性必须分离。** 活性看 `lastRunAt`（灯），证据看 `local_runtime_v2_cron_runs`（结论正文）。**证据不能只靠时间戳**——`lastRunAt` 会被 `report` 刷新，正是这次四轮漏班「指标显示 missedRounds=0」的原因。
+
+### 28.5 与 watchdog 缺口一、缺口二的关系（互补，不重叠）
+
+| 缺口 | 解决什么 | 不解决什么 |
+| --- | --- | --- |
+| 缺口一（证据与活性分离，判据二态→三态） | 漏班证据**看得见**：`computeDutyEvidence` 从 `local_runtime_v2_cron_runs` 算空档，按 `lastGap.to` 去重（方案 A1–A5） | 不解决「值班跑不跑得起来」 |
+| 缺口二（告警主通道不能是 toast） | 通知**到得了**：告警落文件 | 不解决「值班跑不跑得起来」 |
+| **本节（值班心跳备选路径）** | 值班**跑得起来** | 不解决证据与告警 |
+
+### 28.6 本节的边界（现在不做）
+
+- **只写方案，不写实现**（05:17 指令）。放行后再动代码。
+- 不碰 `client/`、不碰运行时库、不碰 goal 状态。
+- 若要实现，落点只能是 `miniapp/node/`；且**必须先有缺口一的 `computeDutyEvidence`**——否则心跳自己都不知道该不该跑、跑得对不对。
+
+### 28.7 真值快照（2026-10-22 05:2x 实测，只读运行时库）
+
+| 读数 | 值 |
+| --- | --- |
+| 断掉的四轮 | 03:07 / 03:37 / 04:07 / 04:37：`status=pending`、`delivered_at_ms=null`、`retry_attempt=266 / 206 / 147 / 87` |
+| 恢复的一轮 | **05:07 轮 `status=delivered`**，`session_id` 从 `mvs_aaec5980…` 改指 `mvs_90f86d83…` → 投递链已恢复 |
+| 遗留 | 那 4 条 pending 仍在重试（`retry_at_ms` 最早约 05:18），且指向**旧会话** `mvs_aaec5980…`——若日后送达，会在旧会话里再跑 4 轮值班 |
+| duty 指标 | 仍显示 `missedRounds=0`——**假象**（`report` 刷新了 `lastRunAt`），真值在 `cron_runs` 里 |
