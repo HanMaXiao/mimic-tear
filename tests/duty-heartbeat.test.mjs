@@ -1,16 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
-  DUTY_CRON_ID,
   evaluateDutyHeartbeat,
   getDutyHeartbeatStatus,
   readHeartbeatState,
   runDutyHeartbeat,
 } from '../miniapps/mimic-tear/miniapp/node/duty-heartbeat.mjs';
+import { resolveDutyChain } from '../miniapps/mimic-tear/miniapp/node/duty-chain.mjs';
 import { readAlerts } from '../miniapps/mimic-tear/miniapp/node/watchdog-alerts.mjs';
 import { tmpDir, cleanupDir } from './helpers/fixture.mjs';
 
@@ -18,16 +18,36 @@ const MINUTE = 60_000;
 const NOW = Date.parse('2026-10-20T12:00:00Z');
 const PERIOD = 30 * MINUTE;
 
-/** A store that can only read the run log — anything else would throw. */
-function readOnlyStore(runs) {
+/** The two generations of the duty cron: the old one deleted, the new one alive. */
+const DEFINITIONS = [
+  { cronId: 'old-cron', name: '大哥值班巡检', deletedAt: NOW - 60 * MINUTE, targetSessionId: 'mvs_old', schedulerId: 'sched-old' },
+  { cronId: 'live-cron', name: '大哥值班巡检', deletedAt: null, targetSessionId: 'mvs_live', schedulerId: 'sched-live' },
+];
+
+/**
+ * A store that can only read — the definitions and the run log.
+ *
+ * Anything else (a write to the runtime database, a change to the cron's definition) would
+ * throw, which is how the boundary in C6 is enforced rather than merely asserted.
+ */
+function readOnlyStore(runs, definitions = DEFINITIONS) {
   return {
-    listCronRuns() {
-      return runs;
+    listCronDefinitions() {
+      return definitions;
+    },
+    listCronRunsFor(ids) {
+      return runs.filter((run) => ids.includes(run.cronId));
     },
   };
 }
 
-const DELIVERED_90 = { id: 'r1', status: 'delivered', createdAt: NOW - 90 * MINUTE, deliveredAt: NOW - 90 * MINUTE };
+const DELIVERED_90 = {
+  cronId: 'live-cron',
+  id: 'r1',
+  status: 'delivered',
+  createdAt: NOW - 90 * MINUTE,
+  deliveredAt: NOW - 90 * MINUTE,
+};
 
 test('C1：断链可判——宿主没创建 run 的空槽位被算出来', () => {
   const decision = evaluateDutyHeartbeat({
@@ -78,8 +98,8 @@ test('C2：能补一轮——agent.run 被调用一次且参数正确', async ()
 test('C3：与宿主 cron 去重——宿主在途就不补，同一槽位只补一次', async () => {
   const inFlight = evaluateDutyHeartbeat({
     runs: [
-      { id: 'r1', status: 'delivered', createdAt: NOW - 30 * MINUTE, deliveredAt: NOW - 30 * MINUTE },
-      { id: 'r2', status: 'pending', createdAt: NOW - 5 * MINUTE, retryAttempt: 12 },
+      { cronId: 'live-cron', id: 'r1', status: 'delivered', createdAt: NOW - 30 * MINUTE, deliveredAt: NOW - 30 * MINUTE },
+      { cronId: 'live-cron', id: 'r2', status: 'pending', createdAt: NOW - 5 * MINUTE, retryAttempt: 12 },
     ],
     periodMs: PERIOD,
     now: NOW,
@@ -89,7 +109,6 @@ test('C3：与宿主 cron 去重——宿主在途就不补，同一槽位只补
   assert.equal(inFlight.trigger, false, '宿主正在投 → 不补，否则双倍值班轮次');
   assert.equal(inFlight.reason, 'host_in_flight');
 
-  // The same slot twice: the second time the heartbeat must not fire again.
   const dir = tmpDir();
   try {
     const calls = [];
@@ -116,8 +135,8 @@ test('C4：不静默——断链、补轮、补轮失败都写进 plugin-data', 
     const result = await runDutyHeartbeat({
       dataDir: brokenDir,
       store: readOnlyStore([
-        { id: 'r1', status: 'delivered', createdAt: NOW - 30 * MINUTE, deliveredAt: NOW - 30 * MINUTE },
-        { id: 'r2', status: 'pending', createdAt: NOW - 5 * MINUTE, retryAttempt: 12 },
+        { cronId: 'live-cron', id: 'r1', status: 'delivered', createdAt: NOW - 30 * MINUTE, deliveredAt: NOW - 30 * MINUTE },
+        { cronId: 'live-cron', id: 'r2', status: 'pending', createdAt: NOW - 5 * MINUTE, retryAttempt: 12 },
       ]),
       sessionId: 'mvs_boss_session',
       agent: { async run() { return { status: 'finished', error: null }; } },
@@ -164,8 +183,8 @@ test('C5：证据齐全——结论里带 run_id / status / retry_attempt', asyn
     await runDutyHeartbeat({
       dataDir: dir,
       store: readOnlyStore([
-        { id: 'r1', status: 'delivered', createdAt: NOW - 30 * MINUTE, deliveredAt: NOW - 30 * MINUTE },
-        { id: 'r2', status: 'pending', createdAt: NOW - 5 * MINUTE, retryAttempt: 42, error: 'boom' },
+        { cronId: 'live-cron', id: 'r1', status: 'delivered', createdAt: NOW - 30 * MINUTE, deliveredAt: NOW - 30 * MINUTE },
+        { cronId: 'live-cron', id: 'r2', status: 'pending', createdAt: NOW - 5 * MINUTE, retryAttempt: 42, error: 'boom' },
       ]),
       sessionId: 'mvs_boss_session',
       agent: { async run() { return { status: 'finished', error: null }; } },
@@ -184,8 +203,6 @@ test('C5：证据齐全——结论里带 run_id / status / retry_attempt', asyn
 });
 
 test('C6：边界不越——只读运行时库，不改 cron', async () => {
-  // The store handed to the heartbeat only has a read method: if the heartbeat tried to
-  // write the runtime database or the cron's definition, this would throw.
   const dir = tmpDir();
   try {
     const result = await runDutyHeartbeat({
@@ -197,17 +214,88 @@ test('C6：边界不越——只读运行时库，不改 cron', async () => {
     });
     assert.equal(result.triggered, true);
 
-    // The cron id is the duty cron's, and it agrees with the one the watchdog watches.
-    const watchdogSource = readFileSync(
-      fileURLToPath(new URL('../miniapps/mimic-tear/miniapp/node/watchdog.mjs', import.meta.url)),
+    // The seed lives in the shared chain module — one place, not two literals that drift.
+    const chainSource = readFileSync(
+      fileURLToPath(new URL('../miniapps/mimic-tear/miniapp/node/duty-chain.mjs', import.meta.url)),
       'utf8',
     );
-    const match = watchdogSource.match(/const DUTY_CRON_ID = '([^']+)'/);
-    assert.ok(match, 'watchdog.mjs 里有同样的 cron id');
-    assert.equal(match[1], DUTY_CRON_ID, '两个模块的 cron id 必须一致');
+    const match = chainSource.match(/DUTY_CRON_SEED = '([^']+)'/);
+    assert.ok(match, 'duty-chain.mjs 里有 seed');
+    assert.equal(match[1], '672fde94-0c52-466d-831e-e2919f49b64a');
   } finally {
     cleanupDir(dir);
   }
+});
+
+test('D1：不传 now 时，写下的状态里 updatedAt 必须是真实时间戳', async () => {
+  const dir = tmpDir();
+  try {
+    const before = Date.now();
+    const result = await runDutyHeartbeat({
+      dataDir: dir,
+      store: readOnlyStore([DELIVERED_90]),
+      sessionId: 'mvs_boss_session',
+      agent: { async run() { return { status: 'finished', error: null }; } },
+      // **no now** — this is the shape the production timer uses.
+    });
+    const after = Date.now();
+
+    assert.equal(result.triggered, true);
+    const state = await readHeartbeatState(dir);
+    assert.equal(typeof state.updatedAt, 'number', 'updatedAt 不能是 null（那是 JSON.stringify(NaN)）');
+    assert.ok(state.updatedAt >= before && state.updatedAt <= after, 'updatedAt 必须是这一次的时间戳');
+    assert.ok(Number.isFinite(state.updatedAt));
+  } finally {
+    cleanupDir(dir);
+  }
+});
+
+test('D2：cron id 指向已删定义时，明确报 misconfigured —— 不是 healthy', async () => {
+  const dir = tmpDir();
+  try {
+    // The config pins a cron that has since been deleted.
+    writeFileSync(
+      join(dir, 'patrol-config.json'),
+      JSON.stringify({ dutyIntervalMinutes: 30, dutyCronId: 'old-cron' }),
+      'utf8',
+    );
+
+    const result = await runDutyHeartbeat({
+      dataDir: dir,
+      store: readOnlyStore([DELIVERED_90]),
+      sessionId: 'mvs_boss_session',
+      agent: { async run() { return { status: 'finished', error: null }; } },
+      now: NOW,
+    });
+
+    assert.equal(result.reason, 'misconfigured', '不能静默 healthy');
+    assert.equal(result.triggered, false, '配置不对时不补位');
+
+    const alerts = await readAlerts(dir);
+    assert.ok(alerts.some((alert) => alert.action === 'heartbeat_misconfigured'), '要显式写一条告警');
+    const state = await readHeartbeatState(dir);
+    assert.equal(state.lastResult, 'misconfigured');
+    assert.equal(typeof state.updatedAt, 'number');
+  } finally {
+    cleanupDir(dir);
+  }
+});
+
+test('D2：钉着活着的 cron 时，判定与按活 cron 手工算的一致', () => {
+  const chain = resolveDutyChain(DEFINITIONS, { seedCronId: 'live-cron' });
+  assert.equal(chain.active, true);
+  assert.equal(chain.reason, 'ok');
+  assert.equal(chain.targetCronId, 'live-cron');
+  assert.equal(chain.targetSessionId, 'mvs_live');
+  // The history lives under the deleted definition, and it is read too.
+  assert.deepEqual(chain.cronIds.sort(), ['live-cron', 'old-cron']);
+});
+
+test('D2：不钉任何 id 时，按名字找到活着的那个', () => {
+  const chain = resolveDutyChain(DEFINITIONS, {});
+  assert.equal(chain.active, true);
+  assert.equal(chain.targetCronId, 'live-cron');
+  assert.equal(chain.cronIds.length, 2, '两代都要读，历史不能丢');
 });
 
 test('状态接口给总览页用：字段齐、边界写在负载里', async () => {
@@ -224,6 +312,7 @@ test('状态接口给总览页用：字段齐、边界写在负载里', async ()
     assert.match(status.scope, /板面关着/);
     assert.equal(typeof status.pendingTail, 'object');
     assert.equal(typeof status.blankTail, 'object');
+    assert.equal(status.chain.active, true);
   } finally {
     cleanupDir(dir);
   }

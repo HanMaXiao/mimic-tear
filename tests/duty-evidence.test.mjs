@@ -42,6 +42,29 @@ function makeCronDb(dir, runs) {
       retry_attempt INTEGER
     );
   `);
+  // The cron definition table too: the duty chain is resolved by name, so the watcher
+  // needs to see which definition is alive — and the definition must exist, or it reads
+  // "no runs" and calls it "nothing went wrong".
+  db.exec(`
+    CREATE TABLE local_runtime_v2_cron_definitions (
+      cron_id TEXT PRIMARY KEY,
+      scheduler_id TEXT,
+      agent_name TEXT,
+      name TEXT,
+      target_session_id TEXT,
+      session_target_mode TEXT,
+      revision INTEGER,
+      deleted_at_ms INTEGER,
+      created_at_ms INTEGER,
+      updated_at_ms INTEGER
+    );
+  `);
+  db.prepare(
+    `INSERT INTO local_runtime_v2_cron_definitions
+       (cron_id, scheduler_id, agent_name, name, target_session_id, deleted_at_ms)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(CRON_ID, 'sched-duty', 'boss', '大哥值班巡检', 'sess-duty', null);
+
   const insert = db.prepare(
     `INSERT INTO local_runtime_v2_cron_runs
        (run_id, cron_id, session_id, status, created_at_ms, delivered_at_ms,
