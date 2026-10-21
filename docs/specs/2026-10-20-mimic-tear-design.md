@@ -1656,3 +1656,45 @@ Mimic Tear 卡片: managed=true  ownerSessionId=mvs_bf21987f…（就是大哥�
 > 为什么值得单独修：删掉一个功能时，代码删了不等于状态删了。**状态文件比代码活得久**——它会一直躺在那儿，被后来的人当成还生效的开关。
 
 测试 1 条（残留键既读不回来、写回去时也会被清掉）。全量 250 项全绿。
+
+## 25. 过期的问卷不是待办（2026-10-22）
+
+大哥接管 Mimic Tear 之后做的第一件事，是把 `health=blocked` 拆开看。拆出来的第一条原因是：
+
+> `pendingQuestions=1` —— 那张卡是 `ask_6886134380d3f0a718b382cf`，运行时 `status=expired`，`answered_at` / `reply_payload` / `injected_at` / `dismissed_at` **全是 null**。
+
+**没人能点它，没人会有答案**——它是 10-20 那张测试卡过期后的残骸。但统计口径只认 `answered` 和 `dismissed`：`expired` 两个都不是，于是被算成"未解决"。
+
+### 25.1 三处口径不一致
+
+| 位置 | 原来的判定 | 后果 |
+| --- | --- | --- |
+| 项目卡 `pendingQuestions` | `status !== 'answered' && status !== 'dismissed'` | 过期卡计入待答 → 项目被钉在 `blocked` |
+| `facts` 的 `openQuestionnaires` | `listQuestionnaires(true)` = `NOT IN ('answered','dismissed')` | 过期卡算待答（只是碰巧被 `patrol-answered.json` 里的代答记录挡掉了） |
+| 收件箱原始项 | 同一个过滤 | **过期卡变成一条 high 待办**——大哥必须手工 `dismiss` 才能清掉 |
+
+第三处是最刺眼的：**看板自己制造了一条待办，然后要大哥手工去排除它**。大哥 10-22 02:5x 确实手工排除了它（`dismissed.json` 第 14 条）——那是在给根因打补丁。
+
+### 25.2 修法：一个判据，三处统一
+
+```js
+export function isUnresolvedQuestion(status) {
+  return status !== 'answered' && status !== 'dismissed' && status !== 'expired';
+}
+```
+
+`expired` 不是"还没答"，是**"作废了"**——窗口关了，谁也点不动它。项目卡、`listQuestionnaires(pendingOnly)`、收件箱三处都改用它。
+
+> 保留明细视图里的过期卡记录（`getProject` 的 `questions` 仍然列全）。明细是**档案**，不是待办——已答的、已忽略的卡本来也都在里面。
+
+### 25.3 实测
+
+| 读数 | 修前 | 修后 |
+| --- | --- | --- |
+| `pendingQuestions` | 1 | **0** |
+| `health` | blocked | **blocked（只剩一条真实成因：tg_z7054lf paused）** |
+| 收件箱里过期卡产生的待办 | 1 条 high | **0** |
+
+`health` 还是 blocked 是对的——那条 paused goal 是真阻塞。**区别在于：现在这个 blocked 是真的，而不是被一张没人能点的卡撑出来的。**
+
+测试 1 条（过期卡不算未解决、不进收件箱；真待答卡照常阻塞）+ 夹具加一张过期卡 + 两处既有断言按新口径更新。全量 251 项全绿。
