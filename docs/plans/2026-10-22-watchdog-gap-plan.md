@@ -38,7 +38,7 @@ update_goal(mode=token_budget, token_budget=400000, …)
 | --- | --- |
 | `node/watchdog-rules.mjs` `evaluateDuty` | → `buildDutyStatus({config})` |
 | `node/view-model.mjs` `buildDutyStatus` | 活性判定**只读 `config.lastRunAt` 一个时间戳** |
-| `node/patrol-cli.mjs`（report） | 每次交班 `setConfig({ lastRunAt: Date.now() })` |
+| `node/patrol-cli.mjs`（report） | 只有 `--duty-stamp` 才刷新交班戳 `setConfig({ lastRunAt: Date.now() })`；别的线的报告不碰它 |
 
 **判 stale 只有一个时间戳，而交班会把它刷新。** 所以：漏了 N 轮 → 补交一次 → 那段空档从此不可见。
 

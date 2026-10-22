@@ -772,7 +772,7 @@ node ".../miniapp/node/patrol-cli.mjs" report <file>  # 写巡检结论 / 已代
 
 #### 三条兜底
 
-1. **每轮必须留痕。** cron 提示词要求大哥**无论有没有结论都要执行一次 `report`**（没内容就交一份空报告）。`patrol-cli report` 每次都会刷新 `patrol-config.json` 的 `lastRunAt`。于是 `lastRunAt` 从"上次有结论的时间"变成了"上次交班的时间"——大哥每轮都必须在场。
+1. **每轮必须留痕。** cron 提示词要求大哥**无论有没有结论都要执行一次 `report`**（没内容就交一份空报告）。`patrol-cli report` 只有带 `--duty-stamp`（大哥的值班链）时才刷新 `patrol-config.json` 的 `lastRunAt`；**别的线的报告一个字都不碰它**——否则别人的一次报告就能把大哥的掉线盖住（2026-10-22 07:39 就发生过：大哥 07:37 那轮没交班，指标却显示 `missedRounds=0`）。于是 `lastRunAt` 从"上次有结论的时间"变成了"上次交班的时间"——大哥每轮都必须在场。
 2. **看板把掉线说出来。** `buildDutyStatus`（纯函数）给出值班状态的活性判定：
 
    | 情形 | 判定 | 看板文案 |
@@ -802,7 +802,7 @@ node ".../miniapp/node/patrol-cli.mjs" report <file>  # 写巡检结论 / 已代
 
    | 时间戳 | 谁写 | 含义 |
    | --- | --- | --- |
-   | `lastRunAt` | **只有值班路径**（`patrol-cli report`） | 值班大哥上一次交班——掉线判定只看它 |
+   | `lastRunAt` | **只有值班路径**（`patrol-cli report --duty-stamp`） | 值班大哥上一次交班——掉线判定只看它；别的线的报告不写它 |
    | `lastBoardPatrolAt` | 看板自己的巡检（按钮 + 内部循环） | 看板上一次自己巡检——看板用它决定下次何时到期 |
 
    这样"看板开着"和"值班大哥活着"是两件独立的事，看板不会替值班大哥背书。
