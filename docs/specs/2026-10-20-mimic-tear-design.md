@@ -545,6 +545,11 @@ Node 侧每 3 秒计算一次**廉价修订号**（`max(updated_at_ms)` + 各表
 
 发布后逐条验证，**每条都要有运行时证据，不接受"看起来对"**：
 
+> **验收是四层的，逐层都要有证据**（2026-10-22 立）：① **代码在**（提交在仓库里）② **测试过**（全量绿）③ **生产路径跑起来是什么样**（读真实产物）④ **新代码真的跑起来过吗**。
+> ④ 最容易被跳过：Mini App 是 **on-demand** 的，宿主在没人用时会把运行时关停（2026-10-22 实测存活 291.8 秒），所以**「publish 成功」只说明文件落盘了，不说明新代码执行过**。发布后要先 `miniapp open` 把板面开着，等一次产物写入（心跳 1 分钟、watchdog 计划任务 5 分钟），**读到新时间戳**再下结论。
+> 判活两件事：**看连续写入的间隔，不看单点**（在两次 tick 之间看一眼，会推出「定时器没起来」）；**别用进程列表判**（运行时在桌面 Electron 进程里，没有独立 node.exe，查不到既不证明死也不证明活）。判运行时死活用 `miniapp inspect` 的 `runtime.status` 与 `start_requested` / `ready` / `exited` 三条日志。
+> **凡是把周期长于运行时空闲寿命的定时器，设计上都等于没有**——它等不到第一次触发。
+
 | # | 验收项 | 判定 |
 | --- | --- | --- |
 | 1 | `publish` → `inspect` → `open` 成功，`runtime.status = running` | Host 结构化返回 |
@@ -1873,7 +1878,7 @@ node 侧**没有写 cron 状态的能力**（§26.2 的约束：运行时库只�
 > **执行状态（2026-10-22 07:2x 更正）**：这一版**在生产上从未生效过**——大哥 07:0x 直读发现两个缺陷：`now` 变成 NaN 使心跳恒判 healthy；硬编码的 cron id 指向 05:57 已删除的那一代，链的证据根本读不到（读不到 ≠ 没出事）。
 > - **已修**：时间戳改用 `Number.isFinite` 兜底（`Number(undefined)` 是 NaN，而 `??` 兜不住 NaN）；值班链改**按名字串联两代 cron**（历史证据不丢，累计漏班数不因换靶清零）；目标 cron 钉在 `patrol-config.json` 的 `dutyCronId`，指向已删定义时显式报 `heartbeat_misconfigured`，**不再静默 healthy**。
 > - 覆盖边界不变：只覆盖「板面开着 + 投递链断了」，**覆盖不了「板面关着」**。
-> - 落点：`miniapp/node/duty-heartbeat.mjs`（新增）+ `view-model.mjs` 的 `computeDutyEvidence` 加两个尾段字段（`pendingTail` / `blankTail`）+ `project-service.mjs` 的 `duty` 块加 `heartbeat` 字段 + `server.mjs` 起 5 分钟一次的定时器。
+> - 落点：`miniapp/node/duty-heartbeat.mjs`（新增）+ `view-model.mjs` 的 `computeDutyEvidence` 加两个尾段字段（`pendingTail` / `blankTail`）+ `project-service.mjs` 的 `duty` 块加 `heartbeat` 字段 + `server.mjs` 起 1 分钟一次的定时器（**周期必须短于运行时空闲寿命**，实测 292 秒，见 §9 的四层验收）。
 > - **覆盖边界（§28.3 的原话仍然成立）**：node 侧最多覆盖「**板面开着、cron 投递链断了**」，**覆盖不了「板面关着」**——板面关着就没有 node 进程、没有定时器。补齐那一半需要宿主侧的能力，不是 node 侧能做的。
 > - 与缺口一/缺口二互补：缺口一让证据看得见、缺口二让通知到得了、本节让值班**跑得起来**（且只在板面开着时）。
 
