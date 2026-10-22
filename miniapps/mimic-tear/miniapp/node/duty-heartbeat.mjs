@@ -38,8 +38,24 @@ import { appendAlert } from './watchdog-alerts.mjs';
 import { computeDutyEvidence } from './view-model.mjs';
 import { DUTY_CRON_SEED, readDutyChain } from './duty-chain.mjs';
 
-/** How often the heartbeat looks. The duty period is 30 minutes; this is finer than that. */
-export const HEARTBEAT_CHECK_INTERVAL_MS = 5 * 60_000;
+/**
+ * How long the Host keeps an idle Mini App runtime alive before shutting it down.
+ *
+ * Measured 2026-10-22 08:15:37 → 08:20:30 = 291.8 seconds. It is a Host behaviour, not
+ * ours, so it is a budget we have to live inside rather than a number we control.
+ */
+export const RUNTIME_IDLE_GRACE_MS = 292_000;
+
+/**
+ * How often the heartbeat looks.
+ *
+ * It has to be **shorter than the runtime's idle grace** (see above). A five-minute
+ * interval lost that race by seven seconds on 2026-10-22: the runtime was shut down before
+ * the first tick could fire, so the freshly published code never ran at all. A minute leaves
+ * room for several ticks per idle window, and it also shortens how long a broken duty
+ * chain goes unnoticed.
+ */
+export const HEARTBEAT_CHECK_INTERVAL_MS = 60_000;
 
 const STATE_FILE = 'duty-heartbeat.json';
 const CONFIG_FILE = 'patrol-config.json';

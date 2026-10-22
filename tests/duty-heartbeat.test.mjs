@@ -7,9 +7,21 @@ import { fileURLToPath } from 'node:url';
 import {
   evaluateDutyHeartbeat,
   getDutyHeartbeatStatus,
+  HEARTBEAT_CHECK_INTERVAL_MS,
   readHeartbeatState,
+  RUNTIME_IDLE_GRACE_MS,
   runDutyHeartbeat,
 } from '../miniapps/mimic-tear/miniapp/node/duty-heartbeat.mjs';
+
+test('心跳的周期必须短于运行时的空闲寿命，否则首跳永远等不到', () => {
+  // 2026-10-22 实测：运行时 08:15:37 拉起、08:20:30 被宿主关停（存活 291.8 秒）。
+  // 周期曾是 5 分钟（300 秒）——差 7 秒，首跳等不到，那份刚发布的代码一次都没跑过。
+  assert.ok(
+    HEARTBEAT_CHECK_INTERVAL_MS < RUNTIME_IDLE_GRACE_MS,
+    '心跳周期必须小于运行时空闲寿命，否则运行时先死、首跳永不发生',
+  );
+  assert.ok(HEARTBEAT_CHECK_INTERVAL_MS <= 60_000, '一个空闲窗口里要能落下好几跳');
+});
 import { resolveDutyChain } from '../miniapps/mimic-tear/miniapp/node/duty-chain.mjs';
 import { readAlerts } from '../miniapps/mimic-tear/miniapp/node/watchdog-alerts.mjs';
 import { tmpDir, cleanupDir } from './helpers/fixture.mjs';
