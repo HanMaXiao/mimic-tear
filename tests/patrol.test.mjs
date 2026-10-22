@@ -433,7 +433,7 @@ test('patrol', async (t) => {
       // The boss hands over: the duty state goes green.
       const reportFile = join(dir, 'report.json');
       writeFileSync(reportFile, JSON.stringify({ findings: [], answered: [] }), 'utf8');
-      runCli(dbPath, dataDir, ['report', '--file', reportFile]);
+      runCli(dbPath, dataDir, ['report', '--file', reportFile, '--duty-stamp']);
 
       const handed = runCli(dbPath, dataDir);
       assert.equal(handed.duty.neverRan, false);

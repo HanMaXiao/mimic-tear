@@ -307,6 +307,37 @@ test('D2：内置种子已删、配置没钉时，不该报 misconfigured', () =
   assert.equal(chain.pinnedCronId, null);
 });
 
+test('D2：显式钉种子那个 id，也是钉子 —— 死了要报', () => {
+  // Pinning the seed's own id is still a decision: the user pinned it, and if it has been
+  // deleted the configuration is stale — that has to be loud, not silently downgraded to
+  // "follow whatever is alive now".
+  const definitions = [
+    { cronId: '672fde94-0c52-466d-831e-e2919f49b64a', name: '大哥值班巡检', deletedAt: NOW - 60 * MINUTE, targetSessionId: 'mvs_old', schedulerId: 'sched-old' },
+    { cronId: 'live-cron', name: '大哥值班巡检', deletedAt: null, targetSessionId: 'mvs_live', schedulerId: 'sched-live' },
+  ];
+  const chain = resolveDutyChain(definitions, {
+    pinnedCronId: '672fde94-0c52-466d-831e-e2919f49b64a',
+    seedCronId: '672fde94-0c52-466d-831e-e2919f49b64a',
+  });
+
+  assert.equal(chain.active, false, '显式钉的 id 死了 → 是过期配置，不是种子');
+  assert.equal(chain.reason, 'target_deleted');
+  assert.equal(chain.pinnedCronId, '672fde94-0c52-466d-831e-e2919f49b64a');
+});
+
+test('D2：不钉任何 id 时，按名字找活的那个，不报 misconfigured', () => {
+  const definitions = [
+    { cronId: '672fde94-0c52-466d-831e-e2919f49b64a', name: '大哥值班巡检', deletedAt: NOW - 60 * MINUTE, targetSessionId: 'mvs_old', schedulerId: 'sched-old' },
+    { cronId: 'live-cron', name: '大哥值班巡检', deletedAt: null, targetSessionId: 'mvs_live', schedulerId: 'sched-live' },
+  ];
+  const chain = resolveDutyChain(definitions, { seedCronId: '672fde94-0c52-466d-831e-e2919f49b64a' });
+
+  assert.equal(chain.active, true, '没钉 → 按名字找活的那个');
+  assert.equal(chain.reason, 'ok');
+  assert.equal(chain.targetCronId, 'live-cron');
+  assert.equal(chain.pinnedCronId, null);
+});
+
 test('D2：不钉任何 id 时，按名字找到活着的那个', () => {
   const chain = resolveDutyChain(DEFINITIONS, {});
   assert.equal(chain.active, true);
