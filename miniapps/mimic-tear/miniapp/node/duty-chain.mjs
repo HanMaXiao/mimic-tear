@@ -48,22 +48,25 @@ export function resolveDutyChain(definitions, options = {}) {
   const all = Array.isArray(definitions) ? definitions : [];
   // Two different things arrive here, and they must not be confused:
   //
-  //  - **the pin**: the cron id the user set in `patrol-config.json`. If that id has been
-  //    deleted, the configuration is stale and we say so loudly — the node side must not
-  //    quietly read a different cron than the one that was asked for.
-  //  - **the seed**: the built-in fallback, used only to find the chain's *family* (the cron
-  //    name). It points at a definition that has since been deleted, and treating it as a
-  //    pin would make every install that has not pinned anything report "misconfigured".
+  //  - **the pin** (`pinnedCronId`): the cron id the user set in `patrol-config.json`. If
+  //    that id has been deleted, the configuration is stale and we say so loudly — the node
+  //    side must not quietly read a different cron than the one that was asked for.
+  //  - **the seed** (`seedCronId`): the built-in fallback, used only to find the chain's
+  //    *family* (the cron name). It points at a definition that has since been deleted, and
+  //    treating it as a pin would make every install that has not pinned anything report
+  //    "misconfigured".
   //
-  // The seed is recognised by identity, because that is exactly what it is: the built-in
-  // fallback, not something the user chose.
-  const requestedId = String(options.pinnedCronId ?? options.seedCronId ?? '').trim();
-  const requested = requestedId ? all.find((d) => d.cronId === requestedId) : null;
-  const isPin = requestedId !== '' && requestedId !== DUTY_CRON_SEED;
-  const pinned = isPin ? requested : null;
+  // They are separate channels, so **provenance** decides which is which — not the value.
+  // Pinning the seed's own id is still pinning: that decision is the user's, and if it is
+  // stale the user must hear about it.
+  const pinnedId = String(options.pinnedCronId ?? '').trim();
+  const seedId = String(options.seedCronId ?? '').trim();
+  const pinned = pinnedId ? all.find((d) => d.cronId === pinnedId) : null;
+  const seed = seedId ? all.find((d) => d.cronId === seedId) : null;
 
-  // The requested definition gives us its name; without one, the duty name is the handle.
-  const name = requested?.name ?? options.name ?? DUTY_CRON_NAME;
+  // The pinned definition gives us its name; without one, the seed's — and without that,
+  // the duty name is the handle.
+  const name = pinned?.name ?? seed?.name ?? options.name ?? DUTY_CRON_NAME;
   const family = all.filter((d) => d.name === name);
   const alive = family.filter((d) => !d.deletedAt);
 
@@ -82,7 +85,7 @@ export function resolveDutyChain(definitions, options = {}) {
     targetCronId: alive[0]?.cronId ?? null,
     targetSessionId: alive[0]?.targetSessionId ?? null,
     reason: pinnedDead ? 'target_deleted' : (alive.length ? 'ok' : 'not_found'),
-    pinnedCronId: isPin ? requestedId : null,
+    pinnedCronId: pinnedId || null,
   };
 }
 

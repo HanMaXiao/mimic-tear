@@ -131,11 +131,13 @@ async function readEvidence(input) {
   try {
     store = RuntimeStore.open(input.dbPath);
     const config = input.dir ? await readJson(join(input.dir, CONFIG_FILE), {}) : {};
-    const pinned = typeof config?.dutyCronId === 'string' && config.dutyCronId.trim()
+    // The pin (the user's decision) and the seed (the built-in family hint) are separate
+    // channels: a pinned id that has been deleted is a misconfiguration, not a hint.
+    const pinnedCronId = typeof config?.dutyCronId === 'string' && config.dutyCronId.trim()
       ? config.dutyCronId.trim()
       : null;
-    const seedCronId = input.cronId ?? pinned ?? DUTY_CRON_SEED;
-    const { chain, runs } = readDutyChain(store, { seedCronId });
+    const seedCronId = input.cronId ?? DUTY_CRON_SEED;
+    const { chain, runs } = readDutyChain(store, { pinnedCronId, seedCronId });
     if (!chain.active || !runs.length) return null;
     return {
       ...computeDutyEvidence({

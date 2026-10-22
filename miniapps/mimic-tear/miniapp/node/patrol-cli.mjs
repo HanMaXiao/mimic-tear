@@ -456,9 +456,19 @@ if (command === 'report') {
     });
   }
 
-  await patrol.setConfig({ lastRunAt: Date.now() });
+  // The handover stamp is the duty boss's, and only the duty boss's. A report from any
+  // other line must not refresh it: the lamp exists to notice that the duty boss went
+  // quiet, and a stranger's report feeding it is how a real dropout stays invisible.
+  // The duty chain passes `--duty-stamp`; everybody else's report leaves it alone.
+  const dutyStamp = args.includes('--duty-stamp');
+  if (dutyStamp) await patrol.setConfig({ lastRunAt: Date.now() });
 
-  print({ ok: true, findings: written.length, answered: (payload.answered ?? []).length });
+  print({
+    ok: true,
+    findings: written.length,
+    answered: (payload.answered ?? []).length,
+    dutyStamp,
+  });
   store.close();
   process.exit(0);
 }

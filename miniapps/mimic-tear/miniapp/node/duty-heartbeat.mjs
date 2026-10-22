@@ -218,15 +218,19 @@ export async function getDutyHeartbeatStatus(options = {}) {
   const config = dataDir ? await readDutyConfig(dataDir) : { periodMinutes: 30, dutyCronId: null };
   const periodMs = Number(options.periodMs) > 0 ? Number(options.periodMs) : config.periodMinutes * 60_000;
   const state = dataDir ? await readHeartbeatState(dataDir) : {};
-  const seedCronId = options.seedCronId ?? config.dutyCronId ?? DUTY_CRON_SEED;
+  // The **pin** (the user's decision, from the duty config) and the **seed** (the built-in
+  // family hint) are two different channels: the pin is a decision, the seed is only a
+  // lookup. Conflating them is what made "pin the seed's id" silently fall back.
+  const pinnedCronId = options.pinnedCronId ?? config.dutyCronId ?? null;
+  const seedCronId = options.seedCronId ?? DUTY_CRON_SEED;
 
   // With a store, the state is computed live (the heartbeat's own tick does this). Without
   // one, the last observation the heartbeat wrote down is what we have — and it says when
   // it was made, so nothing is presented as fresher than it is.
-  const chain = options.store ? readDutyChain(options.store, { seedCronId }).chain : null;
+  const chain = options.store ? readDutyChain(options.store, { pinnedCronId, seedCronId }).chain : null;
   const decision = chain
     ? evaluateDutyHeartbeat({
-      runs: readDutyChain(options.store, { seedCronId }).runs,
+      runs: readDutyChain(options.store, { pinnedCronId, seedCronId }).runs,
       periodMs,
       now,
       lastTriggeredSlot: state.lastTriggeredSlot ?? null,
@@ -269,8 +273,11 @@ export async function runDutyHeartbeat(options = {}) {
   const agent = options.agent ?? null;
 
   const state = await readHeartbeatState(dataDir);
-  const seedCronId = options.cronId ?? config.dutyCronId ?? DUTY_CRON_SEED;
-  const { chain, runs } = readDutyChain(options.store ?? {}, { seedCronId });
+  // The pin (the user's decision) and the seed (the built-in family hint) travel on two
+  // separate channels — see `duty-chain.mjs`.
+  const pinnedCronId = options.pinnedCronId ?? config.dutyCronId ?? null;
+  const seedCronId = options.seedCronId ?? DUTY_CRON_SEED;
+  const { chain, runs } = readDutyChain(options.store ?? {}, { pinnedCronId, seedCronId });
 
   // The target cron has to exist and not be deleted. If it does not, the chain is
   // misconfigured — and saying "healthy" then would be the exact lie that cost an
