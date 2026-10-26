@@ -146,7 +146,7 @@ run_id | cron_id | session_id | status | created_at_ms | delivered_at_ms | faile
 | 通道 | 什么时候有 | 作用 |
 | --- | --- | --- |
 | **① alert 文件（主）** | **永远** | 每次告警都写，JSONL 格式。无头可用、可被 node 读 |
-| ② 看板补看 | 打开 Mini App 时 | 总览页读 alert 文件，显示"上次掉线告警" |
+| ② 看板补看 | 打开 Mini App 时 | **告警顺带发布成板面 `patrol.json` 的一条 finding**（只有异常类；同一状态只转一次；带真实时间与轮数）——2026-10-26 实施：watchdog 是唯一 24×7 活着的进程，告警只进日志的话大老板收件箱里永远看不到 |
 | ③ 桌面 toast | 有交互式会话时 | 尽力而为，弹了算赚到 |
 | ④ Windows 事件日志 | 无头可用 | 最佳努力（`eventcreate`）；验收不好用 node 验，列为可选 |
 
