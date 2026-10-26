@@ -42,7 +42,7 @@ import { pathToFileURL } from 'node:url';
 import { sendToast } from './toast.mjs';
 import { computeDutyEvidence } from './view-model.mjs';
 import { RuntimeStore } from './runtime-store.mjs';
-import { appendAlert } from './watchdog-alerts.mjs';
+import { appendAlert, buildBoardNotice, buildDutyTruthLine, publishBoardNotice } from './watchdog-alerts.mjs';
 import { DUTY_CRON_SEED, readDutyChain } from './duty-chain.mjs';
 import {
   applyFailure,
@@ -184,6 +184,14 @@ export async function runWatchdog(options = {}) {
   const evidence = await readEvidence({ dbPath, cronId: options.cronId ?? null, dir, duty, now });
   const action = decideAction(state, duty, evidence);
 
+  // The board's notice is decided **independently of the toast's own state machine**:
+  // "the toast already said it" is not the same as "the board was told". On 2026-10-22 the
+  // toast fired at 18:22, the watchdog recorded "I told them", and the board stayed empty
+  // for four days. The board's own ledger is the only thing that can answer "did the
+  // board see it", so the notice is computed from the current state every tick.
+  const boardNotice = buildBoardNotice(action, duty, evidence);
+  if (boardNotice) await publishBoardNotice(dir, boardNotice);
+
   const message = action === 'none' ? undefined : buildAlertMessage(action, {
     duty,
     evidence,
@@ -216,6 +224,18 @@ export async function runWatchdog(options = {}) {
   // The gap this alert is about, so the same stretch is never written down twice.
   const gapTo = action === 'missed' ? (evidence?.lastGap?.to ?? null) : null;
 
+  // **The identity of what this alert reports.** The same outage must not fill the user's
+  // inbox on every tick, and a *different* outage must be published again: the handover
+  // stamp that started the outage identifies the first, the gap's end the second.
+  const identity = action === 'missed'
+    ? `missed:${gapTo ?? 0}`
+    : `stale:${duty.lastRunAt ?? 0}`;
+
+  // The board notice carries the facts, not just a sentence: when the last handover was,
+  // how many rounds that means, and the scheduler's own run-level evidence.
+  const truth = buildDutyTruthLine(duty, evidence);
+  const boardBody = truth ? `${message.body}\n${truth}` : message.body;
+
   if (result?.ok) {
     // Every alert is written down, not just the ones that failed to deliver: the file is
     // the channel that survives a closed board and a swallowed toast.
@@ -223,11 +243,12 @@ export async function runWatchdog(options = {}) {
       at: now,
       action,
       title: message.title,
-      body: message.body,
+      body: boardBody,
       delivered: true,
       error: null,
       note: null,
       gapTo,
+      identity,
     });
     const next = applySuccess(state, action, duty, now, evidence);
     await writeState(dir, next);
@@ -242,11 +263,12 @@ export async function runWatchdog(options = {}) {
     at: now,
     action,
     title: message.title,
-    body: message.body,
+    body: boardBody,
     delivered: false,
     error: result?.error ?? null,
     note: result?.note ?? null,
     gapTo,
+    identity,
   });
   return { action, delivered: false, duty, evidence, message, error: result?.error ?? '未知原因' };
 }
