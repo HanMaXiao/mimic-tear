@@ -36,14 +36,23 @@
 
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { sendToast } from './toast.mjs';
 import { computeDutyEvidence } from './view-model.mjs';
 import { RuntimeStore } from './runtime-store.mjs';
 import { appendAlert, buildBoardNotice, buildDutyTruthLine, publishBoardNotice } from './watchdog-alerts.mjs';
 import { DUTY_CRON_SEED, readDutyChain } from './duty-chain.mjs';
+import { decideNextCheckAt } from './watchdog-schedule.mjs';
+import { isHostRunning } from './host-liveness.mjs';
+import {
+  rearmWatchdogTask,
+  restoreFallbackSchedule,
+  disableWatchdogTask,
+  launcherExists,
+  TASK_NAME as REARM_TASK_NAME,
+} from './watchdog-rearm.mjs';
 import {
   applyFailure,
   applySuccess,
@@ -289,12 +298,138 @@ export async function inspect() {
   return { dataDir, duty, evidence, state, action: decideAction(state, duty, evidence) };
 }
 
+/**
+ * Re-arm the scheduled task for the next moment a check could matter.
+ *
+ * This is what turns the watchdog from a fixed five-minute timer into something that
+ * sleeps until the answer *could* have changed. It is deliberately defensive:
+ *
+ * - it never throws — a failed rearm must not turn a good tick into a failed one, and
+ *   must not stop the alert from being delivered;
+ * - if the smart one-shot rearm cannot be applied, the task is put back on the old
+ *   fixed interval, so the watchdog keeps waking up either way;
+ * - it only runs when this process is the one the task actually launches (the hidden
+ *   launcher), so a manual `node watchdog.mjs` never hijacks the schedule.
+ *
+ * @param {{action:string, duty:any, failedDeliveries:number, now:number}} input
+ * @returns {Promise<{mode:string, nextCheckAt:number|null, reason:string|null, error?:string|null}>}
+ */
+async function reschedule(input) {
+  const decision = decideNextCheckAt({
+    duty: input.duty,
+    action: input.action,
+    failedDeliveries: input.failedDeliveries,
+    now: input.now,
+  });
+
+  const launcherPath = join(dirname(fileURLToPath(import.meta.url)), 'run-watchdog-hidden.vbs');
+  const wscriptPath = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'wscript.exe');
+
+  // The command the task runs: the hidden launcher, with the watchdog's own arguments.
+  //
+  // The executable and its arguments are kept apart on purpose. The task scheduler
+  // treats `<Command>` as the executable and `<Arguments>` as the rest — put the
+  // `//B` switch or the script path in `<Command>` and Windows treats the whole
+  // string as a file to open, which fails silently (or opens a "pick an app" dialog).
+  const command = wscriptPath;
+  const args = `//B "${launcherPath}" "${process.execPath}" "${join(dirname(fileURLToPath(import.meta.url)), 'watchdog.mjs')}" --data-dir "${dataDir}"`;
+
+  // **The host is gone — stop.** The duty cron only fires while the host application is
+  // open, so with the host closed "the boss has gone quiet" is arithmetic, not an
+  // incident. There is nobody to tell and nothing to watch, and the user's line is
+  // clear: no useless process left hanging in the background. Disabling the task ends
+  // it completely — no next run, no process, nothing left over.
+  //
+  // Nothing is lost by this: the gap is remembered by the scheduler's permanent run
+  // log, so the next time the host opens, the first tick reports the rounds that were
+  // missed while it was closed.
+  const hostAlive = await isHostRunning();
+  if (!hostAlive) {
+    const stopped = await disableWatchdogTask();
+    return {
+      mode: stopped.ok ? 'stopped' : 'stop_failed',
+      nextCheckAt: null,
+      reason: 'host_not_running',
+      error: stopped.ok ? null : stopped.error,
+    };
+  }
+
+  if (!launcherExists(launcherPath)) {
+    // Without the launcher the task would start a console window; rearming it that way
+    // would trade a quiet watchdog for a loud one. Keep the old schedule instead.
+    const restored = await restoreFallbackSchedule({ command, arguments: args, userId: process.env.USERNAME });
+    return {
+      mode: restored.ok ? 'fallback' : 'skipped',
+      nextCheckAt: null,
+      reason: decision.reason,
+      error: restored.ok ? null : restored.error,
+    };
+  }
+
+  const rearmed = await rearmWatchdogTask({
+    nextCheckAt: decision.nextCheckAt,
+    command,
+    arguments: args,
+    userId: process.env.USERNAME,
+    taskName: REARM_TASK_NAME,
+  });
+
+  if (rearmed.ok) {
+    return { mode: 'oneshot', nextCheckAt: rearmed.nextCheckAt, reason: decision.reason, error: null };
+  }
+
+  // The smart path failed: fall back to the fixed interval rather than going silent.
+  const restored = await restoreFallbackSchedule({ command, arguments: args, userId: process.env.USERNAME });
+  return {
+    mode: restored.ok ? 'fallback' : 'skipped',
+    nextCheckAt: null,
+    reason: decision.reason,
+    error: restored.ok ? rearmed.error : `${rearmed.error}；回退也失败：${restored.error}`,
+  };
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  // **Is the host even running?** The duty cron only fires while the host application is
+  // open, so with the host closed the watchdog has nothing to watch and nobody to tell:
+  // "the boss has gone quiet" would be arithmetic, not an incident. It stops itself
+  // instead — completely, leaving no task and no process behind.
+  //
+  // This happens *before* the tick, so no alert is raised for a condition that is simply
+  // "the application is closed". The missed rounds are not lost: they live in the
+  // scheduler's permanent run log, and the first tick after the host reopens reports
+  // them.
+  const hostAlive = await isHostRunning();
+  if (!hostAlive) {
+    const stopped = await disableWatchdogTask();
+    process.stdout.write(`${JSON.stringify({
+      action: 'skipped',
+      delivered: false,
+      // The reason the watchdog stopped, in the words of the thing it noticed.
+      schedule: {
+        mode: stopped.ok ? 'stopped' : 'stop_failed',
+        reason: 'host_not_running',
+        nextCheckAt: null,
+        error: stopped.ok ? null : stopped.error,
+      },
+      error: null,
+    })}\n`);
+    process.exit(stopped.ok ? 0 : 1);
+  }
+
   const result = await runWatchdog({ dryRun });
   if (dryRun) {
     const preview = await inspect();
     process.stdout.write(`${JSON.stringify(preview, null, 2)}\n`);
   } else {
+    // The schedule is computed from the facts of this tick, then the task is re-armed.
+    const state = await readJson(join(dataDir, STATE_FILE), emptyWatchdogState());
+    const schedule = await reschedule({
+      action: result.action,
+      duty: result.duty,
+      failedDeliveries: state?.failedDeliveries ?? 0,
+      now: Date.now(),
+    });
+
     process.stdout.write(`${JSON.stringify({
       action: result.action,
       delivered: result.delivered,
@@ -308,6 +443,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       erasedOutage: Boolean(result.evidence?.erasedOutage),
       lastGap: result.evidence?.lastGap ?? null,
       chain: result.evidence?.chain ?? null,
+      // The schedule: when this watchdog will look again, and why.
+      schedule: {
+        mode: schedule.mode,
+        reason: schedule.reason,
+        nextCheckAt: schedule.nextCheckAt,
+        error: schedule.error ?? null,
+      },
       error: result.error ?? null,
     })}\n`);
   }

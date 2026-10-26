@@ -18,7 +18,8 @@
 
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { RuntimeStore } from './runtime-store.mjs';
 import { readPlan } from './plan-store.mjs';
@@ -461,6 +462,31 @@ if (command === 'report') {
   // quiet, and a stranger's report feeding it is how a real dropout stays invisible.
   // The duty chain passes `--duty-stamp`; everybody else's report leaves it alone.
   const dutyStamp = args.includes('--duty-stamp');
+
+  // A handover is proof that the host application is alive — it is running inside it.
+  // The watchdog stops itself when the host is gone (there is nothing to watch and
+  // nobody to tell), so a handover is also the moment to wake it back up. The gap that
+  // accumulated while it slept is still in the scheduler's run log, and the watchdog
+  // reports it on this wake-up.
+  //
+  // Best-effort, and deliberately so: a handover that failed because the watchdog
+  // could not be re-enabled would be a catastrophic trade — the duty boss would stop
+  // reporting to keep a watchdog quiet.
+  let watchdog = null;
+  if (dutyStamp) {
+    try {
+      const { wakeWatchdog, watchdogTaskExists, launcherPresent } = await import('./watchdog-wake.mjs');
+      const launcherPath = join(dirname(fileURLToPath(import.meta.url)), 'run-watchdog-hidden.vbs');
+      if (launcherPresent(launcherPath) && await watchdogTaskExists()) {
+        watchdog = await wakeWatchdog();
+      } else {
+        watchdog = { ok: true, enabled: false, ran: false, error: null, reason: 'not_installed' };
+      }
+    } catch (error) {
+      watchdog = { ok: false, enabled: false, ran: false, error: error?.message ?? String(error) };
+    }
+  }
+
   if (dutyStamp) await patrol.setConfig({ lastRunAt: Date.now() });
 
   print({
@@ -468,6 +494,9 @@ if (command === 'report') {
     findings: written.length,
     answered: (payload.answered ?? []).length,
     dutyStamp,
+    // Whether the watchdog was woken up. It is reported, not enforced: the handover
+    // above already went through either way.
+    watchdog: watchdog ? { ok: watchdog.ok, enabled: watchdog.enabled, ran: watchdog.ran } : null,
   });
   store.close();
   process.exit(0);
