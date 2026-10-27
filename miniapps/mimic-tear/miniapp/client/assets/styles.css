@@ -475,6 +475,17 @@ a {
   transform: scaleY(1);
 }
 
+/* Resting is a decision, not a fault: the lamp dims and stays still. It must not
+   flicker amber — that flicker means "somebody is watching and there is trouble". */
+[data-duty='resting'] .drop--lamp {
+  color: var(--mcode-text-subtle);
+}
+
+[data-duty='resting'] .drop--lamp .drop__fill {
+  opacity: 1;
+  transform: scaleY(0.34);
+}
+
 [data-duty='stale'] .drop--lamp {
   color: var(--mcode-warning);
 }

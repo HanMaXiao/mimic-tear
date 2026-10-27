@@ -429,6 +429,10 @@ function setDutyLamp(lamp) {
  */
 function currentDutyLamp() {
   if (state.duty === null) return null;
+  // A boss that was told to rest is not an outage. The stamp goes stale for a sleeping
+  // boss exactly as it would for a dead one — that is the price of an explicit rest, and
+  // the lamp must not cry wolf over it.
+  if (state.duty.mode === 'resting') return 'resting';
   return state.duty.stale ? 'stale' : 'live';
 }
 
@@ -455,6 +459,17 @@ function renderDutyStatus(duty) {
   const withdrawn = duty.withdrawn ?? 0;
   const tail = (open > 0 ? ` · ${open} 条结论待你过目` : '')
     + (withdrawn > 0 ? ` · ${withdrawn} 条已由大哥撤回` : '');
+
+  if (duty.mode === 'resting') {
+    // Resting is a decision with a reason, not a missing handover. Saying 「可能掉线」
+    // here would be a false alarm about a boss that is asleep on purpose and wakes the
+    // moment it is summoned.
+    const seen = duty.neverRan ? '' : ` · 上次巡检 ${since}`;
+    node.textContent = `大哥休息中 · 召唤才醒${seen}${tail}`;
+    node.setAttribute('data-duty-state', 'resting');
+    setDutyLamp(currentDutyLamp());
+    return;
+  }
 
   if (duty.stale) {
     node.textContent = duty.neverRan

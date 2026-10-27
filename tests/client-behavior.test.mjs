@@ -493,6 +493,40 @@ test('client behavior (DOM shim)', async (t) => {
     }
   });
 
+  await t.test('大哥在休息时，看板说「休息中」而不是「可能掉线」', async () => {
+    overviewOverride = {
+      ...OVERVIEW,
+      duty: {
+        lastRunAt: Date.now() - 4 * 60 * 60_000,
+        intervalMinutes: 15,
+        findings: 1,
+        openFindings: 1,
+        staleAfterMinutes: 45,
+        stale: true,
+        neverRan: false,
+        ageMinutes: 240,
+        // 休息是一个带理由的决定，不是漏交班：交班戳照样会旧，但旧不等于掉线。
+        mode: 'resting',
+        resting: true,
+        since: Date.now() - 60 * 60_000,
+        requestedBy: '大老板',
+      },
+    };
+    try {
+      const client = await loadClient();
+      await client.settle();
+
+      const duty = client.element('duty-status');
+      assert.match(duty.textContent, /大哥休息中/, '休息要说人话');
+      assert.doesNotMatch(duty.textContent, /可能掉线/, '休息不是故障，不该报掉线');
+      assert.match(duty.textContent, /召唤才醒/, '要说清楚它是被召唤才醒');
+      assert.match(duty.textContent, /1 条结论待你过目/, '休息时待过目的结论仍然要显示');
+      assert.equal(duty.getAttribute('data-duty-state'), 'resting');
+    } finally {
+      overviewOverride = null;
+    }
+  });
+
   await t.test('大哥从没交过班时，看板说「尚未巡检」而不是「值班中」', async () => {
     overviewOverride = {
       ...OVERVIEW,

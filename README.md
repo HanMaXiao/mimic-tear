@@ -46,7 +46,7 @@
 
 ### 方式 A：下载 Release 安装包（推荐）
 
-1. 到 [Releases](https://github.com/HanMaXiao/mimic-tear/releases) 下载 `mimic-tear-v1.1.1.zip`；
+1. 到 [Releases](https://github.com/HanMaXiao/mimic-tear/releases) 下载 `mimic-tear-v1.1.2.zip`；
 2. 解压后得到 `mimic-tear/` 目录，整体复制到：
    - Windows：`%USERPROFILE%\.minimax\plugins\mimic-tear\`
    - macOS / Linux：`~/.minimax/plugins/mimic-tear/`
