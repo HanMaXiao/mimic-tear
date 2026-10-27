@@ -1,0 +1,11 @@
+# 仓库内统一按 LF 存储与检出：Windows 上开发、Linux/macOS 上使用同一套换行符，
+# 避免克隆后整文件被判定为改动。
+* text=auto eol=lf
+
+# 二进制资源不做换行符转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ico binary
+*.sqlite binary
