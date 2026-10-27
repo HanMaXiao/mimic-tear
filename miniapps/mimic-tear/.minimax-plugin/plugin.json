@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "name": "mimic-tear",
   "displayName": "仿身泪滴",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "多智能体项目管理指挥部：聚合全部项目的 Goal 进度、待决策问题与团队层级，并把指令投递给项目负责人会话。",
   "author": "极简主义",
   "icon": "icon.png",
