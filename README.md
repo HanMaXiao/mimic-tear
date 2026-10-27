@@ -44,7 +44,20 @@
 
 ## 安装（另一台电脑）
 
-### 方式 A：下载 Release 安装包（推荐）
+### 方式 A：从 Git 仓库导入（最省事）
+
+桌面端「创建 → 从 Git 仓库导入」，地址填**带子目录**的这一条：
+
+```
+https://github.com/HanMaXiao/mimic-tear/tree/main/miniapps/mimic-tear
+```
+
+> **必须带 `/tree/main/miniapps/mimic-tear`。** 导入器会在**选定的目录**里找清单
+> （`plugin.json` / `.minimax-plugin/plugin.json` / `.claude-plugin/plugin.json` / `.codex-plugin/plugin.json`），
+> 只填仓库根地址它就看根目录，而本仓库的清单在 `miniapps/mimic-tear/` 里——
+> 少了子目录就会报「所选目录不包含受支持的 Plugin 清单」。
+
+### 方式 B：下载 Release 安装包
 
 1. 到 [Releases](https://github.com/HanMaXiao/mimic-tear/releases) 下载 `mimic-tear-v1.1.2.zip`；
 2. 解压后得到 `mimic-tear/` 目录，整体复制到：
@@ -54,7 +67,7 @@
 
 > 注意：`.minimax-plugin` 是隐藏目录，复制时别漏。目录名必须是 `mimic-tear`（要和 `plugin.json` 里的 `name` 一致）。
 
-### 方式 B：从 GitHub 克隆
+### 方式 C：从 GitHub 克隆
 
 ```bash
 git clone https://github.com/HanMaXiao/mimic-tear.git
@@ -62,7 +75,7 @@ git clone https://github.com/HanMaXiao/mimic-tear.git
 cp -R mimic-tear/miniapps/mimic-tear ~/.minimax/plugins/mimic-tear
 ```
 
-### 方式 C：让 Agent 代劳
+### 方式 D：让 Agent 代劳
 
 把仓库地址或 ZIP 交给 MiniMax Code，让它按「成品包流程」发布到本机。
 
