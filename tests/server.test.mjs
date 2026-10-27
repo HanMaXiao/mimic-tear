@@ -30,6 +30,17 @@ function makeFakeService() {
     async getSkills() {
       return { groups: [{ key: 'unreal', label: 'UE5', skills: [] }], unmapped: [], total: 0, failures: 0 };
     },
+    async getSkillLibrary() {
+      return {
+        entries: [{ id: 'sl1', skillName: 'watchdog-verify', status: 'active', triggers: ['看门狗'] }],
+        stats: { total: 1, active: 1, stale: 0, retired: 0, candidates: 0, domains: ['process'] },
+        domains: ['process'],
+        dispatchable: [{ id: 'sl1', skillName: 'watchdog-verify' }],
+        stale: [],
+        retired: [],
+        updatedAt: 1,
+      };
+    },
     async getProject(id) {
       if (id !== 1) return null;
       return { project: OVERVIEW.projects[0], orgTree: [], goals: [], questions: [], tasks: [], plan: null };
@@ -178,6 +189,13 @@ test('server', async (t) => {
 
       const skills = await (await get(server.port, '/api/skills')).json();
       assert.equal(skills.groups[0].key, 'unreal');
+
+      // The packaged-skill registry is a different read from the capability scan: it is
+      // what the boss packaged, not what happens to be installed.
+      const library = await (await get(server.port, '/api/skill-library')).json();
+      assert.equal(library.stats.active, 1);
+      assert.equal(library.entries[0].skillName, 'watchdog-verify');
+      assert.equal(library.dispatchable.length, 1);
 
       const detail = await get(server.port, '/api/projects/1');
       assert.equal(detail.status, 200);

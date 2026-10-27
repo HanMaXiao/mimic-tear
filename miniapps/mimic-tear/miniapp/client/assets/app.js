@@ -12,6 +12,7 @@ const API = {
   projects: '/api/projects',
   project: (id) => `/api/projects/${id}`,
   skills: '/api/skills',
+  skillLibrary: '/api/skill-library',
   dispatch: '/api/dispatch',
   ack: '/api/inbox/ack',
   permission: (requestId) => `/api/permissions/${requestId}`,
@@ -30,6 +31,9 @@ const state = {
   overview: null,
   inbox: [],
   skills: null,
+  // The reusable-skill registry: what the boss packaged from real work, as opposed to
+  // the capability scan above, which is only what happens to be installed on the machine.
+  skillLibrary: null,
   project: null,
   projectId: null,
   domain: null,
@@ -839,7 +843,58 @@ function renderSkills() {
         )
         .join('')
     : '<div class="empty">该领域下没有技能。</div>';
+  renderSkillLibrary();
   renderHeaderContext();
+}
+
+/**
+ * The packaged-skill registry, rendered under the capability library.
+ *
+ * The two lists answer different questions and mixing them would be a lie: the capability
+ * library is what happens to be installed on this machine, the registry is what the boss
+ * deliberately packaged out of finished work and dispatches from. A retired entry stays
+ * visible on purpose — it is the record of what was tried and rejected.
+ */
+function renderSkillLibrary() {
+  const container = el('skill-library-list');
+  const counter = el('skill-library-count');
+  if (!container) return;
+
+  const library = state.skillLibrary;
+  if (!library) {
+    container.innerHTML = '<div class="state">正在加载已封装技能库…</div>';
+    return;
+  }
+
+  const entries = library.entries ?? [];
+  const stats = library.stats ?? { active: 0, stale: 0, retired: 0 };
+  if (counter) {
+    counter.textContent = `${stats.active ?? 0} 个可派工`
+      + (stats.candidates ? ` · ${stats.candidates} 个待封装` : '')
+      + (stats.stale ? ` · ${stats.stale} 个失效` : '')
+      + (stats.retired ? ` · ${stats.retired} 个已退役` : '');
+  }
+
+  if (entries.length === 0) {
+    container.innerHTML = '<div class="empty">还没有封装过的技能。大哥在项目执行中提炼出可复用流程后会登记到这里。</div>';
+    return;
+  }
+
+  const statusLabel = { candidate: '待封装', active: '可派工', stale: '已失效', retired: '已退役' };
+  const statusClass = { candidate: '', active: 'tag--done', stale: 'tag--high', retired: '' };
+
+  container.innerHTML = entries
+    .map(
+      (entry) => `<div class="skill-row">
+        <span class="skill-row__name">${escapeHtml(entry.skillName)}</span>
+        ${entry.title && entry.title !== entry.skillName ? `<span class="skill-row__desc">${escapeHtml(entry.title)}</span>` : ''}
+        <span class="tag ${statusClass[entry.status] ?? ''}">${escapeHtml(statusLabel[entry.status] ?? entry.status)}</span>
+        ${entry.domain ? `<span class="tag">${escapeHtml(entry.domain)}</span>` : ''}
+        ${(entry.triggers ?? []).length ? `<span class="skill-row__desc">触发词：${escapeHtml(entry.triggers.join('、'))}</span>` : ''}
+        <span class="item__meta mono">派工 ${entry.usageCount ?? 0} 次 · 成功 ${entry.successCount ?? 0} 次${entry.lastError ? ` · ${escapeHtml(entry.lastError)}` : ''}</span>
+      </div>`,
+    )
+    .join('');
 }
 
 /* -------------------------------------------------------------------- chat */
@@ -1250,7 +1305,10 @@ function renderHeaderContext() {
   }
   if (view === 'skills') {
     const scan = state.skills;
-    setHeader('能力库', scan ? `${scan.total} 个技能 · ${scan.groups.length} 个领域` : '正在加载…');
+    const library = state.skillLibrary;
+    const installed = scan ? `${scan.total} 个技能 · ${scan.groups.length} 个领域` : '正在加载…';
+    const packaged = library ? `已封装 ${library.stats?.active ?? 0} 个可派工` : null;
+    setHeader('能力库', packaged ? `${installed} · ${packaged}` : installed);
     return;
   }
   setHeader('对话', '大哥的交班与对话');
@@ -1326,6 +1384,16 @@ async function renderRoute() {
         el('skill-list').innerHTML = `<div class="state state--error">${escapeHtml(error.message)}</div>`;
         await overviewPromise;
         return;
+      }
+    }
+    // The registry is a separate read: a board that has never packaged a skill still has a
+    // perfectly good capability scan to show, and a registry that fails to load must not
+    // take the capability library down with it.
+    if (!state.skillLibrary) {
+      try {
+        state.skillLibrary = await request(API.skillLibrary);
+      } catch {
+        state.skillLibrary = { entries: [], stats: { total: 0, active: 0, stale: 0, retired: 0 }, domains: [], dispatchable: [], stale: [], retired: [] };
       }
     }
     renderSkills();

@@ -12,6 +12,7 @@ import {
 import { buildDutyRounds } from './duty-rounds.mjs';
 import { DutyIntent } from './duty-intent.mjs';
 import { ManagedProjects } from './managed-projects.mjs';
+import { SkillLibraryStore } from './skill-library.mjs';
 import { readAlerts } from './watchdog-alerts.mjs';
 
 /**
@@ -69,6 +70,7 @@ export class ProjectService {
    *   patrol?: import('./patrol-store.mjs').PatrolStore,
    *   dutyIntent?: import('./duty-intent.mjs').DutyIntent,
    *   managed?: import('./managed-projects.mjs').ManagedProjects,
+   *   skillLibrary?: import('./skill-library.mjs').SkillLibraryStore,
    *   refreshSkills?: () => Promise<{ skills: any[], failures: any[] }>,
    * }} deps
    */
@@ -85,6 +87,9 @@ export class ProjectService {
     const sharedDir = deps.patrol?.dataDir ?? deps.dutyIntent?.dataDir ?? null;
     this.dutyIntent = deps.dutyIntent ?? (sharedDir ? new DutyIntent(sharedDir) : null);
     this.managed = deps.managed ?? (sharedDir ? new ManagedProjects(sharedDir) : null);
+    // The reusable-skill registry lives next to them for the same reason: the boss writes it
+    // from the CLI and the board reads it, and both must be looking at one file.
+    this.skillLibrary = deps.skillLibrary ?? (sharedDir ? new SkillLibraryStore(sharedDir) : null);
     this.refreshSkills = deps.refreshSkills ?? null;
     this.skillsScannedAt = Date.now();
 
@@ -557,6 +562,40 @@ export class ProjectService {
       total: this.skillScan.skills.length,
       failures: this.skillScan.failures.length,
       scannedAt: this.skillsScannedAt,
+    };
+  }
+
+  /**
+   * The reusable-skill registry: the skills the boss has had packaged, and how they are
+   * doing.
+   *
+   * This is a read. Validation (does the skill file still exist, does it still carry the
+   * name we registered) is a write, so it runs from the CLI on the boss's schedule, not
+   * from a page load — a GET that mutates the registry would make "the board was open" a
+   * cause of registry changes.
+   *
+   * @returns {Promise<{
+   *   entries: any[], stats: any, domains: string[],
+   *   dispatchable: any[], stale: any[], retired: any[], updatedAt: number,
+   * }>}
+   */
+  async getSkillLibrary() {
+    if (!this.skillLibrary) {
+      return { entries: [], stats: { total: 0, active: 0, stale: 0, retired: 0, domains: [] }, domains: [], dispatchable: [], stale: [], retired: [], updatedAt: 0 };
+    }
+
+    const library = await this.skillLibrary.read();
+    const entries = library.entries;
+    const stats = await this.skillLibrary.stats();
+
+    return {
+      entries,
+      stats,
+      domains: stats.domains,
+      dispatchable: entries.filter((entry) => entry.status === 'active'),
+      stale: entries.filter((entry) => entry.status === 'stale'),
+      retired: entries.filter((entry) => entry.status === 'retired'),
+      updatedAt: library.updatedAt,
     };
   }
 

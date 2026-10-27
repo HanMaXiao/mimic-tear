@@ -147,6 +147,29 @@ test('client-contract', async (t) => {
     }
   });
 
+  await t.test('已封装技能库：面板、接口与渲染都在', () => {
+    // The registry is a different thing from the capability scan, so it gets its own
+    // section under the library rather than being folded into the domain list.
+    assert.ok(html.includes('id="skill-library-list"'), '缺少已封装技能库列表容器');
+    assert.ok(html.includes('id="skill-library-count"'), '缺少已封装技能库计数位');
+    assert.ok(html.includes('已封装技能库'), '缺少已封装技能库标题');
+
+    assert.ok(app.includes('/api/skill-library'), 'app.js 未引用技能库接口');
+    assert.ok(app.includes('function renderSkillLibrary'), '缺少 renderSkillLibrary');
+    assert.ok(app.includes('renderSkillLibrary();'), '技能库渲染没有被调用');
+
+    // The ids the renderer reaches for must exist: a missing one makes `el()` return null
+    // and the panel silently stays empty.
+    for (const id of ['skill-library-list', 'skill-library-count']) {
+      assert.ok(html.includes(`id="${id}"`), `app.js 渲染用到的 ${id} 不在 HTML 里`);
+    }
+
+    // The four states of the registry must all be legible on the board.
+    for (const label of ['待封装', '可派工', '已失效', '已退役']) {
+      assert.ok(app.includes(label), `缺少状态文案 ${label}`);
+    }
+  });
+
   await t.test('没有远程资源引用', () => {
     const allowed = ['http://www.w3.org/2000/svg', 'http://127.0.0.1', 'http://localhost'];
     for (const [name, content] of [['index.html', html], ['app.js', app], ['styles.css', css]]) {
