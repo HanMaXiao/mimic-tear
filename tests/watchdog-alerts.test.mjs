@@ -11,7 +11,7 @@ import { ProjectService } from '../miniapps/mimic-tear/miniapp/node/project-serv
 import { readAlerts } from '../miniapps/mimic-tear/miniapp/node/watchdog-alerts.mjs';
 import { runWatchdog } from '../miniapps/mimic-tear/miniapp/node/watchdog.mjs';
 import { HOST_IMAGE_NAME, isHostRunning } from '../miniapps/mimic-tear/miniapp/node/host-liveness.mjs';
-import { TASK_NAME, isWatchdogTaskInstalled } from '../miniapps/mimic-tear/miniapp/node/watchdog-rearm.mjs';
+import { TASK_NAME, isWatchdogTaskInstalled, readWatchdogTaskRegistration } from '../miniapps/mimic-tear/miniapp/node/watchdog-rearm.mjs';
 import { createApp } from '../miniapps/mimic-tear/miniapp/node/server.mjs';
 import { tmpDir, cleanupDir } from './helpers/fixture.mjs';
 
@@ -175,6 +175,61 @@ test('B4：看板读得到告警', async () => {
   }
 });
 
+/**
+ * Put the task's registration back the way it was.
+ *
+ * The test below runs the real CLI, and the CLI used to rewrite the production task's
+ * registration with whatever directory it was given. Restoring the snapshot keeps a
+ * failing test from leaving the machine worse than it found it.
+ *
+ * @param {{xml?: string} | null} snapshot
+ */
+function restoreWatchdogTask(snapshot) {
+  if (!snapshot?.xml) return;
+  const dir = tmpDir('mimic-task-restore-');
+  const xmlPath = join(dir, 'task.xml');
+  try {
+    // `schtasks /create /xml` reads UTF-16LE with a BOM, the same encoding the
+    // production writer uses.
+    const body = Buffer.from(snapshot.xml, 'utf16le');
+    writeFileSync(xmlPath, Buffer.concat([Buffer.from([0xff, 0xfe]), body]));
+    execFileSync('schtasks.exe', ['/create', '/tn', TASK_NAME, '/xml', xmlPath, '/f'], { stdio: 'ignore' });
+  } catch {
+    /* best effort: the task still exists, only its arguments may differ */
+  } finally {
+    cleanupDir(dir);
+  }
+}
+
+test('B6：跑一次 watchdog CLI 不得改动生产计划任务的注册', async () => {
+  // 回归测试：曾经有一段时间，测试用临时目录跑 CLI，而 CLI 把自己的 --data-dir 写回了
+  // 生产计划任务——于是生产看门狗一直对着一个用完即弃的临时目录跑。任务照样报成功，
+  // 状态与告警全写进了没人看的地方，板面从那以后再没收到过看门狗的告警。
+  const dir = tmpDir();
+  const host = startHostStandIn();
+  const before = await readWatchdogTaskRegistration();
+  try {
+    assert.equal(await waitForHostSeen(), true, '宿主替身必须先被探针看见');
+
+    execFileSync(
+      process.execPath,
+      [CLI, '--data-dir', dir, '--no-notify', '--db', join(dir, 'no-such-db.sqlite')],
+      { encoding: 'utf8' },
+    );
+
+    const after = await readWatchdogTaskRegistration();
+    assert.equal(
+      after?.dataDir ?? null,
+      before?.dataDir ?? null,
+      '一次测试运行不得把生产计划任务指向别的目录',
+    );
+  } finally {
+    host.stop();
+    cleanupDir(dir);
+    restoreWatchdogTask(before);
+  }
+});
+
 test('B5：无头可跑——退出码 0 且告警文件被创建', async () => {
   const dir = tmpDir();
   const host = startHostStandIn();
@@ -188,9 +243,11 @@ test('B5：无头可跑——退出码 0 且告警文件被创建', async () => 
 
     writeStaleConfig(dir);
     // `--no-notify` is the headless mode: the file is the only channel, nothing pops up.
+    // `--no-rearm` keeps this test out of the schedule entirely: it is not about when
+    // the watchdog looks next, and a test must never rewrite the production task.
     execFileSync(
       process.execPath,
-      [CLI, '--data-dir', dir, '--no-notify', '--db', join(dir, 'no-such-db.sqlite')],
+      [CLI, '--data-dir', dir, '--no-notify', '--no-rearm', '--db', join(dir, 'no-such-db.sqlite')],
       { encoding: 'utf8' },
     );
 

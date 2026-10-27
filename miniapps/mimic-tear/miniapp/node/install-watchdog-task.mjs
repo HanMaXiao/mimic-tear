@@ -57,11 +57,16 @@ const WSCRIPT_PATH = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', '
  *
  * @param {string} file
  * @param {string[]} args
+ * @param {Record<string, string>} [env] extra environment variables for the child
  * @returns {Promise<{code:number, stdout:string, stderr:string}>}
  */
-function run(file, args) {
+function run(file, args, env) {
   return new Promise((res) => {
-    execFile(file, args, { windowsHide: true, timeout: 60_000 }, (error, stdout, stderr) => {
+    execFile(file, args, {
+      windowsHide: true,
+      timeout: 60_000,
+      ...(env ? { env: { ...process.env, ...env } } : {}),
+    }, (error, stdout, stderr) => {
       res({ code: error?.code ?? 0, stdout: String(stdout), stderr: String(stderr) });
     });
   });
@@ -182,7 +187,12 @@ async function status() {
  * @returns {Promise<{code:number, stdout:string, stderr:string}>}
  */
 async function arm() {
-  const result = await run(process.execPath, [WATCHDOG_PATH, '--data-dir', DATA_DIR]);
+  // The marker is what authorises the watchdog to re-arm the task. This is the
+  // operator's explicit path — "run the watchdog now and let it put the schedule back" —
+  // so it asks for the same authorisation the scheduled task's launcher gives.
+  const result = await run(process.execPath, [WATCHDOG_PATH, '--data-dir', DATA_DIR], {
+    MIMIC_WATCHDOG_LAUNCHED: '1',
+  });
   return result;
 }
 
@@ -205,7 +215,9 @@ export async function main() {
     const info = await status();
     process.stdout.write(`${JSON.stringify(info, null, 2)}\n`);
   } else if (command === 'test') {
-    const result = await run(process.execPath, [WATCHDOG_PATH, '--data-dir', DATA_DIR]);
+    const result = await run(process.execPath, [WATCHDOG_PATH, '--data-dir', DATA_DIR], {
+      MIMIC_WATCHDOG_LAUNCHED: '1',
+    });
     process.stdout.write(`${result.stdout}${result.stderr}\n`);
   } else if (command === 'arm') {
     // Run the watchdog once so that it re-arms its own schedule.

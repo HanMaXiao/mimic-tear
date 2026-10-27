@@ -51,6 +51,7 @@ import {
   restoreFallbackSchedule,
   disableWatchdogTask,
   launcherExists,
+  readWatchdogTaskRegistration,
   TASK_NAME as REARM_TASK_NAME,
 } from './watchdog-rearm.mjs';
 import {
@@ -80,6 +81,24 @@ const dryRun = args.includes('--dry-run');
  * only channel, which is exactly what it is for.
  */
 const noNotify = args.includes('--no-notify');
+/**
+ * May this process re-arm the scheduled task?
+ *
+ * The task re-arms *itself* after every run, and it does that by rewriting the task's
+ * registration with its own command line — including the `--data-dir` this run was given.
+ * So a run that was not started by the task must never re-arm it: a test that starts the
+ * watchdog against a temp directory would otherwise repoint the production task at that
+ * temp directory, and the production watchdog would keep writing its state and its
+ * alerts into a folder that gets deleted.
+ *
+ * The launcher (`run-watchdog-hidden.vbs`) marks the child it starts, and the operator's
+ * own entry point (`install-watchdog-task.mjs arm`) does the same. Everything else — a
+ * manual `node watchdog.mjs`, a test — is a guest in someone else's schedule and leaves
+ * it alone.
+ */
+const launchedByTask = process.env.MIMIC_WATCHDOG_LAUNCHED === '1';
+/** An explicit opt-out, for a caller that wants a check without touching the schedule. */
+const noRearm = args.includes('--no-rearm');
 
 const CONFIG_FILE = 'patrol-config.json';
 const INTENT_FILE = 'duty-intent.json';
@@ -309,12 +328,39 @@ export async function inspect() {
  * - if the smart one-shot rearm cannot be applied, the task is put back on the old
  *   fixed interval, so the watchdog keeps waking up either way;
  * - it only runs when this process is the one the task actually launches (the hidden
- *   launcher), so a manual `node watchdog.mjs` never hijacks the schedule.
+ *   launcher), so a manual `node watchdog.mjs` never hijacks the schedule — **and the
+ *   task must already point at this run's data directory**, so that a run which is not
+ *   the task's own cannot repoint the production task at a directory of its own.
  *
  * @param {{action:string, duty:any, failedDeliveries:number, now:number}} input
  * @returns {Promise<{mode:string, nextCheckAt:number|null, reason:string|null, error?:string|null}>}
  */
 async function reschedule(input) {
+  // **Not the task's own process — do not touch the task.** Rewriting the registration
+  // from an outside run is how the production watchdog ends up pointed at a temp
+  // directory, which is a silent failure: the task still reports success, and everything
+  // it writes lands somewhere nobody looks.
+  if (noRearm) {
+    return { mode: 'skipped', nextCheckAt: null, reason: 'rearm_disabled', error: null };
+  }
+  if (!launchedByTask) {
+    return { mode: 'skipped', nextCheckAt: null, reason: 'not_launched_by_task', error: null };
+  }
+
+  // The task must already point at this run's data directory. If it points somewhere
+  // else, this run is not the task's own process after all (or the task was repointed
+  // by something else), and overwriting the registration would destroy the only record
+  // of where the production watchdog is actually running.
+  const registration = await readWatchdogTaskRegistration(REARM_TASK_NAME);
+  if (registration?.dataDir && resolve(registration.dataDir) !== resolve(dataDir)) {
+    return {
+      mode: 'skipped',
+      nextCheckAt: null,
+      reason: 'task_points_elsewhere',
+      error: `计划任务当前指向 ${registration.dataDir}，本次不重装（本次目录 ${dataDir}）`,
+    };
+  }
+
   const decision = decideNextCheckAt({
     duty: input.duty,
     action: input.action,
