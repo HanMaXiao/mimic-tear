@@ -67,6 +67,23 @@ If Not fso.FileExists(watchdogPath) Then
   WScript.Quit 96
 End If
 
+' Mark the child as "started by the scheduled task".
+'
+' The watchdog re-arms the task after every run, and it does that by rewriting the task's
+' registration with its own command line. A run that the task did NOT start — a test, a
+' manual `node watchdog.mjs` — must therefore never re-arm it: the rearm would repoint
+' the production task at whatever directory that run was given. The marker is set on this
+' process, so the child inherits it, and it is the only thing that authorises a rearm.
+On Error Resume Next
+shell.Environment("PROCESS")("MIMIC_WATCHDOG_LAUNCHED") = "1"
+errNumber = Err.Number
+errDesc = Err.Description
+On Error GoTo 0
+
+If errNumber <> 0 Then
+  WScript.Quit 95
+End If
+
 ' 0 = hidden window, True = wait for the child so its exit code can be relayed.
 On Error Resume Next
 exitCode = shell.Run(command, 0, True)

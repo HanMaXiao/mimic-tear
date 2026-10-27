@@ -158,6 +158,13 @@ export function createApp(deps) {
         return;
       }
 
+      // The reusable-skill registry: the skills the boss packages and dispatches from.
+      // Separate from /api/skills, which is a scan of what is installed on the machine.
+      if (pathname === '/api/skill-library' && method === 'GET') {
+        sendJson(response, 200, await service.getSkillLibrary());
+        return;
+      }
+
       if (pathname.startsWith('/api/projects/') && method === 'GET') {
         const id = Number(pathname.slice('/api/projects/'.length));
         if (!Number.isFinite(id)) {

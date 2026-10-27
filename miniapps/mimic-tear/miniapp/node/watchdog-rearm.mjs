@@ -298,6 +298,72 @@ export async function isWatchdogTaskInstalled(taskName = TASK_NAME) {
 }
 
 /**
+ * Read the text of one tag out of a task XML.
+ *
+ * @param {string} xml
+ * @param {string} tag
+ * @returns {string}
+ */
+function readTag(xml, tag) {
+  const match = new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`, 'i').exec(xml ?? '');
+  return match ? match[1] : '';
+}
+
+/**
+ * Decode the XML entities a task registration carries.
+ *
+ * @param {string} value
+ * @returns {string}
+ */
+function decodeXml(value) {
+  return String(value ?? '')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&');
+}
+
+/**
+ * Pull the `--data-dir` value out of a command line.
+ *
+ * @param {string} commandLine
+ * @returns {string|null}
+ */
+export function extractDataDirArgument(commandLine) {
+  const match = /--data-dir\s+"([^"]*)"/i.exec(commandLine ?? '')
+    ?? /--data-dir\s+(\S+)/i.exec(commandLine ?? '');
+  return match ? match[1] : null;
+}
+
+/**
+ * Read the task's current registration.
+ *
+ * This is what tells the watchdog *where it is pointed*. A watchdog that re-arms the
+ * task with its own `--data-dir` is only safe while the task already points at that
+ * same directory — otherwise the run rewrites the production task to wherever this
+ * particular invocation happened to be given (a test's temp directory, say), and the
+ * production watchdog then writes its state and its alerts into a throwaway folder.
+ *
+ * @param {string} [taskName]
+ * @returns {Promise<{command:string, arguments:string, dataDir:string|null, xml:string}|null>}
+ *          null when the task is not registered
+ */
+export async function readWatchdogTaskRegistration(taskName = TASK_NAME) {
+  const result = await exec('schtasks.exe', ['/query', '/tn', taskName, '/xml']);
+  if (result.code !== 0) return null;
+
+  const command = decodeXml(readTag(result.stdout, 'Command'));
+  const commandLine = decodeXml(readTag(result.stdout, 'Arguments'));
+  return {
+    command,
+    arguments: commandLine,
+    dataDir: extractDataDirArgument(commandLine),
+    xml: result.stdout,
+  };
+}
+
+/**
  * Stop the task from running: disable it.
  *
  * This is what "the watchdog shuts down properly" means in practice. A disabled task
