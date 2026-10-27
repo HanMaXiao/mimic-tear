@@ -309,6 +309,15 @@ export async function isWatchdogTaskInstalled(taskName = TASK_NAME) {
  */
 export async function disableWatchdogTask(options = {}) {
   const taskName = options?.taskName ?? TASK_NAME;
+  // A task that is not registered cannot run, so the state this function is after is
+  // already true. `schtasks` reports that as an error ("the specified task name does not
+  // exist"), but on a machine that never had the watchdog — a CI runner, a fresh install,
+  // or a task the user deleted by hand — there is nothing left to stop. Reporting that
+  // as a failure would be a fault that does not exist: the watchdog would keep saying
+  // "stop_failed" forever about a task that is already gone.
+  if (!(await isWatchdogTaskInstalled(taskName))) {
+    return { ok: true };
+  }
   const result = await exec('schtasks.exe', ['/change', '/tn', taskName, '/disable']);
   if (result.code !== 0) {
     return { ok: false, error: `禁用失败：${result.stderr || result.stdout}` };

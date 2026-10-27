@@ -4,8 +4,9 @@ import { mkdtempSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const CLIENT_DIR = 'D:/Project/AppProject/Mimic Tear/miniapps/mimic-tear/miniapp/client';
+const CLIENT_DIR = fileURLToPath(new URL('../miniapps/mimic-tear/miniapp/client', import.meta.url));
 const HTML_PATH = `${CLIENT_DIR}/index.html`;
 const APP_PATH = `${CLIENT_DIR}/assets/app.js`;
 
