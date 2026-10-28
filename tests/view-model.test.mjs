@@ -13,6 +13,15 @@ import {
   questionnaireBody,
   projectName,
   sessionErrorBody,
+  // 拆出来的那几块共享口径：排序、年龄、待办筛选、间隔兜底。
+  ageMinutes,
+  compareBySeverity,
+  resolveDutyIntervals,
+  selectAttentionItems,
+  severityRank,
+  sortBySeverity,
+  DEFAULT_BOARD_INTERVAL_MINUTES,
+  DEFAULT_DUTY_INTERVAL_MINUTES,
 } from '../miniapps/mimic-tear/miniapp/node/view-model.mjs';
 
 const NOW = 1_800_000_000_000;
@@ -477,5 +486,96 @@ test('view-model', async (t) => {
     assert.equal(duty.openFindings, 0);
     assert.equal(duty.dutyOpenFindings, 0);
     assert.equal(duty.boardOpenFindings, 0);
+  });
+
+  await t.test('严重度顺序只有一份定义：共享比较器与收件箱给出同一个顺序', () => {
+    const items = [
+      { id: 'a', severity: 'low', createdAt: 5 },
+      { id: 'b', severity: 'high', createdAt: 1 },
+      { id: 'c', severity: 'medium', createdAt: 9 },
+      { id: 'd', severity: 'high', createdAt: 7 },
+    ];
+
+    // 共享口径：先严重度，同一严重度按时间倒序。
+    assert.deepEqual(sortBySeverity(items).map((i) => i.id), ['d', 'b', 'c', 'a']);
+    assert.deepEqual(
+      [...items].sort(compareBySeverity).map((i) => i.id),
+      ['d', 'b', 'c', 'a'],
+      '比较器与排序函数必须是同一套规则',
+    );
+
+    // 收件箱用的是这份排序：两个调用点对同一组条目必须给出同一个顺序。
+    const projects = [project(1, 'D:/projects/alpha')];
+    const sessions = [
+      session('err', 1, { status: 'error', errorCode: 500, errorMessage: 'boom', updatedAt: NOW - 60_000 }),
+      session('ok', 1),
+    ];
+    const goals = [goal('g1', 'ok', { status: 'paused', updatedAt: NOW - 30_000 })];
+    const built = buildInbox({ projects, sessions, goals, questionnaires: [], plans: new Map(), now: NOW }, new Set());
+
+    assert.deepEqual(
+      built.map((i) => i.id),
+      sortBySeverity(built).map((i) => i.id),
+      '收件箱自己的排序必须与共享排序口径一致',
+    );
+    assert.deepEqual(built.map((i) => i.severity), ['high', 'medium'], '严重的排在前面');
+  });
+
+  await t.test('认不出来的严重度不改变原有相对顺序', () => {
+    const weird = [
+      { id: 'x', severity: 'weird', createdAt: 1 },
+      { id: 'y', severity: 'weird', createdAt: 2 },
+    ];
+
+    assert.equal(severityRank('weird'), undefined, '未知严重度没有位次');
+    assert.deepEqual(sortBySeverity(weird).map((i) => i.id), ['x', 'y'], '未知严重度不能打乱原有顺序');
+  });
+
+  await t.test('条目年龄只有一份算法：收件箱里的 ageMinutes 就是这一条口径', () => {
+    assert.equal(ageMinutes(undefined, NOW), 0, '没有时间戳就是 0');
+    assert.equal(ageMinutes(0, NOW), 0);
+    assert.equal(ageMinutes(NOW - 90_000, NOW), 2, '1.5 分钟四舍五入到 2');
+    assert.equal(ageMinutes(NOW + 60_000, NOW), 0, '将来的时间戳不能算出负数');
+
+    const projects = [project(1, 'D:/projects/alpha')];
+    const sessions = [session('err', 1, { status: 'error', errorCode: 500, updatedAt: NOW - 120_000 })];
+    const built = buildInbox({ projects, sessions, goals: [], questionnaires: [], plans: new Map(), now: NOW }, new Set());
+
+    assert.equal(built[0].ageMinutes, ageMinutes(built[0].createdAt, NOW), '收件箱条目的年龄必须与共享口径一致');
+    assert.equal(built[0].ageMinutes, 2);
+  });
+
+  await t.test('「需你处理」的判定只有一份：KPI 的待决策数就是这些条目的条数', () => {
+    const inbox = [
+      { severity: 'high', acknowledged: false },
+      { severity: 'low', acknowledged: false },
+      { severity: 'medium', acknowledged: true },
+      { severity: 'high', acknowledged: false },
+    ];
+
+    assert.equal(selectAttentionItems(inbox).length, 2, 'low 与已确认的都不算');
+    assert.equal(buildKpi([], inbox).pendingDecisions, selectAttentionItems(inbox).length, 'KPI 与筛选口径必须一致');
+  });
+
+  await t.test('看板巡检间隔与值班周期的兜底值只有一个来源', () => {
+    assert.equal(DEFAULT_BOARD_INTERVAL_MINUTES, 15);
+    assert.equal(DEFAULT_DUTY_INTERVAL_MINUTES, 30);
+
+    assert.deepEqual(resolveDutyIntervals(null), { intervalMinutes: 15, dutyIntervalMinutes: 30 });
+    assert.deepEqual(
+      resolveDutyIntervals({ intervalMinutes: 0, dutyIntervalMinutes: 'x' }),
+      { intervalMinutes: 15, dutyIntervalMinutes: 30 },
+      '非法值退回兜底',
+    );
+    assert.deepEqual(
+      resolveDutyIntervals({ intervalMinutes: 7, dutyIntervalMinutes: '45' }),
+      { intervalMinutes: 7, dutyIntervalMinutes: 45 },
+      '字符串数字也要认',
+    );
+
+    // 值班状态读的是同一份兜底，不能自己再写一份。
+    const duty = buildDutyStatus({ config: {}, findings: [], now: NOW });
+    assert.equal(duty.intervalMinutes, resolveDutyIntervals({}).intervalMinutes);
+    assert.equal(duty.dutyIntervalMinutes, resolveDutyIntervals({}).dutyIntervalMinutes);
   });
 });
