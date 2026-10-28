@@ -1,64 +1,59 @@
-import {
-  buildDutyStatus,
-  buildInbox,
-  buildKpi,
-  buildOrgTree,
-  buildPatrolBrief,
-  buildProjectCards,
-  normalizeConclusionSource,
-  parsePatrolReport,
-  questionnaireShape,
-  withDutyCards,
-} from './view-model.mjs';
+/**
+ * Mini App 唯一的领域服务。
+ *
+ * 所有读都在这里聚合运行时状态，所有写都从这里出去。Host 的路由（HTTP、MCP、后台刷新）
+ * 全都调它，所以业务上的写只有一处会被校验、提交、然后交回去广播。
+ *
+ * 这个文件本身是**编排**：它读什么、写到哪儿、什么时候广播。判断都在拆出去的纯函数模块
+ * 里：
+ *
+ * - `dispatch-flow.mjs` —— 派工写路径上的校验与载荷
+ * - `inbox-assembly.mjs` —— 收件箱在服务层的装配
+ * - `patrol-run.mjs` —— 一轮巡检里的纯计算
+ * - `duty-status.mjs` / `inbox-builder.mjs` —— 值班状态与收件箱口径
+ *
+ * 写路径的顺序是：校验 → 提交 → 广播。
+ */
+
 import { buildDutyRounds } from './duty-rounds.mjs';
 import { DutyIntent } from './duty-intent.mjs';
 import { ManagedProjects } from './managed-projects.mjs';
 import { SkillLibraryStore } from './skill-library.mjs';
 import { readAlerts } from './watchdog-alerts.mjs';
 
-/**
- * The single domain service of the Mini App.
- *
- * Every read aggregates the runtime state; every write goes through this class. The Host
- * routes (HTTP, MCP, background refresh) all call into it, so there is exactly one place
- * where a business mutation is validated, committed and handed back for broadcast.
- */
+import { DomainError } from './domain-error.mjs';
+import {
+  buildDispatchPayload,
+  buildDispatchRecord,
+  dispatchResult,
+  validateDispatchRequest,
+} from './dispatch-flow.mjs';
+import {
+  buildDutyStatus,
+  resolveDutyIntervals,
+  withDutyCards,
+} from './duty-status.mjs';
+import { assembleInbox, buildPatrolInboxItems } from './inbox-assembly.mjs';
+import { buildInbox, buildKpi, selectAttentionItems } from './inbox-builder.mjs';
+import { buildOrgTree } from './org-tree.mjs';
+import { buildPatrolFindings, resolvePatrolProposals } from './patrol-run.mjs';
+import { buildPatrolBrief, parsePatrolReport } from './patrol-report.mjs';
+import { buildProjectCards } from './project-cards.mjs';
+import { isInternalWorkspace, splitVisibleProjects } from './project-scope.mjs';
+import { normalizeConclusionSource } from './conclusion-source.mjs';
 
-/** How often the skill library is re-scanned so newly installed skills show up. */
+export { DomainError };
+export { isInternalWorkspace };
+
+/** 技能库多久重扫一次，这样新装上的技能才能露出来。 */
 const SKILL_REFRESH_MS = 10 * 60 * 1000;
 
-/** A business error with an HTTP status and a stable machine code. */export class DomainError extends Error {
-  /**
-   * @param {string} code
-   * @param {string} message
-   * @param {number} [status]
-   */
-  constructor(code, message, status = 400) {
-    super(message);
-    this.name = 'DomainError';
-    this.code = code;
-    this.status = status;
-  }
-}
-
 /**
- * Runtime-internal workspaces.
+ * Mini App 唯一的领域服务。
  *
- * The runtime registers a workspace for every agent's default directory and for every
- * installed Mini App. Those are plumbing, not the user's projects, and listing them as
- * "workspace" rows makes the board look broken. They are filtered out and counted so the
- * page can say how many were hidden instead of silently dropping them.
+ * 每个读都聚合运行时状态；每个写都走这个类。Host 的路由（HTTP、MCP、后台刷新）全都调它，
+ * 所以业务上的一次改动只有一处会被校验、提交、然后交回去广播。
  */
-const INTERNAL_WORKSPACE = /[\\/]\.(?:minimax|mavis)[\\/](?:agents[\\/][^\\/]+[\\/](?:workspace|miniapps)|workspace)([\\/]|$)/i;
-
-/**
- * @param {string} workspaceDir
- * @returns {boolean}
- */
-export function isInternalWorkspace(workspaceDir) {
-  return Boolean(workspaceDir) && INTERNAL_WORKSPACE.test(workspaceDir);
-}
-
 export class ProjectService {
   /**
    * @param {{
@@ -83,28 +78,24 @@ export class ProjectService {
     this.persistence = deps.persistence;
     this.boss = deps.boss;
     this.patrol = deps.patrol ?? null;
-    // The duty intent and the jurisdiction list live in the same directory as the duty
-    // config, so they are found next to it rather than injected twice.
+    // 值班意图与管辖名单住在值班配置同一个目录里，所以是就近找到的，而不是注入两遍。
     const sharedDir = deps.patrol?.dataDir ?? deps.dutyIntent?.dataDir ?? null;
     this.dutyIntent = deps.dutyIntent ?? (sharedDir ? new DutyIntent(sharedDir) : null);
     this.managed = deps.managed ?? (sharedDir ? new ManagedProjects(sharedDir) : null);
-    // The reusable-skill registry lives next to them for the same reason: the boss writes it
-    // from the CLI and the board reads it, and both must be looking at one file.
+    // 可复用技能登记表住在它们旁边，同理：大哥从 CLI 写它，看板读它，两边必须看同一个文件。
     this.skillLibrary = deps.skillLibrary ?? (sharedDir ? new SkillLibraryStore(sharedDir) : null);
     this.refreshSkills = deps.refreshSkills ?? null;
     this.skillsScannedAt = Date.now();
 
-    /** Cached aggregate, invalidated by the runtime revision. */
+    /** 聚合结果缓存，靠运行时版本号失效。 */
     this.cache = null;
   }
 
   /**
-   * The duty state: the facts, the decision that was made, and what the boss watches.
+   * 值班状态：事实、已经做出的决定，以及大哥在看哪些项目。
    *
-   * The duty intent is deliberately not part of the runtime revision: a user who tells the
-   * boss to rest has to see the board change right away, not on the next unrelated session
-   * event. So the duty state is read fresh on every call and stamped onto the cards on the
-   * way out — the cached snapshot stays a snapshot.
+   * 值班意图刻意不算进运行时版本：用户让大哥去休息，必须立刻看到看板变化，不能等一个
+   * 无关的会话事件。所以值班状态每次都是现读，出站时盖到卡片上——缓存还是缓存。
    *
    * @param {{config?:any, findings?:any[], dismissed?:any[]}} [input]
    * @returns {Promise<any>}
@@ -122,13 +113,11 @@ export class ProjectService {
       intent,
       now: Date.now(),
     });
-    // The duty heartbeat's own state: whether the host's cron chain is broken, and
-    // whether the heartbeat filled a slot nobody created. Only a new field — the board
-    // shows it, the client is untouched.
-    // The heartbeat's own state file — not the runtime database. The board polls the
-    // overview every few seconds, and a failed runtime read there would surface as a data
-    // warning on every poll; the heartbeat's five-minute tick is the right cadence for
-    // this anyway, and it writes what it saw.
+    // 值班心跳自己的状态：宿主的 cron 链是不是断了，以及心跳是不是补了一个没人建的槽位。
+    // 这是一个新字段——看板会显示，客户端不用改。
+    // 心跳自己的状态文件，不是运行时数据库。看板每几秒轮询一次总览，那里读运行时失败会
+    // 变成每次轮询都冒一条数据告警；心跳五分钟一跳，本来就是合适的节奏，而且它会把自己
+    // 看到的东西写下来。
     const { getDutyHeartbeatStatus } = await import('./duty-heartbeat.mjs');
     const heartbeat = await getDutyHeartbeatStatus({
       dataDir: this.patrol?.dataDir ?? null,
@@ -138,7 +127,7 @@ export class ProjectService {
   }
 
   /**
-   * The current duty intent — what the boss was told to do, and by whom.
+   * 现在的值班意图——大哥被交代做什么、谁交代的。
    *
    * @returns {Promise<{ intent: any, duty: any }>}
    */
@@ -151,10 +140,10 @@ export class ProjectService {
   }
 
   /**
-   * Record the decision about the boss's duty.
+   * 记下关于大哥值班的那个决定。
    *
-   * "Resting" is a decision with a reason, not a switch somebody flipped: the intent keeps
-   * who asked for it and since when, so the board can say *why* the boss is off duty.
+   * 「休息」是一个带理由的决定，不是 somebody 拨过的开关：意图里留着谁提的、从什么时候
+   * 开始，所以看板能说清楚大哥为什么不在岗。
    *
    * @param {{mode?:string, requestedBy?:string, note?:string}} input
    * @returns {Promise<{ intent: any, duty: any }>}
@@ -173,15 +162,18 @@ export class ProjectService {
   }
 
   /**
-   * The boss's proactive patrol settings.
+   * 大哥主动巡检的设置。
    * @returns {Promise<any>}
    */
   async getPatrolConfig() {
     if (!this.patrol) {
+      // 兜底值跟值班状态读的是同一份常量：两边各写一份，看板就会拿看板的间隔去算大哥
+      // 的掉线阈值。
+      const intervals = resolveDutyIntervals(null);
       return {
         enabled: false,
-        intervalMinutes: 15,
-        dutyIntervalMinutes: 30,
+        intervalMinutes: intervals.intervalMinutes,
+        dutyIntervalMinutes: intervals.dutyIntervalMinutes,
         lastRunAt: null,
         lastBoardPatrolAt: null,
         lastSignature: null,
@@ -191,10 +183,10 @@ export class ProjectService {
   }
 
   /**
-   * The duty rounds, grouped for the conversation.
+   * 值班轮次，按对话分组。
    *
-   * The duty boss runs on its own cron session, so the Host chat side panel (which shows
-   * one session) never shows the rounds. These are the rounds the user wants to see.
+   * 值班大哥跑在它自己的 cron 会话上，所以 Host 的聊天侧边栏（只显示一个会话）永远看不到
+   * 这些轮次。用户想看的就是这些轮次。
    *
    * @param {{ limit?:number }} [options]
    * @returns {Promise<import('./duty-rounds.mjs').DutyRound[]>}
@@ -206,11 +198,10 @@ export class ProjectService {
   }
 
   /**
-   * The watchdog's alert log — the channel that survives a closed board.
+   * 看门狗的告警日志——关掉看板也能活下来的那条通道。
    *
-   * The file is written whether or not the notification landed, so it is the only record of
-   * what the watchdog saw while nobody was looking. The board reads it back and shows the
-   * last few entries.
+   * 文件不管通知有没有送到都会写，所以它是「没人看着的时候看门狗看到了什么」的唯一记录。
+   * 看板把它读回来，显示最近几条。
    *
    * @param {{ limit?:number }} [options]
    * @returns {Promise<{ alerts: import('./watchdog-alerts.mjs').AlertRecord[] }>}
@@ -222,11 +213,10 @@ export class ProjectService {
   }
 
   /**
-   * The boss's conversation, read back from the runtime.
+   * 大哥的对话，从运行时读回来。
    *
-   * The transcript is the Host's, not the Mini App's: the same session shows up in the
-   * Host chat side panel and here. Reading it back is what lets the Mini App show what was
-   * said in the side panel — and what makes the transcript survive a page reload.
+   * 记录是 Host 的，不是 Mini App 的：同一个会话既出现在 Host 聊天侧边栏，也出现在这里。
+   * 把它读回来，就是 Mini App 能显示侧边栏里说了什么——也是刷新页面之后对话还在的原因。
    *
    * @returns {Promise<Array<{id:string, role:string, text:string, source:string, createdAt:number}>>}
    */
@@ -234,15 +224,15 @@ export class ProjectService {
     const stored = await this.persistence.getBossSession();
     if (!stored?.sessionId) return [];
     const messages = this.store.listSessionMessages(stored.sessionId);
-    // The boss's own turns are the interesting half; the user's side is already on screen.
+    // 大哥自己那半边才是有意思的；用户那半边已经在屏幕上了。
     return messages;
   }
 
   /**
-   * How many messages the boss's session holds.
+   * 大哥的会话里有多少条消息。
    *
-   * The count is the cheap change detector: when it moves, something was said — in the
-   * Mini App or in the Host chat side panel.
+   * 这个计数是便宜的变更检测器：它动了，就是有人说了话——在 Mini App 里，或者在 Host
+   * 聊天侧边栏里。
    *
    * @returns {Promise<number>}
    */
@@ -253,7 +243,7 @@ export class ProjectService {
   }
 
   /**
-   * Update the boss's proactive patrol settings.
+   * 改大哥主动巡检的设置。
    * @param {{ enabled?: boolean, intervalMinutes?: number }} patch
    */
   async setPatrolConfig(patch) {
@@ -264,10 +254,10 @@ export class ProjectService {
   }
 
   /**
-   * Run one proactive patrol and record what the boss found.
+   * 跑一轮主动巡检，把大哥发现的东西记下来。
    *
-   * The board supplies the facts; the boss supplies the judgment. Findings are persisted so
-   * a patrol that ran while the board was closed still shows up when it reopens.
+   * 事实由看板提供，判断由大哥提供。结论会落盘，所以板面关着时跑过的那一轮，重新打开
+   * 还能看见。
    */
   async runPatrol() {
     if (!this.patrol) {
@@ -276,55 +266,33 @@ export class ProjectService {
 
     const snapshot = await this.snapshot();
     const brief = buildPatrolBrief(snapshot);
-    const config = await this.patrol.getConfig();
 
-    // Unique per run, so a repeated patrol never re-delivers the same proposal.
+    // 每轮唯一，所以重复跑一轮不会重复投递同一个提案。
     this.patrolRunKey = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
     const outcome = await this.boss.patrol({ brief });
 
     const report = parsePatrolReport(outcome.text);
-    /** @type {any[]} */
-    const findings = [];
-
-    for (const item of report.items) {
-      const card = snapshot.cards.find((c) => c.name === item.projectName);
-      findings.push({
-        projectId: card?.id ?? null,
-        projectName: item.projectName,
-        severity: item.severity,
-        title: item.summary.length > 60 ? `${item.summary.slice(0, 60)}…` : item.summary,
-        body: item.summary,
-      });
-    }
-
-    if (findings.length === 0) {
-      // Nothing parsed: keep the raw reply as a single finding so the patrol is never silent.
-      findings.push({
-        projectId: null,
-        projectName: null,
-        severity: 'medium',
-        title: report.conclusion || '大哥巡检结论',
-        body: outcome.text || outcome.error || '本轮巡检没有产生结论。',
-      });
-    }
+    const findings = buildPatrolFindings(
+      report,
+      snapshot.cards,
+      outcome.text || outcome.error || '本轮巡检没有产生结论。',
+    );
 
     const created = [];
     for (const finding of findings) {
-      // The board's own patrol loop. The conclusion's origin is written down here, so
-      // the desk can tell the board's output apart from the duty boss's conclusions.
+      // 看板自己的巡检循环。结论的来源在这里写下来，所以收件箱能把看板的产出和值班大哥的
+      // 结论分开。
       created.push(await this.patrol.add({ ...finding, source: 'board' }));
     }
 
-    // The boss proposes; the board dispatches. Whether to propose at all is the boss's own
-    // judgement — there is no switch that turns dispatching on or off. Proposals go through
-    // the same validated path as a manual dispatch, so a project or session the boss named
-    // wrongly is rejected here instead of being delivered.
+    // 大哥提建议，看板负责派工。要不要提建议是大哥自己的判断——没有一个开关能决定派不
+    // 派工。提案走的是跟手动派工同一条被校验过的路径，所以大哥报错了项目或会话，会在这里
+    // 被挡下来，而不是照样投出去。
     const executed = [];
-    for (const [index, proposal] of report.proposals.entries()) {
-      const card = snapshot.cards.find((c) => c.name === proposal.projectName);
+    for (const { index, proposal, card, error } of resolvePatrolProposals(report, snapshot.cards)) {
       if (!card) {
-        executed.push({ proposal, ok: false, error: `找不到项目 ${proposal.projectName}` });
+        executed.push({ proposal, ok: false, error });
         continue;
       }
       try {
@@ -341,9 +309,9 @@ export class ProjectService {
       }
     }
 
-    // The board's own patrol stamp. Deliberately NOT lastRunAt: that one means "the duty
-    // boss handed over", and a board-triggered patrol must never be able to refresh it —
-    // otherwise a dead duty boss still shows as "on duty" for another threshold window.
+    // 看板自己的巡检戳。刻意**不是** lastRunAt：那一个的意思是「值班大哥交班了」，看板
+    // 自己触发的巡检绝不能刷新它——否则大哥明明掉线了，看板上还会再显示一个阈值窗口的
+    // 「值班中」。
     await this.patrol.setConfig({
       lastBoardPatrolAt: Date.now(),
       lastSignature: this.inboxSignature(snapshot),
@@ -361,14 +329,13 @@ export class ProjectService {
   }
 
   /**
-   * One conversation turn with the boss.
+   * 与大哥的一轮对话。
    *
-   * This is the board's front door: the user talks to the boss the way they talk to any
-   * other agent. The turn runs on the boss's own session, so the conversation and the duty
-   * rounds share one memory — which is what makes "I can see what the boss is doing" true.
+   * 这是看板的正门：用户跟大哥说话的方式跟跟别的 agent 说话一样。这一轮跑在大哥自己的会话
+   * 上，所以对话和值班轮次共享同一份记忆——「我能看到大哥在干什么」这句话才是真的。
    *
    * @param {string} text
-   * @param {(event: any) => void} [onEvent] receives the runtime's run events
+   * @param {(event: any) => void} [onEvent] 接收运行时的运行事件
    * @returns {Promise<any>}
    */
   async chat(text, onEvent) {
@@ -381,7 +348,7 @@ export class ProjectService {
   }
 
   /**
-   * Answer a question the boss paused on, and let its turn continue.
+   * 回答大哥停下来问的问题，然后让它把这一轮接着说完。
    *
    * @param {{ requestId: string, answers: any[], sessionId?: string }} input
    * @param {(event: any) => void} [onEvent]
@@ -397,8 +364,7 @@ export class ProjectService {
   }
 
   /**
-   * A cheap signature of the decision-relevant state, used to decide whether a patrol run
-   * would have anything new to look at.
+   * 与决策相关的状态的一个廉价签名，用来判断一轮巡检有没有新东西可看。
    * @param {any} [snapshot]
    */
   inboxSignature(snapshot) {
@@ -408,7 +374,7 @@ export class ProjectService {
   }
 
   /**
-   * Everything the overview needs: KPI, project cards and the attention list.
+   * 总览要的一切：KPI、项目卡、需关注的列表。
    * @returns {Promise<import('./view-model.mjs').Overview>}
    */
   async getOverview() {
@@ -418,96 +384,46 @@ export class ProjectService {
     const findings = this.patrol ? await this.patrol.list() : [];
     const dismissed = await this.persistence.listDismissed();
     const duty = await this.dutyBlock({ config: patrolConfig, findings, dismissed });
-    // The alert log rides along with the duty state: one line on the overview can say
-    // "the boss went quiet at 03:20" without the user having to open the log.
+    // 告警日志跟着值班状态一起走：总览上的一行就能说清楚「大哥在 03:20 不说话了」，不用
+    // 用户去翻日志。
     const alerts = await this.getWatchdogAlerts({ limit: 3 });
     return {
       generatedAt: Date.now(),
       kpi: buildKpi(snapshot.cards, inbox),
-      // The cards carry the duty state: a project says whether the boss watches it, and
-      // whether the boss is on duty at all.
+      // 卡片带着值班状态：一个项目要说清楚大哥看不看它，以及大哥到底在不在岗。
       projects: withDutyCards(snapshot.cards, duty, duty.watching),
-      // Acknowledged items are known already: showing them here would make the count
-      // disagree with the KPI and the inbox badge.
-      attention: inbox.filter((item) => item.severity !== 'low' && !item.acknowledged),
+      // 已确认的条目是已知的事：在这儿显示会让计数跟 KPI 和收件箱角标对不上。
+      // 判定跟 KPI 用的是同一个函数，所以这两个数永远一致。
+      attention: selectAttentionItems(inbox),
       internalProjectCount: snapshot.internalProjectCount,
       dataWarning: snapshot.dataWarning,
-      // Whether the boss is on duty, when it last reported, and whether it has gone quiet.
+      // 大哥在不在岗、上次什么时候报的、有没有不说话了。
       duty: { ...duty, alerts: alerts.alerts },
     };
   }
 
   /**
-   * The decision inbox: runtime items plus whatever the boss's patrol found.
+   * 决策收件箱：运行时原始项，加上大哥巡检发现的东西。
    *
-   * The overview and the inbox page must read from the SAME list, otherwise the badge
-   * count and the page content disagree.
+   * 总览和收件箱页必须读同一份列表，否则角标上的计数和页面内容会互相打架。
    *
    * @param {any} snapshot
    * @returns {Promise<any[]>}
    */
   async collectInbox(snapshot) {
-    const runtimeItems = snapshot.inbox;
-
     const patrolItems = this.patrol
-      ? (await this.patrol.list()).map((finding) => ({
-        id: `patrol:${finding.id}`,
-        kind: 'patrol',
-        severity: finding.severity,
-        projectId: finding.projectId ?? 0,
-        projectName: finding.projectName ?? '全局',
-        sessionId: null,
-        sessionTitle: null,
-        title: finding.title,
-        body: finding.body,
-        createdAt: finding.createdAt,
-        ageMinutes: ageInMinutes(finding.createdAt),
-        acknowledged: finding.acknowledged,
-        // Where the conclusion came from: the duty boss's own round, or the board's
-        // patrol loop. A conclusion written before the field existed reads as 'board'.
-        source: normalizeConclusionSource(finding.source),
-        // 'user' = 大老板点过「标记已知」；'boss' = 大哥撤回了自己的结论（已不适用）。
-        handledBy: finding.acknowledgedBy ?? null,
-        handledReason: finding.note ?? '',
-      }))
+      ? buildPatrolInboxItems(await this.patrol.list())
       : [];
 
-    // A pending question carries its answerable shape plus whatever the boss already decided,
-    // so the page can offer "answer with the boss's choice" instead of a bare toast.
+    // 一张待答的问卷带着它可回答的形状，外加大哥已经做过的决定，所以页面能给出「按大哥的
+    // 选择回答」，而不是只弹一个 toast。
     const answered = this.patrol ? await this.patrol.listAnswered() : [];
-    const answeredByRequest = new Map(answered.map((entry) => [entry.requestId, entry]));
 
-    const items = [...patrolItems, ...runtimeItems].map((item) => {
-      if (item.kind !== 'questionnaire') return item;
-      const shape = questionnaireShape(item.requestJson ?? '');
-      const decision = answeredByRequest.get(item.requestId);
-      return {
-        ...item,
-        requestId: item.requestId,
-        stepIds: shape.stepIds,
-        options: shape.options,
-        recommendation: decision
-          ? {
-            optionIds: decision.optionIds ?? [],
-            answer: decision.answer ?? '',
-            rationale: decision.rationale ?? '',
-            decidedAt: decision.answeredAt,
-          }
-          : null,
-      };
-    });
-
-    items.sort((a, b) => {
-      const order = { high: 0, medium: 1, low: 2 };
-      const bySeverity = order[a.severity] - order[b.severity];
-      if (bySeverity !== 0) return bySeverity;
-      return b.createdAt - a.createdAt;
-    });
-    return items;
+    return assembleInbox(snapshot.inbox, patrolItems, answered);
   }
 
   /**
-   * The decision inbox.
+   * 决策收件箱。
    * @returns {Promise<{ items: any[] }>}
    */
   async getInbox() {
@@ -523,7 +439,7 @@ export class ProjectService {
   }
 
   /**
-   * Full detail of one project: org tree, goals, questions, tasks and plan.
+   * 一个项目的完整明细：组织树、Goal、问卷、任务与计划。
    * @param {number} id
    * @returns {Promise<any | null>}
    */
@@ -551,10 +467,10 @@ export class ProjectService {
   }
 
   /**
-   * The capability library: what the boss knows and can schedule.
+   * 能力库：大哥知道什么、能安排什么。
    *
-   * The scan is refreshed periodically — a snapshot taken at startup would never show a skill
-   * installed later, and the boss's knowledge is exactly what changes when you install one.
+   * 扫描会定期刷新——开机时拍的那张快照永远不会显示后来装上的技能，而大哥的知识恰恰就是
+   * 装一个技能会变的东西。
    *
    * @returns {Promise<{ groups: any[], unmapped: any[], total: number, failures: number, scannedAt: number }>}
    */
@@ -572,13 +488,11 @@ export class ProjectService {
   }
 
   /**
-   * The reusable-skill registry: the skills the boss has had packaged, and how they are
-   * doing.
+   * 可复用技能登记表：大哥打包过的那些技能，以及它们现在怎么样。
    *
-   * This is a read. Validation (does the skill file still exist, does it still carry the
-   * name we registered) is a write, so it runs from the CLI on the boss's schedule, not
-   * from a page load — a GET that mutates the registry would make "the board was open" a
-   * cause of registry changes.
+   * 这是一个读。校验（技能文件还在吗、还带着登记时的名字吗）是一次写，所以它跑在大哥
+   * 自己的计划任务上（CLI），而不是页面加载时——一个会改东西的 GET 会让「板面开着」变成
+   * 登记表变动的原因。
    *
    * @returns {Promise<{
    *   entries: any[], stats: any, domains: string[],
@@ -606,7 +520,7 @@ export class ProjectService {
   }
 
   /**
-   * Re-scan the skill libraries when the snapshot is older than the refresh window.
+   * 快照比刷新窗口还旧的时候，重扫技能库。
    */
   async #refreshSkillsIfStale() {
     if (!this.refreshSkills) return;
@@ -617,7 +531,7 @@ export class ProjectService {
   }
 
   /**
-   * Acknowledge an inbox item so it stops counting as a pending decision.
+   * 确认一个收件箱条目，让它不再算作待决策。
    * @param {string} itemId
    * @returns {Promise<{ ok: boolean }>}
    */
@@ -639,10 +553,9 @@ export class ProjectService {
   }
 
   /**
-   * Send an instruction to a project.
+   * 给一个项目下指令。
    *
-   * The idempotency key makes a repeated submission a no-op: the same key never reaches the
-   * target session twice.
+   * 幂等键让重复提交变成空操作：同一个键不会两次到达目标会话。
    *
    * @param {{ projectId:number, sessionId:string|null, instruction:string, idempotencyKey:string }} input
    * @returns {Promise<any>}
@@ -650,42 +563,22 @@ export class ProjectService {
   async dispatch(input) {
     const { record, duplicate } = await this.prepareDispatch(input);
     if (duplicate) {
-      return {
-        dispatchId: record.id,
-        status: record.status,
-        bossSessionId: record.bossSessionId,
-        text: record.text,
-        error: record.error,
-        delivered: record.status === 'done',
-        duplicate: true,
-      };
+      return dispatchResult(record, { duplicate: true });
     }
     return this.runDispatch(record);
   }
 
   /**
-   * Validate a dispatch and persist it as `queued`, without contacting the boss yet.
+   * 校验一次派工，把它记成 `queued`，但还不联系大哥。
    *
-   * Splitting preparation from execution lets the page get an id immediately and watch the
-   * outcome over SSE, instead of holding an HTTP request open for a whole agent turn.
+   * 把准备和执行拆开，页面才能立刻拿到 id，然后用 SSE 盯着结果，而不是让一个 HTTP 请求挂
+   * 住一整个 agent 轮次。
    *
    * @param {{ projectId:number, sessionId:string|null, instruction:string, idempotencyKey:string }} input
    * @returns {Promise<{ record: any, duplicate: boolean }>}
    */
   async prepareDispatch(input) {
-    const projectId = Number(input?.projectId);
-    const instruction = typeof input?.instruction === 'string' ? input.instruction.trim() : '';
-    const idempotencyKey = typeof input?.idempotencyKey === 'string' ? input.idempotencyKey.trim() : '';
-
-    if (!Number.isFinite(projectId)) {
-      throw new DomainError('invalid_project_id', '缺少有效的项目 ID');
-    }
-    if (!instruction) {
-      throw new DomainError('empty_instruction', '下达的指令不能为空');
-    }
-    if (!idempotencyKey) {
-      throw new DomainError('missing_idempotency_key', '缺少幂等键');
-    }
+    const { projectId, instruction, idempotencyKey } = validateDispatchRequest(input);
 
     const existing = await this.persistence.findDispatchByKey(idempotencyKey);
     if (existing) return { record: existing, duplicate: true };
@@ -704,30 +597,19 @@ export class ProjectService {
       throw new DomainError('unknown_session', '目标会话不存在或不属于该项目', 404);
     }
 
-    const now = Date.now();
-    const record = {
-      id: `dsp_${now.toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
-      idempotencyKey,
-      // Which path wrote this record. The duty path writes its own records into the
-      // same ledger, so the two can be told apart.
-      source: 'board',
+    const record = buildDispatchRecord({
       projectId,
       projectName: card.name,
       targetSessionId,
       instruction,
-      status: 'queued',
-      bossSessionId: null,
-      text: '',
-      error: null,
-      createdAt: now,
-      updatedAt: now,
-    };
+      idempotencyKey,
+    });
     await this.persistence.saveDispatch(record);
     return { record, duplicate: false };
   }
 
   /**
-   * Hand a prepared dispatch to the boss and record the outcome.
+   * 把一条准备好的派工交到大哥手上，并记下结果。
    * @param {any} record
    * @returns {Promise<any>}
    */
@@ -744,28 +626,13 @@ export class ProjectService {
 
     let outcome;
     try {
-      outcome = await this.boss.dispatch({
-        projectId: record.projectId,
-        projectName: card?.name ?? record.projectName,
-        projectPath: card?.path ?? '',
-        sessionId: targetSession?.id ?? null,
-        sessionTitle: targetSession?.title ?? null,
-        instruction: record.instruction,
-      });
+      outcome = await this.boss.dispatch(buildDispatchPayload(record, card, targetSession));
     } catch (error) {
       record.status = 'error';
       record.error = error?.message ?? String(error);
       record.updatedAt = Date.now();
       await this.persistence.saveDispatch(record);
-      return {
-        dispatchId: record.id,
-        status: 'error',
-        bossSessionId: null,
-        text: '',
-        error: record.error,
-        delivered: false,
-        duplicate: false,
-      };
+      return dispatchResult(record);
     }
 
     record.status = outcome?.delivered ? 'done' : 'error';
@@ -775,19 +642,11 @@ export class ProjectService {
     record.updatedAt = Date.now();
     await this.persistence.saveDispatch(record);
 
-    return {
-      dispatchId: record.id,
-      status: record.status,
-      bossSessionId: record.bossSessionId,
-      text: record.text,
-      error: record.error,
-      delivered: Boolean(outcome?.delivered),
-      duplicate: false,
-    };
+    return dispatchResult(record);
   }
 
   /**
-   * A single dispatch record.
+   * 一条派工记录。
    * @param {string} id
    */
   async getDispatch(id) {
@@ -796,12 +655,11 @@ export class ProjectService {
   }
 
   /**
-   * The dispatch ledger: both paths' deliveries, newest first.
+   * 派工账：两条投递路径的记录，最新的在前。
    *
-   * The board used to see only its own deliveries — the duty boss delivers with the
-   * runtime's `session send` and wrote nothing down, so the two bosses could tell
-   * different stories without the board noticing. Both paths now write into the same
-   * ledger, each record tagged with its origin.
+   * 过去看板只看得到自己的投递——值班大哥用运行时的 `session send` 投递，什么都不写，于是
+   * 两个大哥可以各讲各的，而看板毫不知情。现在两条路径写进同一本账，每条记录都标着自己的
+   * 来源。
    *
    * @returns {Promise<any[]>}
    */
@@ -831,7 +689,7 @@ export class ProjectService {
   }
 
   /**
-   * The runtime revision the current snapshot was built from.
+   * 当前快照是基于哪个运行时版本建的。
    * @returns {string}
    */
   currentRevision() {
@@ -839,14 +697,14 @@ export class ProjectService {
   }
 
   /**
-   * Aggregate the runtime state, reusing the cached result while the runtime revision holds.
+   * 聚合运行时状态，运行时版本没变就复用缓存。
    */
   async snapshot() {
     const revision = this.store.revision();
     if (this.cache && this.cache.revision === revision) return this.cache;
 
     const projects = this.store.listProjects();
-    const visibleProjects = projects.filter((p) => !isInternalWorkspace(p.workspaceDir));
+    const { visible: visibleProjects, internalCount } = splitVisibleProjects(projects);
     const visibleIds = new Set(visibleProjects.map((p) => p.id));
     const allSessions = this.store.listSessions();
     const sessions = allSessions.filter((s) => visibleIds.has(s.projectId));
@@ -864,8 +722,8 @@ export class ProjectService {
     }));
 
     const acks = new Set(await this.persistence.listAcks());
-    // Items the boss ruled out, with the reason. They leave the attention list but the
-    // reason travels with them, so nothing ever leaves the desk silently.
+    // 大哥排除掉的条目，带上理由。它们离开待办列表，但理由跟着走，所以没有什么会悄悄地
+    // 离开桌面。
     const dismissed = new Map(
       (await this.persistence.listDismissed()).map((entry) => [entry.id, entry.reason ?? '']),
     );
@@ -886,14 +744,9 @@ export class ProjectService {
       plans,
       cards,
       inbox,
-      internalProjectCount: projects.length - visibleProjects.length,
+      internalProjectCount: internalCount,
       dataWarning: this.store.lastError(),
     };
     return this.cache;
   }
-}
-
-function ageInMinutes(timestamp) {
-  if (!timestamp) return 0;
-  return Math.max(0, Math.round((Date.now() - timestamp) / 60000));
 }

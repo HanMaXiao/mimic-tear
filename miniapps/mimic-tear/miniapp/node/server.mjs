@@ -1,37 +1,25 @@
-import { createReadStream } from 'node:fs';
-import { readFile, stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
-import { extname, join, normalize, resolve, sep } from 'node:path';
+import { join } from 'node:path';
 
 import { boardPatrolAction, isPatrolDue, stampBoardPatrol } from './patrol-scheduler.mjs';
 import { dutyAnnouncementNeeded } from './duty-announce.mjs';
 import { chatHistoryChanged } from './chat-history.mjs';
+import { ROUTES, matchRoute } from './api-routes.mjs';
+import { withSecurityHeaders } from './security.mjs';
 
 /**
  * The Mini App's HTTP surface: a small REST API plus one SSE stream, and the static Client.
  *
  * The Node entry owns the assigned loopback port for as long as the board is available, so
  * `dispose()` has to close the listener, every SSE connection and the poll timer.
+ *
+ * The routes themselves live in `api-routes.mjs`; this file only assembles them.
  */
 
-const POLL_INTERVAL_MS = 3000;
+export const POLL_INTERVAL_MS = 3000;
 
 /** How often the server checks whether the boss's patrol is due. */
 const PATROL_CHECK_INTERVAL_MS = 30_000;
-
-const CONTENT_TYPES = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.mjs': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.webp': 'image/webp',
-  '.woff2': 'font/woff2',
-};
 
 /**
  * Build the request handler around a domain service.
@@ -57,10 +45,10 @@ export function createApp(deps) {
 
   const sendJson = (response, status, payload) => {
     const body = JSON.stringify(payload);
-    response.writeHead(status, {
+    response.writeHead(status, withSecurityHeaders({
       'content-type': 'application/json; charset=utf-8',
       'cache-control': 'no-store',
-    });
+    }));
     response.end(body);
   };
 
@@ -102,299 +90,49 @@ export function createApp(deps) {
     request.on('error', rejectBody);
   });
 
+  /**
+   * Hand the page's decision back to the waiting tool call.
+   *
+   * @param {string} requestId
+   * @param {'allowOnce'|'deny'} decision
+   * @returns {boolean} whether anyone was waiting for this request
+   */
+  const resolvePermission = (requestId, decision) => {
+    const pending = pendingPermissions.get(requestId);
+    if (!pending) return false;
+    pending.resolve(decision);
+    pendingPermissions.delete(requestId);
+    return true;
+  };
+
   const handler = async (request, response) => {
     const url = new URL(request.url ?? '/', 'http://miniapp.local');
     const { pathname } = url;
     const method = request.method ?? 'GET';
 
     try {
-      // ---- static client -------------------------------------------------
-      if (method === 'GET' && (pathname === '/' || pathname === '/index.html')) {
-        const html = await readFile(join(clientDir, 'index.html'));
-        response.writeHead(200, { 'content-type': CONTENT_TYPES['.html'], 'cache-control': 'no-store' });
-        response.end(html);
+      const matched = matchRoute(method, pathname);
+      if (!matched) {
+        sendJson(response, 404, { error: 'not_found' });
         return;
       }
 
-      if (method === 'GET' && pathname.startsWith('/assets/')) {
-        await serveAsset(response, join(clientDir, 'assets'), pathname.slice('/assets/'.length));
-        return;
-      }
-
-      // ---- api ------------------------------------------------------------
-      if (pathname === '/api/stream' && method === 'GET') {
-        response.writeHead(200, {
-          'content-type': 'text/event-stream; charset=utf-8',
-          'cache-control': 'no-store',
-          connection: 'keep-alive',
-        });
-        streams.add(response);
-        response.write(': connected\n\n');
-
-        const overview = await service.getOverview();
-        response.write(`event: snapshot\ndata: ${JSON.stringify(overview)}\n\n`);
-
-        request.on('close', () => streams.delete(response));
-        return;
-      }
-
-      if (pathname === '/api/overview' && method === 'GET') {
-        sendJson(response, 200, await service.getOverview());
-        return;
-      }
-
-      if (pathname === '/api/inbox' && method === 'GET') {
-        sendJson(response, 200, await service.getInbox());
-        return;
-      }
-
-      if (pathname === '/api/projects' && method === 'GET') {
-        sendJson(response, 200, await service.getProjects());
-        return;
-      }
-
-      if (pathname === '/api/skills' && method === 'GET') {
-        sendJson(response, 200, await service.getSkills());
-        return;
-      }
-
-      // The reusable-skill registry: the skills the boss packages and dispatches from.
-      // Separate from /api/skills, which is a scan of what is installed on the machine.
-      if (pathname === '/api/skill-library' && method === 'GET') {
-        sendJson(response, 200, await service.getSkillLibrary());
-        return;
-      }
-
-      if (pathname.startsWith('/api/projects/') && method === 'GET') {
-        const id = Number(pathname.slice('/api/projects/'.length));
-        if (!Number.isFinite(id)) {
-          sendJson(response, 400, { error: 'invalid_project_id' });
-          return;
-        }
-        const detail = await service.getProject(id);
-        if (!detail) {
-          sendJson(response, 404, { error: 'not_found' });
-          return;
-        }
-        sendJson(response, 200, detail);
-        return;
-      }
-
-      if (pathname.startsWith('/api/dispatch/') && method === 'GET') {
-        const id = pathname.slice('/api/dispatch/'.length);
-        const record = await service.getDispatch(id);
-        if (!record) {
-          sendJson(response, 404, { error: 'not_found' });
-          return;
-        }
-        sendJson(response, 200, record);
-        return;
-      }
-
-      if (pathname === '/api/dispatch' && method === 'POST') {
-        const body = await readBody(request);
-        const { record, duplicate } = await service.prepareDispatch(body);
-
-        if (duplicate) {
-          sendJson(response, 200, {
-            dispatchId: record.id,
-            status: record.status,
-            duplicate: true,
-            delivered: record.status === 'done',
-            text: record.text,
-            error: record.error,
-          });
-          return;
-        }
-
-        sendJson(response, 202, { dispatchId: record.id, status: 'queued', duplicate: false });
-
-        // The agent turn runs in the background; the page watches it over SSE.
-        void service.runDispatch(record).then((outcome) => {
-          broadcast('dispatch', {
-            dispatchId: outcome.dispatchId,
-            status: outcome.status,
-            delivered: outcome.delivered,
-            text: outcome.text,
-            error: outcome.error,
-          });
-        }).catch((error) => {
-          broadcast('dispatch', {
-            dispatchId: record.id,
-            status: 'error',
-            delivered: false,
-            text: '',
-            error: error?.message ?? String(error),
-          });
-        });
-        return;
-      }
-
-      if (pathname === '/api/inbox/ack' && method === 'POST') {
-        const body = await readBody(request);
-        sendJson(response, 200, await service.ack(body?.id));
-        return;
-      }
-
-      if (pathname === '/api/patrol' && method === 'GET') {
-        sendJson(response, 200, {
-          config: await service.getPatrolConfig(),
-          findings: service.patrol ? await service.patrol.list() : [],
-        });
-        return;
-      }
-
-      if (pathname === '/api/patrol/config' && method === 'POST') {
-        const body = await readBody(request);
-        const config = await service.setPatrolConfig({
-          enabled: body?.enabled,
-          intervalMinutes: body?.intervalMinutes,
-        });
-        sendJson(response, 200, config);
-        return;
-      }
-
-      if (pathname === '/api/duty/intent' && method === 'POST') {
-        // Tell the boss whether it is on duty or resting. The decision is recorded with
-        // who asked and why, and the board is refreshed right away — the duty state is
-        // not part of the runtime revision, so nothing else would move the page.
-        const body = await readBody(request);
-        const result = await service.setDutyIntent({
-          mode: body?.mode,
-          requestedBy: body?.requestedBy,
-          note: body?.note,
-        });
-        sendJson(response, 200, result);
-        // The board refreshes from the SSE stream. That refresh is best effort: the intent
-        // is already written, so a failure here must not turn a completed write into an
-        // error the caller sees.
-        try {
-          broadcast('update', await service.getOverview());
-        } catch (error) {
-          logger.warn('mimic-tear.duty.refresh.failed', { message: error?.message });
-        }
-        return;
-      }
-
-      if (pathname === '/api/patrol/run' && method === 'POST') {
-        // A patrol turn can take minutes, so it must not hold the HTTP request open.
-        sendJson(response, 202, { status: 'started' });
-        void service.runPatrol()
-          .then((outcome) => {
-            broadcast('patrol', outcome);
-            return service.getOverview();
-          })
-          .then((overview) => broadcast('update', overview))
-          .catch((error) => {
-            broadcast('patrol', { error: error?.message ?? String(error), findings: [] });
-          });
-        return;
-      }
-
-      if (pathname === '/api/watchdog/alerts' && method === 'GET') {
-        // The alert log. It is the watchdog's primary channel: every alert is written down
-        // whether or not the notification landed, so the board can show what happened while
-        // it was closed. Only a new field and a new read route — the client is untouched.
-        const limit = Number(url.searchParams.get('limit')) || 20;
-        sendJson(response, 200, await service.getWatchdogAlerts({ limit }));
-        return;
-      }
-
-      if (pathname === '/api/chat/duty' && method === 'GET') {
-        // The duty rounds, grouped. The Host chat side panel shows one session, so it
-        // never shows the rounds — and the rounds are the user seeing the boss work.
-        const rounds = await service.getDutyRounds();
-        sendJson(response, 200, { rounds });
-        return;
-      }
-
-      if (pathname === '/api/chat/history' && method === 'GET') {
-        // The transcript lives in the runtime, not in the Mini App. Reading it back is what
-        // lets the page show what was said in the Host chat side panel — and what makes the
-        // conversation survive a reload.
-        const messages = await service.getChatHistory();
-        sendJson(response, 200, { messages });
-        return;
-      }
-
-      if (pathname === '/api/chat/session' && method === 'GET') {
-        // The Host side panel needs the boss's session id, and the page must be able to ask for
-        // it before the first message is ever sent.
-        const stored = persistence ? await persistence.getBossSession() : null;
-        sendJson(response, 200, { bossSessionId: stored?.sessionId ?? null, agent: stored?.agent ?? null });
-        return;
-      }
-
-      if (pathname === '/api/chat' && method === 'POST') {
-        const body = await readBody(request);
-        const text = String(body?.text ?? '').trim();
-        if (!text) {
-          sendJson(response, 400, { error: 'empty_message' });
-          return;
-        }
-        // The boss's session id goes out with the acknowledgement: the page needs it to offer
-        // "open this conversation in the Host chat side panel" (the Host renders agent turns
-        // far better than a Mini App can re-implement them).
-        const stored = persistence ? await persistence.getBossSession() : null;
-        // A conversation turn can take minutes, so it must not hold the HTTP request open.
-        sendJson(response, 202, { status: 'started', bossSessionId: stored?.sessionId ?? null });
-        void service.chat(text, broadcastChatEvent)
-          .then((outcome) => {
-            broadcast('chat.done', {
-              status: outcome.status,
-              text: outcome.text ?? '',
-              error: outcome.error ?? null,
-              request: outcome.request ?? null,
-            });
-            return service.getOverview();
-          })
-          .then((overview) => broadcast('update', overview))
-          .catch((error) => {
-            broadcast('chat.done', { status: 'error', text: '', error: error?.message ?? String(error) });
-          });
-        return;
-      }
-
-      if (pathname === '/api/chat/answer' && method === 'POST') {
-        const body = await readBody(request);
-        const requestId = String(body?.requestId ?? '');
-        if (!requestId) {
-          sendJson(response, 400, { error: 'missing_request_id' });
-          return;
-        }
-        sendJson(response, 202, { status: 'started' });
-        void service.answerChatQuestion(
-          { requestId, answers: body?.answers ?? [] },
-          broadcastChatEvent,
-        )
-          .then((outcome) => {
-            broadcast('chat.done', {
-              status: outcome.status,
-              text: outcome.text ?? '',
-              error: outcome.error ?? null,
-              request: outcome.request ?? null,
-            });
-          })
-          .catch((error) => {
-            broadcast('chat.done', { status: 'error', text: '', error: error?.message ?? String(error) });
-          });
-        return;
-      }
-
-      if (pathname.startsWith('/api/permissions/') && method === 'POST') {
-        const requestId = pathname.slice('/api/permissions/'.length);
-        const body = await readBody(request);
-        const decision = body?.decision === 'allowOnce' ? 'allowOnce' : 'deny';
-        const pending = pendingPermissions.get(requestId);
-        if (pending) {
-          pending.resolve(decision);
-          pendingPermissions.delete(requestId);
-        }
-        sendJson(response, 200, { ok: true });
-        return;
-      }
-
-      sendJson(response, 404, { error: 'not_found' });
+      await matched.route.handler({
+        service,
+        persistence,
+        logger,
+        clientDir,
+        url,
+        request,
+        response,
+        params: matched.params,
+        sendJson: (status, payload) => sendJson(response, status, payload),
+        broadcast,
+        broadcastChatEvent,
+        readBody,
+        streams,
+        resolvePermission,
+      });
     } catch (error) {
       const status = Number(error?.status) || 500;
       const code = error?.code || 'internal_error';
@@ -444,21 +182,21 @@ export function createApp(deps) {
    * @param {any} event
    * @returns {Promise<'allowOnce'|'deny'>}
    */
-  const requestPermission = (event) => new Promise((resolvePermission) => {
+  const requestPermission = (event) => new Promise((settle) => {
     const requestId = event?.requestId ?? `perm_${Date.now()}`;
 
     // Nobody answers: deny, so a waiting run is never left hanging. The timer is unref'd
     // and cleared on resolve so it can never hold the process open.
     const timer = setTimeout(() => {
       pendingPermissions.delete(requestId);
-      resolvePermission('deny');
+      settle('deny');
     }, 120_000);
     timer.unref?.();
 
     pendingPermissions.set(requestId, {
       resolve: (decision) => {
         clearTimeout(timer);
-        resolvePermission(decision);
+        settle(decision);
       },
     });
 
@@ -482,31 +220,98 @@ export function createApp(deps) {
 }
 
 /**
- * Serve a static asset from the client directory, refusing anything outside it.
+ * 板面的运行时轮询。
+ *
+ * 每 3 秒问一次运行时：状态变了就把新的快照推给页面。对话是单独一路——
+ * 宿主侧栏里说的话不会推动运行时版本号（没有会话、目标或任务变化），
+ * 所以还要看会话消息数有没有变。
+ *
+ * 消息数是一次 COUNT，在几百 MB 的运行时库上不便宜（本机实测 0.2ms 热缓存、
+ * 10ms 冷缓存）。所以先问一句更便宜的：**运行时库本身有没有被写过**
+ * （`PRAGMA data_version`，读一下就完了，不扫表，实测 0.01ms）。
+ * 没人写过，对话就不可能多出一句，那次 COUNT 就省掉了；
+ * 有人写过才去数——所以侧栏里说的话照样在下一个轮询周期内浮出来。
+ *
+ * @param {{
+ *   service: any,
+ *   store?: { dataVersion?: () => number | null } | null,
+ *   broadcast: (event: string, data: unknown) => void,
+ *   logger?: any,
+ *   intervalMs?: number,
+ * }} deps
  */
-async function serveAsset(response, clientDir, relativePath) {
-  const root = resolve(clientDir);
-  const target = resolve(root, normalize(relativePath).replace(/^([/\\])+/, ''));
-  if (target !== root && !target.startsWith(root + sep)) {
-    response.writeHead(403, { 'content-type': 'application/json; charset=utf-8' });
-    response.end(JSON.stringify({ error: 'forbidden' }));
-    return;
-  }
+export function createRuntimePoller(deps) {
+  const {
+    service,
+    store = null,
+    broadcast,
+    logger = { info() {}, warn() {}, error() {}, debug() {} },
+    intervalMs = POLL_INTERVAL_MS,
+  } = deps;
 
-  try {
-    const stats = await stat(target);
-    if (!stats.isFile()) throw new Error('not a file');
-  } catch {
-    response.writeHead(404, { 'content-type': 'application/json; charset=utf-8' });
-    response.end(JSON.stringify({ error: 'not_found' }));
-    return;
-  }
+  let lastRevision = service.currentRevision();
+  let lastChatMessageCount = 0;
+  /** 上一次看到的运行时数据版本号；`null` 表示还没对过基准。 */
+  let lastDataVersion = null;
 
-  response.writeHead(200, {
-    'content-type': CONTENT_TYPES[extname(target).toLowerCase()] ?? 'application/octet-stream',
-    'cache-control': 'no-store',
-  });
-  createReadStream(target).pipe(response);
+  /**
+   * 运行时库自上次检查以来有没有被别的连接写过。
+   *
+   * @returns {boolean} true 表示「有可能变了，值得去数一次」
+   */
+  const runtimeWritten = () => {
+    const version = typeof store?.dataVersion === 'function' ? store.dataVersion() : null;
+    // 拿不到信号就保守：照旧每次都数，绝不为了省事丢掉实时性。
+    if (version === null || version === undefined) return true;
+    // 第一次检查只对齐基准，之后才有「变没变」可比。
+    if (lastDataVersion === null) {
+      lastDataVersion = version;
+      return true;
+    }
+    if (version === lastDataVersion) return false;
+    lastDataVersion = version;
+    return true;
+  };
+
+  const tick = async () => {
+    try {
+      const revision = service.currentRevision();
+      if (revision === lastRevision) {
+        // The revision is quiet, but the conversation may not be.
+        if (!runtimeWritten()) return;
+        const chatCount = await service.getChatMessageCount();
+        if (chatHistoryChanged(chatCount, lastChatMessageCount).changed) {
+          lastChatMessageCount = chatCount;
+          broadcast('chat.history', { messages: await service.getChatHistory() });
+        }
+        return;
+      }
+      lastRevision = revision;
+      const overview = await service.getOverview();
+      broadcast('update', overview);
+    } catch (error) {
+      logger.warn('mimic-tear.poll.failed', { message: error?.message });
+    }
+  };
+
+  /** @type {NodeJS.Timeout | null} */
+  let timer = null;
+
+  return {
+    tick,
+    start() {
+      if (timer) return;
+      timer = setInterval(() => {
+        void tick();
+      }, intervalMs);
+      timer.unref?.();
+    },
+    stop() {
+      if (!timer) return;
+      clearInterval(timer);
+      timer = null;
+    },
+  };
 }
 
 /**
@@ -590,30 +395,13 @@ export async function start(context) {
   // The conversation is watched separately: a message said in the Host chat side panel does
   // not move the runtime revision (no session, goal or task changed), so the revision alone
   // would never notice it. The message count is the cheap detector for "something was said".
-  let lastRevision = service.currentRevision();
-  let lastChatMessageCount = 0;
-  const timer = setInterval(() => {
-    void (async () => {
-      try {
-        const revision = service.currentRevision();
-        if (revision === lastRevision) {
-          // The revision is quiet, but the conversation may not be.
-          const chatCount = await service.getChatMessageCount();
-          if (chatHistoryChanged(chatCount, lastChatMessageCount).changed) {
-            lastChatMessageCount = chatCount;
-            app.broadcast('chat.history', { messages: await service.getChatHistory() });
-          }
-          return;
-        }
-        lastRevision = revision;
-        const overview = await service.getOverview();
-        app.broadcast('update', overview);
-      } catch (error) {
-        context.logger.warn('mimic-tear.poll.failed', { message: error?.message });
-      }
-    })();
-  }, POLL_INTERVAL_MS);
-  timer.unref?.();
+  const poller = createRuntimePoller({
+    service,
+    store,
+    broadcast: app.broadcast,
+    logger: context.logger,
+  });
+  poller.start();
 
   // The boss's proactive patrol. It only runs when the board is open, and only when the
   // decision-relevant state actually changed since the last run — a patrol that has nothing
@@ -629,7 +417,9 @@ export async function start(context) {
         const config = await service.getPatrolConfig();
         if (dutyAnnouncementNeeded(config, lastDutyRunAt).changed) {
           lastDutyRunAt = config.lastRunAt;
-          broadcast('duty', { rounds: await service.getDutyRounds() });
+          // 走 app.broadcast：这个函数里没有别的 broadcast 可用，
+          // 之前直接写 broadcast(...) 会被下面那个 catch 吞掉，交班汇报从来没到过页面。
+          app.broadcast('duty', { rounds: await service.getDutyRounds() });
         }
         // Cheap early-outs before the (expensive) snapshot.
         if (!config.enabled) return;
@@ -647,7 +437,7 @@ export async function start(context) {
         }
 
         const outcome = await service.runPatrol();
-        broadcast('patrol', outcome);
+        app.broadcast('patrol', outcome);
         const overview = await service.getOverview();
         app.broadcast('update', overview);
       } catch (error) {
@@ -687,7 +477,7 @@ export async function start(context) {
     if (disposed) return;
     disposed = true;
     context.signal.removeEventListener('abort', onAbort);
-    clearInterval(timer);
+    poller.stop();
     clearInterval(patrolTimer);
     for (const stream of app.streams) {
       try {

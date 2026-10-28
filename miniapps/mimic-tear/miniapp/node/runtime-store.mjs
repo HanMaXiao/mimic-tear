@@ -399,6 +399,27 @@ export class RuntimeStore {
   }
 
   /**
+   * 这个库的「数据版本号」：别的连接改过这个库，它就会变。
+   *
+   * SQLite 给的廉价变更信号——读一下就完了，不扫表。本机运行时库已经几百 MB，
+   * 每 3 秒去 COUNT 一遍会话消息数太贵，先用这个挡一道：没人写过，对话就不可能变。
+   *
+   * @returns {number|null} 拿不到就是 `null`——调用方要按「不知道」处理，
+   *   宁可多查一次也不能漏掉一条消息
+   */
+  dataVersion() {
+    if (!this.#db) return null;
+    try {
+      const row = this.#db.prepare('PRAGMA data_version').get();
+      const value = Number(row?.data_version);
+      return Number.isFinite(value) ? value : null;
+    } catch (error) {
+      this.#error = `读取运行时数据版本失败：${error?.message ?? String(error)}`;
+      return null;
+    }
+  }
+
+  /**
    * Run a read query, mapping rows and swallowing failures into `lastError()`.
    * @param {string} sql
    * @param {unknown[]} params
