@@ -192,7 +192,9 @@ VBS 里 `WScript.Arguments(0)` 拿到的是**去掉引号**的路径。重新拼
 
 ## 5. 验收
 
-### 5.1 单测（386 项全绿）
+### 5.1 单测（411 项全绿）
+
+> **2026-10-28 补记**：全量条数由 386 订正为 **411**（`node --test` 的 TAP 输出：`tests 411 / pass 411 / fail 0`，2026-10-28 复测）。**下面这张分文件表逐行复测过，全部准确，无需改动**——`watchdog-schedule` 22 / `watchdog-rearm` 14 / `watchdog-launcher-script` 6 / `watchdog-schedule-integration` 6 / `watchdog-hidden-launch` 12 / `host-liveness` 9 / `watchdog-wake` 9，各自 `node --test tests/<file>` 的 TAP `tests` 行与表里的数字一一对得上。386 是旧的全量数字，已过期。
 
 ```
 tests/watchdog-schedule.test.mjs            22 项  纯函数：四种状态 + 边界 + 「调度与判定分离」
