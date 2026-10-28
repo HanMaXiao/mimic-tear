@@ -28,7 +28,7 @@
  */
 
 import { execFile } from 'node:child_process';
-import { chmod, mkdir, readFile, writeFile, mkdtemp, rm } from 'node:fs/promises';
+import { chmod, mkdir, readFile, realpath, stat, symlink, writeFile, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -113,6 +113,24 @@ function inScope(file, scope) {
 }
 
 /**
+ * 判断两个路径是不是同一个目录。
+ * 必须按「同一个文件」比：GitHub 的 Windows runner 上 TEMP 是 8.3 短名（C:\Users\RUNNER~1\...），
+ * 而 git 报出来的是长名（C:/Users/runneradmin/...），按字符串比会把当前 worktree
+ * 误认成「另一个 worktree」，于是每一次提交都被误拦。
+ * 先比文件系统身份（dev + ino），再退回比真实路径——前者连短名、junction、大小写都一并解决。
+ * @param {string} a 路径一
+ * @param {string} b 路径二
+ * @returns {Promise<boolean>} 是否同一个目录
+ */
+async function samePath(a, b) {
+  const [sa, sb] = await Promise.all([stat(a).catch(() => null), stat(b).catch(() => null)]);
+  if (sa && sb && sa.dev === sb.dev && sa.ino === sb.ino) return true;
+  const [ra, rb] = await Promise.all([realpath(a).catch(() => a), realpath(b).catch(() => b)]);
+  const norm = (p) => (process.platform === 'win32' ? p.toLowerCase() : p);
+  return norm(ra) === norm(rb);
+}
+
+/**
  * 列出仓库里的所有 worktree（不含当前工作区）。
  * @param {string} cwd 当前工作目录
  * @returns {Promise<string[]>} 其它 worktree 的绝对路径
@@ -125,8 +143,12 @@ async function listOtherWorktrees(cwd) {
     if (!line.startsWith('worktree ')) continue;
     paths.push(line.slice('worktree '.length).trim());
   }
-  const current = resolve(cwd);
-  return paths.filter((p) => resolve(p) !== current);
+  const others = [];
+  for (const path of paths) {
+    if (await samePath(path, cwd)) continue;
+    others.push(path);
+  }
+  return others;
 }
 
 /**
@@ -314,6 +336,19 @@ async function selfTest() {
     // 场景四：暂存区为空 → 放行。
     await git(['reset', '-q'], repo);
     await run('空暂存区放行', 0, () => guardCommit(repo));
+
+    // 场景五：同一个目录的另一种写法不能被当成「另一个 worktree」。
+    // 这条是真实踩过的坑：GitHub 的 Windows runner 上 TEMP 是 8.3 短名，
+    // git 报的是长名，按字符串比会把当前 worktree 误认成别人的，一次提交都发不出去。
+    const link = join(root, 'repo-link');
+    await symlink(repo, link, process.platform === 'win32' ? 'junction' : 'dir');
+    const same = await samePath(link, repo);
+    results.push({
+      label: '同一个目录的两种写法被认成同一个',
+      expected: 0,
+      actual: same ? 0 : 1,
+      ok: same,
+    });
   } finally {
     await rm(root, { recursive: true, force: true });
   }
