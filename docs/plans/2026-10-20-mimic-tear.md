@@ -78,16 +78,25 @@ D:\Project\AppProject\Mimic Tear\
         │   ├── persistence.mjs                      # dataDir 下的 JSON 持久化
         │   └── domains.json                         # 领域 → skill 归类清单
         └── client/
-            ├── index.html                           # 四视图骨架 + 语义结构
-            ├── app.js                               # 路由 / 渲染 / SSE 客户端
-            └── styles.css                           # --mcode-* 变量与组件样式
+            ├── index.html                           # 五视图骨架 + 语义结构
+            └── assets/
+                ├── app.js                           # 路由 / 渲染 / SSE 客户端
+                └── styles.css                       # --mcode-* 变量与组件样式
 ```
+
+> **2026-10-28 补记：目录树与实现对账。** 两处漂移已订正：
+>
+> 1. **客户端路径**：原写作 `client/app.js` 与 `client/styles.css`，**真实路径是 `client/assets/app.js` 与 `client/assets/styles.css`**——`server.mjs` 的静态分支把 `/assets/*` 映射到 `join(clientDir, 'assets')`，两个文件从一开始就在 `assets/` 子目录里。
+> 2. **测试文件数**：树上只列了 8 个（写计划时的样子），**仓库现在有 38 个测试文件**——`tests/` 下 **37 个 `*.test.mjs`** 加 `tests/helpers/fixture.mjs`。树上这 8 个是其中最早的一批，全部还在，名字也未变。
+> 3. 顺带把 `index.html` 的注释从「四视图骨架」改成「五视图骨架」：§16 改版之后客户端是**对话面板 + 左侧边栏三页 + 项目详情子视图**共五个视图区（依据：`miniapp/client/index.html` 里的 `view-chat` / `view-overview` / `view-inbox` / `view-skills` / `view-project`）。
 
 职责边界：`view-model.mjs` 全是纯函数（不碰 IO），因此最容易测；`project-service.mjs` 只做编排与校验；`server.mjs` 只做 HTTP/SSE 传输。
 
 ---
 
 ### Task 1: 工作区包骨架
+
+> **2026-10-28 补记：本任务已完成，见 `0f24627`**（`.minimax-plugin/plugin.json` / `miniapp/miniapp.json` / `miniapp/node/miniapp-api.ts`）；发布包缺的两件（`package.json` / `icon.png`）在 `baf2a7a` 补齐。原先的 `- [ ]` 是没回填，不是没做。
 
 **Files:**
 - Create: `miniapps/mimic-tear/` （由 `miniapp` 工具的 `init` 生成）
@@ -97,29 +106,29 @@ D:\Project\AppProject\Mimic Tear\
 - Consumes: 无
 - Produces: `packagePath`（init 返回，工作区相对路径，后续所有编辑都只在此目录内）、`pluginId = mimic-tear`、可运行的 `miniapp/miniapp.json` 与 `miniapp/client/index.html` 占位。
 
-- [ ] **Step 1: 调用 `miniapp` 工具 `{ action: "init", pluginId: "mimic-tear" }`**
+- [x] **Step 1: 调用 `miniapp` 工具 `{ action: "init", pluginId: "mimic-tear" }`**
 
   记录返回的 `packagePath` 与 `mode`。`mode` 必须是 `create`（本仓库此前没有该包）。若返回 `update`，先读完整 manifest 再决定。
 
-- [ ] **Step 2: 读 `miniapp/miniapp.json` 与 `.minimax-plugin/plugin.json` 全文**
+- [x] **Step 2: 读 `miniapp/miniapp.json` 与 `.minimax-plugin/plugin.json` 全文**
 
   确认 `schemaVersion`、两个 payload root、`runtime.entry` 指向 `./miniapp/node/server.mjs`、`surface.path`。
 
-- [ ] **Step 3: 改写 `miniapp/miniapp.json` 为最终声明**
+- [x] **Step 3: 改写 `miniapp/miniapp.json` 为最终声明**
 
   `surface.path` 设为 `"/"`；`artifacts.client` = `["./miniapp/client"]`；`artifacts.node` = `["./miniapp/node"]`；`runtime.kind` = `"process"`；`runtime.entry` = `"./miniapp/node/server.mjs"`；`agentAccess` = `["session.run"]`；`agentConcurrency` = 4；`mcpEndpoints` = `[]`；`hostConnectorAccess` = `{ "providers": [] }`。
 
-- [ ] **Step 4: 从参考拷贝 `miniapp/node/miniapp-api.ts`**
+- [x] **Step 4: 从参考拷贝 `miniapp/node/miniapp-api.ts`**
 
   源：`C:\Users\12391\.minimax\.builtin-skills\miniapp-creator\references\miniapp-api.ts`。
 
-- [ ] **Step 5: 校验 manifest 符合 package-contract**
+- [x] **Step 5: 校验 manifest 符合 package-contract**
 
   `miniapp` 工具的 `inspect` 只覆盖**已发布/已安装**的 Mini App，对工作区草稿会返回 `NOT_FOUND`——因此本步改为直接校验清单：
   Run: `node -e "const m=require('./miniapps/mimic-tear/miniapp/miniapp.json'); const p=require('./miniapps/mimic-tear/.minimax-plugin/plugin.json'); console.assert(m.schemaVersion===1,'miniapp schemaVersion'); console.assert(m.artifacts.client.length&&m.artifacts.node.length,'payload roots'); console.assert(m.runtime.entry.endsWith('.mjs'),'entry'); console.assert(m.surface.path.startsWith('/'),'surface'); console.assert(m.agentAccess.includes('session.run'),'agentAccess'); console.assert(p.displayName&&p.description&&p.author&&p.exampleQueries.every(q=>q.trim()),'plugin fields'); console.log('manifest OK')"`
   Expected: 输出 `manifest OK`，无 `Assertion failed`。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add miniapps/mimic-tear/.minimax-plugin/plugin.json miniapps/mimic-tear/package.json miniapps/mimic-tear/miniapp/miniapp.json miniapps/mimic-tear/miniapp/node/miniapp-api.ts
@@ -129,6 +138,8 @@ git commit -m "feat(mimic-tear): 初始化 Mini App 工作区包骨架"
 ---
 
 ### Task 2: RuntimeStore（运行时只读读模型）
+
+> **2026-10-28 补记：本任务已完成，见 `0f24627`**（`runtime-store.mjs` + `tests/runtime-store.test.mjs` + `tests/helpers/fixture.mjs`）。
 
 **Files:**
 - Create: `miniapps/mimic-tear/miniapp/node/runtime-store.mjs`
@@ -157,11 +168,11 @@ git commit -m "feat(mimic-tear): 初始化 Mini App 工作区包骨架"
   interface TaskRow { id:string; ownerSessionId:string; kind:string; status:string; createdAt:number; updatedAt:number; endedAt:number|null }
   ```
 
-- [ ] **Step 1: 写 fixture helper**
+- [x] **Step 1: 写 fixture helper**
 
   `tests/helpers/fixture.mjs` 导出 `makeRuntimeDb(dir: string): string`——用 `node:sqlite` 在 `dir` 下建一个与运行时同名的库，建出规格 §2.1 涉及的全部表与列（只需覆盖被查询的列），插入 3 个 project / 5 个 session（含一条 `parent_session_id` 指向同 project、两条跨 project 的孤儿）/ 2 个 goal / 3 个 questionnaire（1 pending）/ 若干 task。导出 `tmpDir()` 创建并返回临时目录。
 
-- [ ] **Step 2: 写失败的测试 `tests/runtime-store.test.mjs`**
+- [x] **Step 2: 写失败的测试 `tests/runtime-store.test.mjs`**
 
   断言：
   - `listProjects()` 返回 3 条，`workspaceDir` 为绝对路径，`sessionCount` 为数值
@@ -172,21 +183,21 @@ git commit -m "feat(mimic-tear): 初始化 Mini App 工作区包骨架"
   - `isAvailable()` 为 true，`lastError()` 为 null
   - **Review Focus 1**：`RuntimeStore.open('<不存在的路径>')` 不抛异常；`isAvailable()` 为 false；`lastError()` 非 null 且包含路径；`listProjects()` 返回 `[]`
 
-- [ ] **Step 3: 运行测试确认失败**
+- [x] **Step 3: 运行测试确认失败**
 
   Run: `node --test tests/runtime-store.test.mjs`
   Expected: FAIL — `Cannot find module .../runtime-store.mjs`
 
-- [ ] **Step 4: 实现 `runtime-store.mjs`**
+- [x] **Step 4: 实现 `runtime-store.mjs`**
 
   `node:sqlite` 的 `DatabaseSync(dbPath, { readOnly: true })`；查询全部写成显式列名并映射为 camelCase；`revision()` 用 `max(updated_at_ms)` + 表计数拼字符串；打开失败时把错误记入 `lastError()` 并让 `isAvailable()` 返回 false，**方法一律返回空数组而不是抛错**。
 
-- [ ] **Step 5: 运行测试确认通过**
+- [x] **Step 5: 运行测试确认通过**
 
   Run: `node --test tests/runtime-store.test.mjs`
   Expected: PASS
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add miniapps/mimic-tear/miniapp/node/runtime-store.mjs tests/runtime-store.test.mjs tests/helpers/fixture.mjs
@@ -196,6 +207,8 @@ git commit -m "feat(mimic-tear): 运行时只读读模型 RuntimeStore"
 ---
 
 ### Task 3: PlanStore（.mavis/plans 状态解析）+ text-repair（乱码还原）
+
+> **2026-10-28 补记：本任务已完成，见 `0f24627`**（`plan-store.mjs` / `text-repair.mjs` + `tests/plan-store.test.mjs` / `tests/text-repair.test.mjs`）。
 
 **Files:**
 - Create: `miniapps/mimic-tear/miniapp/node/plan-store.mjs`
@@ -214,7 +227,7 @@ git commit -m "feat(mimic-tear): 运行时只读读模型 RuntimeStore"
   interface PlanTask { id: string|null; title: string; state: 'producing'|'ready'|'blocked'|'done'|'failed'|'unknown'; assignedTo: string|null }
   ```
 
-- [ ] **Step 1: 写失败的测试 `tests/plan-store.test.mjs`**
+- [x] **Step 1: 写失败的测试 `tests/plan-store.test.mjs`**
 
   fixture 目录内造 `<tmp>/.mavis/plans/`：一个 `status1.log`（含 `Tasks:` 段与 `✦ 任务A [producing]  verify=on` 这类行）、一个 `plan.yaml`（含 `tasks:` 列表，每项 `id`/`title`/`assigned_to`）、一个更新的 `status2.log`。断言：
   - **标题取自 yaml，状态取自日志**——两者按任务编码（`V1.4-A`）匹配，轨道级状态覆盖轨道下所有任务（`V1.4-A` → `V1.4-A1` / `V1.4-A2`）
@@ -224,12 +237,12 @@ git commit -m "feat(mimic-tear): 运行时只读读模型 RuntimeStore"
   - **Review Focus 2**：目录不存在 / 空目录 / 含乱码文件 → 返回 `null`，**不抛错**
   - 路径含空格与中文时正常工作
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
   Run: `node --test tests/plan-store.test.mjs`
   Expected: FAIL — module not found
 
-- [ ] **Step 3: 实现 `text-repair.mjs`**
+- [x] **Step 3: 实现 `text-repair.mjs`**
 
   运行时会把 UTF-8 字节当成 GBK 解码后再写成 UTF-16LE，日志里的中文因此是乱码。还原链路：
   `utf8_bytes --GBK-decode--> mojibake --GBK-encode--> utf8_bytes --utf8-decode--> 原文`。
@@ -237,20 +250,20 @@ git commit -m "feat(mimic-tear): 运行时只读读模型 RuntimeStore"
   丢失的字节（GBK 无法配对的奇数长度 UTF-8 段）以 `?` 或 U+FFFD 形式出现，用「补全被中断的 UTF-8 序列 + 同族干净文本词表」还原。
   **只在还原结果是严格合法 UTF-8 时才采纳**——这让检测自证：真乱码能还原成原文，普通中文重新编码成 GBK 字节后几乎不可能是合法 UTF-8。
 
-- [ ] **Step 4: 实现 `plan-store.mjs`**
+- [x] **Step 4: 实现 `plan-store.mjs`**
 
   用 `node:fs` 读 `.mavis/plans/`：按 mtime 选最新的 `status*.log`；用行扫描解析 `Tasks:` 之后的 `[state]` 标记与标题（容忍全角/半角符号与 `✦`/`✔` 等前缀）；用**行扫描**（非完整 YAML 解析器）从最新 `*-plan*.yaml` 提取 `id`/`title`/`assigned_to` 三元组，跳过 `prompt: |` 块内的伪字段。读取时按 BOM 判定编码（UTF-16LE / UTF-16BE / UTF-8），并对日志做乱码还原。
 
-- [ ] **Step 5: 运行测试确认通过**
+- [x] **Step 5: 运行测试确认通过**
 
   Run: `node --test tests/plan-store.test.mjs tests/text-repair.test.mjs`
   Expected: PASS
 
-- [ ] **Step 6: 对真实项目验证**
+- [x] **Step 6: 对真实项目验证**
 
   Run: 对 `D:\Project\AppProject\DevelopmentEnvironmentHealthDashboard` 调用 `readPlan()`，确认标题是干净中文、状态正确（`V1.4-A1`→producing、`V1.4-B1`→ready、`V1.4-C`→blocked）。
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add miniapps/mimic-tear/miniapp/node/plan-store.mjs miniapps/mimic-tear/miniapp/node/text-repair.mjs tests/plan-store.test.mjs tests/text-repair.test.mjs
@@ -260,6 +273,8 @@ git commit -m "feat(mimic-tear): 解析 .mavis/plans 任务状态机并还原 GB
 ---
 
 ### Task 4: SkillCatalog（能力库扫描与领域归类）
+
+> **2026-10-28 补记：本任务已完成，见 `6363752`**（`skill-catalog.mjs` / `domains.json` + `tests/skill-catalog.test.mjs`）。
 
 **Files:**
 - Create: `miniapps/mimic-tear/miniapp/node/skill-catalog.mjs`
@@ -279,7 +294,7 @@ git commit -m "feat(mimic-tear): 解析 .mavis/plans 任务状态机并还原 GB
   interface DomainGroup { key: string; label: string; skills: SkillEntry[] }
   ```
 
-- [ ] **Step 1: 写失败的测试 `tests/skill-catalog.test.mjs`**
+- [x] **Step 1: 写失败的测试 `tests/skill-catalog.test.mjs`**
 
   fixture 造 3 个 skill 目录（每个含 `SKILL.md`，frontmatter 带 `name` 与 `description`）与 1 个缺 `SKILL.md` 的目录。断言：
   - `scanSkills()` 只收录有效 skill，坏目录进 `failures`
@@ -287,21 +302,21 @@ git commit -m "feat(mimic-tear): 解析 .mavis/plans 任务状态机并还原 GB
   - `classify()` 按 `domains.json` 的 `match` 前缀归类；未命中进 `unmapped`
   - 关键词兜底：`match` 不中但 `keywords` 命中 description 时归入该域
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
   Run: `node --test tests/skill-catalog.test.mjs`
   Expected: FAIL — module not found
 
-- [ ] **Step 3: 实现 `skill-catalog.mjs` 与 `domains.json`**
+- [x] **Step 3: 实现 `skill-catalog.mjs` 与 `domains.json`**
 
   扫描根目录由调用方传入（Task 6 负责组装本机真实路径）。`SKILL.md` 用行扫描读 YAML frontmatter（`---` 包裹区内的 `name:` / `description:`），**不引入 YAML 解析器**。`domains.json` 至少含 10 个域：`unreal` / `blender` / `frontend` / `desktop` / `mobile` / `backend` / `dotnet` / `gamedev` / `pm` / `research`，每个域带中文 `label`。
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
   Run: `node --test tests/skill-catalog.test.mjs`
   Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add miniapps/mimic-tear/miniapp/node/skill-catalog.mjs miniapps/mimic-tear/miniapp/node/domains.json tests/skill-catalog.test.mjs
@@ -311,6 +326,8 @@ git commit -m "feat(mimic-tear): 能力库扫描与领域归类"
 ---
 
 ### Task 5: 纯函数层 view-model（健康度 / 卡片 / 收件箱 / 组织树）
+
+> **2026-10-28 补记：本任务已完成，见 `6363752`**（`view-model.mjs` + `tests/view-model.test.mjs`）。
 
 **Files:**
 - Create: `miniapps/mimic-tear/miniapp/node/view-model.mjs`
@@ -357,7 +374,7 @@ git commit -m "feat(mimic-tear): 能力库扫描与领域归类"
   }
   ```
 
-- [ ] **Step 1: 写失败的测试 `tests/view-model.test.mjs`**
+- [x] **Step 1: 写失败的测试 `tests/view-model.test.mjs`**
 
   断言：
   - `computeHealth`：有 `errorCode` → `error`；有 pending 问卷 / paused goal / blocked plan task → `blocked`；有 `status==='started'` 会话或 running task → `active`；否则 `idle`；**并验证优先级**（同时有 error 和 blocked 时返回 `error`）
@@ -367,21 +384,21 @@ git commit -m "feat(mimic-tear): 能力库扫描与领域归类"
   - **Review Focus 4**：`requestJson` 是非法 JSON 或结构未知 → 该条目仍存在，body 为"无法解析该问卷内容"，**不抛出**
   - **Review Focus 3**：`buildOrgTree` 传入父会话不存在的子会话 → 该子节点被提升为根节点，**节点总数不减少**
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
   Run: `node --test tests/view-model.test.mjs`
   Expected: FAIL — module not found
 
-- [ ] **Step 3: 实现 `view-model.mjs`**
+- [x] **Step 3: 实现 `view-model.mjs`**
 
   全部为纯函数，不 import 任何 IO 模块。问卷解析用 `try/catch` + 结构探测，解析失败降级为固定文案。
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
   Run: `node --test tests/view-model.test.mjs`
   Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add miniapps/mimic-tear/miniapp/node/view-model.mjs tests/view-model.test.mjs
@@ -391,6 +408,8 @@ git commit -m "feat(mimic-tear): 纯函数视图模型（健康度/收件箱/组
 ---
 
 ### Task 6: 持久化 + ProjectService（唯一领域服务）
+
+> **2026-10-28 补记：本任务已完成，见 `1589c58`**（`persistence.mjs` / `project-service.mjs` + `tests/project-service.test.mjs`）。
 
 **Files:**
 - Create: `miniapps/mimic-tear/miniapp/node/persistence.mjs`
@@ -429,7 +448,7 @@ git commit -m "feat(mimic-tear): 纯函数视图模型（健康度/收件箱/组
   interface DispatchResult { dispatchId: string; status: 'queued'|'running'|'done'|'error'; bossSessionId: string|null; text: string; error: string|null; delivered: boolean; duplicate: boolean }
   ```
 
-- [ ] **Step 1: 写失败的测试 `tests/project-service.test.mjs`**
+- [x] **Step 1: 写失败的测试 `tests/project-service.test.mjs`**
 
   用 Task 2 的 fixture 库 + 假的 `readPlan` / 假的 boss（一个记录调用参数的桩）。断言：
   - `getOverview()` 的 `kpi.projects` 等于 fixture 的 project 数
@@ -441,21 +460,21 @@ git commit -m "feat(mimic-tear): 纯函数视图模型（健康度/收件箱/组
   - `getSkills()` 返回 domains 分组与 `unmapped`
   - 派工记录在 `dataDir/dispatches.json` 中可见
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
   Run: `node --test tests/project-service.test.mjs`
   Expected: FAIL — module not found
 
-- [ ] **Step 3: 实现 `persistence.mjs` 与 `project-service.mjs`**
+- [x] **Step 3: 实现 `persistence.mjs` 与 `project-service.mjs`**
 
   `persistence.mjs` 用 `node:fs/promises` 读写 `dataDir` 下的三个 JSON；写入用"先写临时文件再 rename"避免半写。`project-service.mjs` 聚合四个只读源，**所有写操作都在这里**，并且顺序是：校验 → `persistence.saveDispatch` 提交 → 返回。
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
   Run: `node --test tests/project-service.test.mjs`
   Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add miniapps/mimic-tear/miniapp/node/persistence.mjs miniapps/mimic-tear/miniapp/node/project-service.mjs tests/project-service.test.mjs
@@ -465,6 +484,8 @@ git commit -m "feat(mimic-tear): 领域服务与持久化（唯一写路径）"
 ---
 
 ### Task 7: BossBridge（派工通道）
+
+> **2026-10-28 补记：本任务已完成，见 `1589c58`**（`boss-bridge.mjs` + `tests/boss-bridge.test.mjs`；降级链与深链修复在 `eca59f5`）。
 
 **Files:**
 - Create: `miniapps/mimic-tear/miniapp/node/boss-bridge.mjs`
@@ -485,7 +506,7 @@ git commit -m "feat(mimic-tear): 领域服务与持久化（唯一写路径）"
   }
   ```
 
-- [ ] **Step 1: 写失败的测试 `tests/boss-bridge.test.mjs`**
+- [x] **Step 1: 写失败的测试 `tests/boss-bridge.test.mjs`**
 
   用一个假 agent 桩（记录 `run()` 的入参、模拟 `onEvent` 推 `text.delta` / `tool.started` / `turn.finished`）。断言：
   - `buildPrompt()` 里包含项目名、项目路径、目标会话 id/标题、原始指令
@@ -494,21 +515,21 @@ git commit -m "feat(mimic-tear): 领域服务与持久化（唯一写路径）"
   - `dispatch()` 在 `agent.run` 返回 `status:'error'` 时返回 `delivered:false` 与错误文本，**不抛未捕获异常**
   - `dispatch()` 在 `onEvent` 收到 `permission.requested` 时调用 `agent.reply`（若桩提供）
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
   Run: `node --test tests/boss-bridge.test.mjs`
   Expected: FAIL — module not found
 
-- [ ] **Step 3: 实现 `boss-bridge.mjs`**
+- [x] **Step 3: 实现 `boss-bridge.mjs`**
 
   `agents()` 用来探测 `bossAgentName` 是否可用；不可用时回落到不带 `agent` 参数的默认 agent（规格 §3.3 降级链）。prompt 用中文，明确目标会话 id、要求用 `mavis` 工具 `session send` 投递、要求回报投递结果。
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
   Run: `node --test tests/boss-bridge.test.mjs`
   Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add miniapps/mimic-tear/miniapp/node/boss-bridge.mjs tests/boss-bridge.test.mjs
@@ -518,6 +539,8 @@ git commit -m "feat(mimic-tear): 派工通道 BossBridge"
 ---
 
 ### Task 8: Server（HTTP + SSE + 静态资源）
+
+> **2026-10-28 补记：本任务已完成，见 `1589c58`**（`server.mjs` + `tests/server.test.mjs`）。
 
 **Files:**
 - Create: `miniapps/mimic-tear/miniapp/node/server.mjs`
@@ -532,7 +555,7 @@ git commit -m "feat(mimic-tear): 派工通道 BossBridge"
   - `POST /api/dispatch`
   - `GET /api/stream` → SSE
 
-- [ ] **Step 1: 写失败的测试 `tests/server.test.mjs`**
+- [x] **Step 1: 写失败的测试 `tests/server.test.mjs`**
 
   用假 context（`listen: { host:'127.0.0.1', port:0 }`、假 `logger`、假 `signal`、假 `agent`）与 Task 6 的 service 启动服务。断言：
   - `GET /api/overview` 返回 200 与 JSON，结构含 `kpi`/`projects`
@@ -543,26 +566,26 @@ git commit -m "feat(mimic-tear): 派工通道 BossBridge"
   - 未知路径 → 404 JSON
   - `dispose()` 后服务器关闭
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
   Run: `node --test tests/server.test.mjs`
   Expected: FAIL — module not found
 
-- [ ] **Step 3: 实现 `server.mjs`**
+- [x] **Step 3: 实现 `server.mjs`**
 
   `node:http`；**必须用 `createServer` 直接监听 `context.listen.port`**（不可用 https/http2/net/子进程）；不碰 `/__mavis/` 前缀；SSE 每 3 秒比较 `store.revision()`，变化则重聚合并广播 `update`；派工过程广播 `dispatch` 事件；`dispose()` 关闭 server、SSE 连接、轮询定时器。
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
   Run: `node --test tests/server.test.mjs`
   Expected: PASS
 
-- [ ] **Step 5: 跑全量单测**
+- [x] **Step 5: 跑全量单测**
 
   Run: `node --test tests/`
   Expected: 全部 PASS
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add miniapps/mimic-tear/miniapp/node/server.mjs tests/server.test.mjs
@@ -573,10 +596,12 @@ git commit -m "feat(mimic-tear): HTTP + SSE 服务与路由"
 
 ### Task 9: Client 四视图
 
+> **2026-10-28 补记：本任务已完成，见 `5302204`**（`client/assets/app.js` / `client/assets/styles.css` / `client/index.html` + `tests/client-contract.test.mjs`）。「四视图」是写计划时的口径，§16 改版之后客户端是**对话面板 + 左侧边栏三页 + 项目详情子视图**共五个视图区（详见文件结构那节的补记）。
+
 **Files:**
 - Create: `miniapps/mimic-tear/miniapp/client/index.html`
-- Create: `miniapps/mimic-tear/miniapp/client/app.js`
-- Create: `miniapps/mimic-tear/miniapp/client/styles.css`
+- Create: `miniapps/mimic-tear/miniapp/client/assets/app.js`
+- Create: `miniapps/mimic-tear/miniapp/client/assets/styles.css`
 - Modify: `miniapps/mimic-tear/miniapp/node/server.mjs`（若静态资源路由需调整）
 - Test: `tests/client-contract.test.mjs`
 
@@ -584,7 +609,7 @@ git commit -m "feat(mimic-tear): HTTP + SSE 服务与路由"
 - Consumes: Task 8 的 REST + SSE 接口
 - Produces: 四个视图（`#overview` / `#inbox` / `#project` / `#skills`），由 hash 路由切换。
 
-- [ ] **Step 1: 写失败的测试 `tests/client-contract.test.mjs`**
+- [x] **Step 1: 写失败的测试 `tests/client-contract.test.mjs`**
 
   读 `index.html` / `app.js` 文本并断言：
   - 存在 `<header>` / `<nav>` / `<main>` / `<section>` 语义标签与 `<h1>`
@@ -594,38 +619,40 @@ git commit -m "feat(mimic-tear): HTTP + SSE 服务与路由"
   - `styles.css` 定义 `--mcode-bg` / `--mcode-text` / `--mcode-accent` / `--mcode-danger` 等变量，且含 `prefers-color-scheme` 与 `prefers-reduced-motion` 块
   - 全文不含**远程资源引用**：除 `http://www.w3.org/2000/svg`（SVG 命名空间）与 `http://127.0.0.1` / `http://localhost`（同源）外，不出现其他 `http://` / `https://` 字面量；不含 emoji 表情字符
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
   Run: `node --test tests/client-contract.test.mjs`
   Expected: FAIL — 文件不存在
 
-- [ ] **Step 3: 实现 `index.html`**
+- [x] **Step 3: 实现 `index.html`**
 
   语义骨架 + 四个视图容器 + 内联 SVG 图标（无 emoji）。
 
-- [ ] **Step 4: 实现 `styles.css`**
+- [x] **Step 4: 实现 `styles.css`**
 
   按 `minimax-code-visual-ui.md`：`:root` 定义浅色变量，`[data-theme='dark']` 定义深色变量，`@media (prefers-color-scheme: dark)` 自动映射；卡片 12px、控件 8px、1px 边框、`0 0 20px rgb(10 10 10 / 8%)` 阴影。
 
-- [ ] **Step 5: 实现 `app.js`**
+- [x] **Step 5: 实现 `app.js`**
 
   hash 路由；`fetch` 四个读接口；`EventSource('/api/stream')` 订阅并刷新；`POST /api/dispatch` 提交派工；`ack` 交互；四态渲染（加载/空/错误/工作中）；错误用 `role="alert"` 就地展示，**不破坏页面结构**。
 
-- [ ] **Step 6: 运行测试确认通过**
+- [x] **Step 6: 运行测试确认通过**
 
   Run: `node --test tests/client-contract.test.mjs`
   Expected: PASS
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
-git add miniapps/mimic-tear/miniapp/client/index.html miniapps/mimic-tear/miniapp/client/app.js miniapps/mimic-tear/miniapp/client/styles.css tests/client-contract.test.mjs
+git add miniapps/mimic-tear/miniapp/client/index.html miniapps/mimic-tear/miniapp/client/assets/app.js miniapps/mimic-tear/miniapp/client/assets/styles.css tests/client-contract.test.mjs
 git commit -m "feat(mimic-tear): 客户端四视图（总览/收件箱/项目详情/能力库）"
 ```
 
 ---
 
 ### Task 10: 发布与 Host 验收
+
+> **2026-10-28 补记：本任务已完成。** 发布包在仓库内可见的产物见 `baf2a7a`（补齐 `package.json` 与 `icon.png`）；Host 验收的实测证据写在**规格 §9.1「派工链路实测结果」**，由 `eca59f5` 落进规格。
 
 **Files:**
 - Modify: `miniapps/mimic-tear/miniapp/miniapp.json`（仅在 Host 校验报错时）
@@ -635,35 +662,35 @@ git commit -m "feat(mimic-tear): 客户端四视图（总览/收件箱/项目详
 - Consumes: Task 1–9 的全部产物
 - Produces: 已发布、已打开、通过规格 §9 十条验收项的 Mini App
 
-- [ ] **Step 1: 发布**
+- [x] **Step 1: 发布**
 
   Run: `miniapp` 工具 `{ action: "publish", pluginId: "mimic-tear" }`
   Expected: 成功。失败则读 `references/diagnostics.md` 定位，**只改工作区包内文件**。
 
-- [ ] **Step 2: 检查运行态**
+- [x] **Step 2: 检查运行态**
 
   Run: `miniapp` 工具 `{ action: "inspect", pluginId: "mimic-tear" }`
   Expected: `runtime.status` 为 `running`。
 
-- [ ] **Step 3: 打开页面**
+- [x] **Step 3: 打开页面**
 
   Run: `miniapp` 工具 `{ action: "open", pluginId: "mimic-tear" }`
   Expected: 成功，报告结构化结果（**不自行拼 URL**）。
 
-- [ ] **Step 4: 读 Browser 技能并做页面验收**
+- [x] **Step 4: 读 Browser 技能并做页面验收**
 
   先用 `skill` 工具读 Browser 插件技能的完整名称，再用 `mcp_browser` 工具对已打开的页做 `inspect` / `query` / 交互。逐条核对规格 §9 的第 7、9、10 项：SSE 联动、无 console 错误、浅深色可读、键盘可达。
 
-- [ ] **Step 5: 用 sqlite 探针逐条核对数值**
+- [x] **Step 5: 用 sqlite 探针逐条核对数值**
 
   写一个只读探针（`node -e` 即可，**不落盘到包里**）查 `local_runtime_projects` / `questionnaire_requests` / `local_runtime_sessions`，与页面上显示的数值逐项比对，核对规格 §9 第 2、3、4、5 项。
 
-- [ ] **Step 6: 核对包内无 `node_modules`**
+- [x] **Step 6: 核对包内无 `node_modules`**
 
   Run: `Get-ChildItem -Recurse -Directory miniapps/mimic-tear | Where-Object Name -eq 'node_modules'`
   Expected: 无输出。
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add miniapps/mimic-tear
@@ -674,6 +701,8 @@ git commit -m "feat(mimic-tear): 发布并通过 Host 验收"
 
 ### Task 11: 「大哥」agent 与 mimic-tear-boss 技能
 
+> **2026-10-28 补记：本任务已完成，但产物在仓库外——这是 Step 4 写明的例外。** 大哥 agent 在 `~/.minimax/agents/boss/`（`agent.md` 的 `name: boss` / `displayName: 大哥`、`PERSONA.md`、`skills/mimic-tear-boss/SKILL.md`），**不产生 git commit**；仓库内可提交的那部分是随插件分发的 `miniapps/mimic-tear/skills/mimic-tear-board/SKILL.md`（`18ddc4b`，与大哥技能不是同一个东西）。
+
 **Files:**
 - Create: `C:\Users\12391\.minimax\agents\boss\` （由 `mavis agent create` 生成）
 - Create: `C:\Users\12391\.minimax\agents\boss\skills\mimic-tear-boss\SKILL.md`
@@ -682,20 +711,20 @@ git commit -m "feat(mimic-tear): 发布并通过 Host 验收"
 - Consumes: 规格 §1.4 与 §8 的全部要点
 - Produces: 可被 `context.agent.run({ agent: 'boss' })` 选中的本地 agent，及其技能
 
-- [ ] **Step 1: 创建 agent**
+- [x] **Step 1: 创建 agent**
 
   Run: `mavis` 工具 `agent create`，`name: "boss"`，`display_name: "大哥"`，`description: "仿身泪滴总管：统管全部项目的决策、派工与验收"`，`persona` 写入规格 §8.1 的五条决策原则与汇报纪律，**不传 model/effort**（继承默认）。
 
-- [ ] **Step 2: 写技能**
+- [x] **Step 2: 写技能**
 
   `SKILL.md` 含 frontmatter（`name: mimic-tear-boss`、中文 `description`）与正文四章：**角色与职责** / **决策原则**（规格 §8.1）/ **派工决策树**（规格 §8.2）/ **升级边界**（规格 §8.3）/ **领域→skill 地图**（指向 `domains.json` 的 10 个域，列出各域代表 skill 名称）。
 
-- [ ] **Step 3: 验证 agent 可见**
+- [x] **Step 3: 验证 agent 可见**
 
   Run: `mavis` 工具 `agent list`（含 primary）
   Expected: 列表中出现 `boss`。
 
-- [ ] **Step 4: Commit（仅仓库内可提交的部分）**
+- [x] **Step 4: Commit（仅仓库内可提交的部分）**
 
   本任务的产物在 `~/.minimax/agents/boss/`，**不在本仓库内**，不产生 git commit；在最终汇报中说明其位置与加载方式。
 

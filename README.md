@@ -84,12 +84,14 @@ cp -R mimic-tear/miniapps/mimic-tear ~/.minimax/plugins/mimic-tear
 ## 开发
 
 ```bash
-# 跑全部测试（386 个，node:test，无第三方依赖）
+# 跑全部测试（411 个，node:test，无第三方依赖）
 node --test
 
 # 把插件发布到本机 MiniMax Code（安装目录 ~/.minimax/plugins/mimic-tear）
 node miniapps/mimic-tear/miniapp/node/server.mjs   # 或用 Agent 的 /miniapp-creator
 ```
+
+> **2026-10-28 补记**：测试条数由 386 订正为 **411**（`node --test` 的 TAP 输出：`tests 411 / pass 411 / fail 0`，2026-10-28 复测）。386 是旧数字，已过期。
 
 仓库结构：
 
