@@ -1,8 +1,8 @@
-import { randomBytes } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 import { normalizeConclusionSource } from './view-model.mjs';
+import { readJsonArray, updateJsonArray, writeJsonAtomic } from './json-ledger.mjs';
 
 /**
  * One write queue per data directory.
@@ -367,38 +367,12 @@ async function readJson(path, fallback) {
  * the other and the rename fails — and a failed write in the duty path means the handover
  * timestamp is silently lost, so the board reports a duty boss that actually handed over.
  *
- * A unique name plus a bounded retry turns that into a harmless transient error.
+ * The implementation now lives in `json-ledger.mjs`, shared with `persistence.mjs` — the
+ * other writer of the dispatch ledger — so there is one discipline rather than two that
+ * can drift apart.
  */
 async function writeJson(path, value) {
-  await mkdir(dirname(path), { recursive: true });
-  const payload = `${JSON.stringify(value, null, 2)}\n`;
-  let lastError;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const temporary = `${path}.${process.pid}.${Date.now()}.${randomBytes(6).toString('hex')}.tmp`;
-    try {
-      await writeFile(temporary, payload, 'utf8');
-      await rename(temporary, path);
-      return;
-    } catch (error) {
-      lastError = error;
-      await rm(temporary, { force: true }).catch(() => {});
-      await delay(20 * (attempt + 1));
-    }
-  }
-  throw lastError;
-}
-
-function delay(ms) {
-  return new Promise((resolveDelay) => {
-    setTimeout(resolveDelay, ms);
-  });
-}
-
-function dirname(path) {
-  const index = path.lastIndexOf('\\') > path.lastIndexOf('/')
-    ? path.lastIndexOf('\\')
-    : path.lastIndexOf('/');
-  return index <= 0 ? path.slice(0, 2) : path.slice(0, index);
+  await writeJsonAtomic(path, value);
 }
 
 /**
@@ -433,36 +407,6 @@ function buildDutyDispatchRecord(input) {
 }
 
 /**
- * Read a JSON array file, strictly.
- *
- * A corrupt file throws instead of falling back to an empty array: the ledger holds
- * other people's records, and "start over" would throw them away.
- *
- * @param {string} path
- * @returns {Promise<any[]>}
- */
-async function readJsonArray(path) {
-  let raw;
-  try {
-    raw = await readFile(path, 'utf8');
-  } catch (error) {
-    if (error?.code === 'ENOENT') return [];
-    throw error;
-  }
-  if (!raw.trim()) return [];
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (error) {
-    throw new Error(`${path} 里的内容不是合法 JSON，拒绝对它做追加：${error?.message ?? error}`);
-  }
-  if (!Array.isArray(parsed)) {
-    throw new Error(`${path} 不是一个数组，拒绝对它做追加`);
-  }
-  return parsed;
-}
-
-/**
  * Merge one record into a list, replacing the record with the same id.
  *
  * @param {any[]} list
@@ -478,22 +422,6 @@ function mergeById(list, record) {
 }
 
 /**
- * Whether two lists hold the same records, in the same order.
- *
- * The comparison is on the whole record, not just its id: the other writer may have
- * CHANGED a record (a dispatch moving from `queued` to `done`), and a merge that kept
- * our older copy would undo that.
- *
- * @param {any[]} left
- * @param {any[]} right
- * @returns {boolean}
- */
-function sameRecords(left, right) {
-  if (left.length !== right.length) return false;
-  return left.every((item, index) => JSON.stringify(item) === JSON.stringify(right[index]));
-}
-
-/**
  * Append one record to a JSON array file without losing anybody else's records.
  *
  * The dispatch ledger has two writers in two processes, and both do read-modify-write.
@@ -501,47 +429,15 @@ function sameRecords(left, right) {
  * board record breaks the board's idempotency, because the same key would then be
  * delivered twice.
  *
- * So the write is done in three steps:
- *
- *  1. read, merge, write to a UNIQUE temporary file (a fixed name lets one writer
- *     rename the file out from under the other);
- *  2. read once more — if another writer landed in between, merge their records in and
- *     write the temporary file again;
- *  3. rename, then check that our record is still there. If the other writer landed
- *     after our rename with an older read, our record is the one that was dropped —
- *     so we put it back. The merge is by id, so this can never duplicate anything.
+ * The write discipline itself lives in `json-ledger.mjs`: unique temporary file name,
+ * read-merge-write under a lock, rename, then check that our own record survived. It is
+ * shared with `persistence.mjs` — the other writer of this very file — because two
+ * implementations of the same discipline are two implementations that can drift apart.
  *
  * @param {string} path
  * @param {any} record
  * @returns {Promise<void>}
  */
 async function appendToJsonArray(path, record) {
-  let lastError = null;
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    const temporary = `${path}.${process.pid}.${Date.now()}.${randomBytes(6).toString('hex')}.tmp`;
-    try {
-      await mkdir(dirname(path), { recursive: true });
-      for (let round = 0; round < 3; round += 1) {
-        const current = await readJsonArray(path);
-        const merged = mergeById(current, record);
-        await writeFile(temporary, `${JSON.stringify(merged, null, 2)}\n`, 'utf8');
-        // Somebody else may have written between our read and this write. If the file
-        // changed, their records have to go into ours too.
-        const latest = await readJsonArray(path);
-        if (sameRecords(latest, current)) break;
-      }
-      await rename(temporary, path);
-
-      const after = await readJsonArray(path);
-      if (after.some((item) => item?.id === record.id)) return;
-      // Our record was the one that got dropped — the other writer's read was older
-      // than ours. Write it again (the merge is by id, so this cannot duplicate it).
-      await delay(20 * (attempt + 1));
-    } catch (error) {
-      lastError = error;
-      await rm(temporary, { force: true }).catch(() => {});
-      await delay(20 * (attempt + 1));
-    }
-  }
-  throw lastError ?? new Error(`写不进派工记录：${path}`);
+  await updateJsonArray(path, (all) => mergeById(all, record), record.id);
 }

@@ -6,6 +6,22 @@ import { RuntimeStore } from '../miniapps/mimic-tear/miniapp/node/runtime-store.
 import { Persistence } from '../miniapps/mimic-tear/miniapp/node/persistence.mjs';
 import { PatrolStore } from '../miniapps/mimic-tear/miniapp/node/patrol-store.mjs';
 import { ProjectService, DomainError } from '../miniapps/mimic-tear/miniapp/node/project-service.mjs';
+// 拆出来的纯函数：写路径上的判断、收件箱装配、巡检计算、项目可见性。
+import {
+  buildDispatchPayload,
+  buildDispatchRecord,
+  dispatchResult,
+  validateDispatchRequest,
+} from '../miniapps/mimic-tear/miniapp/node/dispatch-flow.mjs';
+import {
+  assembleInbox,
+  attachQuestionnaireShapes,
+  buildPatrolInboxItems,
+} from '../miniapps/mimic-tear/miniapp/node/inbox-assembly.mjs';
+import { buildPatrolFindings, resolvePatrolProposals } from '../miniapps/mimic-tear/miniapp/node/patrol-run.mjs';
+import { splitVisibleProjects } from '../miniapps/mimic-tear/miniapp/node/project-scope.mjs';
+import { buildDutyStatus, resolveDutyIntervals } from '../miniapps/mimic-tear/miniapp/node/duty-status.mjs';
+import { ageMinutes, severityRank, sortBySeverity } from '../miniapps/mimic-tear/miniapp/node/inbox-builder.mjs';
 import { makeRuntimeDb, tmpDir, cleanupDir } from './helpers/fixture.mjs';
 
 function makeService(overrides = {}) {
@@ -421,5 +437,298 @@ test('project-service', async (t) => {
     } finally {
       cleanupDir(dir);
     }
+  });
+
+  await t.test('KPI 的待决策数与「需你处理」的条数必须是同一个数', async () => {
+    const { service, store, dir } = makeService();
+    try {
+      const overview = await service.getOverview();
+      assert.ok(overview.attention.length > 0, '夹具里本来就有要处理的事');
+      assert.equal(
+        overview.kpi.pendingDecisions,
+        overview.attention.length,
+        '徽标上的数字和列表里的条数必须一致——它们读的是同一个判定',
+      );
+      store.close();
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  await t.test('看板巡检间隔与值班周期的兜底值只有一个来源', async () => {
+    const { service, store, dir } = makeService();
+    try {
+      // 没有巡检存储时，配置走的是兜底值。
+      const config = await service.getPatrolConfig();
+      const duty = buildDutyStatus({ config, findings: [], now: Date.now() });
+      const fallback = resolveDutyIntervals({});
+
+      assert.equal(config.intervalMinutes, fallback.intervalMinutes, '配置与值班状态不能各写一份兜底值');
+      assert.equal(config.dutyIntervalMinutes, fallback.dutyIntervalMinutes);
+      assert.equal(duty.intervalMinutes, config.intervalMinutes);
+      assert.equal(duty.dutyIntervalMinutes, config.dutyIntervalMinutes);
+      store.close();
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  await t.test('收件箱的排序只有一份口径：服务层装配的顺序与共享比较器一致', async () => {
+    const { service, store, dir } = makeService((dir) => ({ patrol: new PatrolStore(join(dir, 'data')) }));
+    try {
+      await service.runPatrol();
+      const inbox = await service.getInbox();
+      const snapshot = await service.snapshot();
+
+      // 服务层的收件箱 = 运行时原始项 + 巡检结论，两处用的是同一份排序。
+      assert.deepEqual(
+        inbox.items.map((item) => item.id),
+        sortBySeverity(inbox.items).map((item) => item.id),
+        '服务层的顺序必须与共享排序口径一致',
+      );
+      const ranks = inbox.items.map((item) => severityRank(item.severity));
+      assert.deepEqual(ranks, [...ranks].sort((a, b) => a - b), '严重的必须排在前面');
+
+      // 混进巡检结论之后，运行时原始项之间的相对顺序不能变。
+      const runtimeOrder = snapshot.inbox.map((item) => item.id);
+      const serviceRuntimeOrder = inbox.items
+        .filter((item) => !item.id.startsWith('patrol:'))
+        .map((item) => item.id);
+      assert.deepEqual(serviceRuntimeOrder, runtimeOrder, '运行时原始项的相对顺序不能被巡检结论打乱');
+      store.close();
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  await t.test('派工：重复提交与新投递的结果形状一致', async () => {
+    const { service, store, dir } = makeService();
+    try {
+      const input = { projectId: 1, sessionId: null, instruction: '把 X 排到明天', idempotencyKey: 'key-shape' };
+      const first = await service.dispatch(input);
+      const second = await service.dispatch(input);
+
+      assert.deepEqual(
+        Object.keys(first).sort(),
+        Object.keys(second).sort(),
+        '重复提交的结果形状必须和第一次一样',
+      );
+      assert.equal(second.duplicate, true);
+      assert.equal(second.delivered, true, '重复提交的那次也要如实报出投递结果');
+      store.close();
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  await t.test('派工输入校验：四种错误码', () => {
+    assert.throws(
+      () => validateDispatchRequest({ instruction: 'x', idempotencyKey: 'k' }),
+      (error) => error instanceof DomainError && error.code === 'invalid_project_id',
+    );
+    assert.throws(
+      () => validateDispatchRequest({ projectId: 1, instruction: '   ', idempotencyKey: 'k' }),
+      (error) => error instanceof DomainError && error.code === 'empty_instruction',
+    );
+    assert.throws(
+      () => validateDispatchRequest({ projectId: 1, instruction: 'x' }),
+      (error) => error instanceof DomainError && error.code === 'missing_idempotency_key',
+    );
+
+    const ok = validateDispatchRequest({ projectId: '2', instruction: '  做点事 ', idempotencyKey: '  k ' });
+    assert.deepEqual(ok, { projectId: 2, instruction: '做点事', idempotencyKey: 'k' }, '字符串项目号要转成数字，两头空白要去掉');
+  });
+
+  await t.test('派工记录：来源标成 board，字段齐全', () => {
+    const record = buildDispatchRecord({
+      projectId: 1,
+      projectName: 'alpha',
+      targetSessionId: 'sess-alpha-lead',
+      instruction: '做点事',
+      idempotencyKey: 'k-record',
+      now: 1000,
+    });
+
+    assert.equal(record.source, 'board', '看板这条派工要标出自己的来源');
+    assert.equal(record.status, 'queued');
+    assert.equal(record.createdAt, 1000);
+    assert.equal(record.updatedAt, 1000);
+    assert.match(record.id, /^dsp_/);
+    assert.equal(record.bossSessionId, null);
+    assert.equal(record.text, '');
+    assert.equal(record.error, null);
+    assert.equal(record.targetSessionId, 'sess-alpha-lead');
+  });
+
+  await t.test('给大哥的载荷：项目名与路径取自看板卡片', () => {
+    const record = buildDispatchRecord({
+      projectId: 1,
+      projectName: 'alpha',
+      targetSessionId: 'sess-alpha-lead',
+      instruction: '做点事',
+      idempotencyKey: 'k-payload',
+      now: 1000,
+    });
+
+    const payload = buildDispatchPayload(record, { name: 'alpha', path: 'D:/projects/alpha' }, { id: 'sess-alpha-lead', title: '会话 alpha' });
+    assert.equal(payload.projectName, 'alpha');
+    assert.equal(payload.projectPath, 'D:/projects/alpha');
+    assert.equal(payload.sessionId, 'sess-alpha-lead');
+    assert.equal(payload.sessionTitle, '会话 alpha');
+    assert.equal(payload.instruction, '做点事');
+
+    // 卡片不在时退回记录里存的值——值班那条记录只有会话，没有项目。
+    const fallback = buildDispatchPayload(record, null, null);
+    assert.equal(fallback.projectName, 'alpha');
+    assert.equal(fallback.projectPath, '');
+    assert.equal(fallback.sessionId, null);
+  });
+
+  await t.test('派工结果：重复、成功、失败三种形状', () => {
+    const done = { id: 'd1', status: 'done', bossSessionId: 'b1', text: '已投递', error: null };
+    assert.deepEqual(dispatchResult(done), {
+      dispatchId: 'd1',
+      status: 'done',
+      bossSessionId: 'b1',
+      text: '已投递',
+      error: null,
+      delivered: true,
+      duplicate: false,
+    });
+    assert.equal(dispatchResult(done, { duplicate: true }).duplicate, true, '重复提交要如实标出来');
+
+    const failed = { id: 'd2', status: 'error', bossSessionId: null, text: '', error: 'boom' };
+    assert.deepEqual(dispatchResult(failed), {
+      dispatchId: 'd2',
+      status: 'error',
+      bossSessionId: null,
+      text: '',
+      error: 'boom',
+      delivered: false,
+      duplicate: false,
+    });
+  });
+
+  await t.test('巡检结论落成条目：一条都没解析出来也要留一条', () => {
+    const cards = [{ id: 1, name: 'alpha' }];
+
+    const parsed = buildPatrolFindings(
+      { conclusion: '有一项要处理', items: [{ projectName: 'alpha', severity: 'high', summary: '会话报错' }] },
+      cards,
+      '兜底正文',
+    );
+    assert.equal(parsed.length, 1);
+    assert.equal(parsed[0].projectId, 1, '项目名要换算成项目 id');
+    assert.equal(parsed[0].severity, 'high');
+    assert.equal(parsed[0].title, '会话报错');
+
+    // 一条都没解析出来：仍然落一条结论，把原文带上去，巡检不能静默。
+    const empty = buildPatrolFindings({ conclusion: '随便写点', items: [] }, cards, '原文');
+    assert.equal(empty.length, 1);
+    assert.equal(empty[0].projectId, null);
+    assert.equal(empty[0].severity, 'medium');
+    assert.equal(empty[0].title, '随便写点');
+    assert.equal(empty[0].body, '原文');
+
+    // 项目名对不上：项目 id 留空，但结论一条都不能少。
+    const unknown = buildPatrolFindings(
+      { items: [{ projectName: 'gamma', severity: 'low', summary: '小事' }] },
+      cards,
+      'x',
+    );
+    assert.equal(unknown.length, 1);
+    assert.equal(unknown[0].projectId, null);
+    assert.equal(unknown[0].projectName, 'gamma');
+  });
+
+  await t.test('巡检提案：项目名对不上就当场标成失败，不去投递', () => {
+    const cards = [{ id: 1, name: 'alpha' }];
+    const resolved = resolvePatrolProposals({
+      proposals: [
+        { projectName: 'alpha', sessionId: null, instruction: '做' },
+        { projectName: 'gamma', sessionId: null, instruction: '不做' },
+      ],
+    }, cards);
+
+    assert.equal(resolved.length, 2);
+    assert.equal(resolved[0].card.id, 1);
+    assert.equal(resolved[0].error, null);
+    assert.equal(resolved[1].card, null);
+    assert.match(resolved[1].error, /找不到项目 gamma/);
+    assert.equal(resolved[1].index, 1, '序号要留着——幂等键靠它');
+  });
+
+  await t.test('收件箱装配：巡检结论带上来源与年龄，问卷带上形状', () => {
+    const patrolItems = buildPatrolInboxItems([
+      {
+        id: 'p1',
+        severity: 'medium',
+        projectId: 1,
+        projectName: 'alpha',
+        title: '结论',
+        body: '正文',
+        createdAt: Date.now() - 60_000,
+        acknowledged: false,
+        source: 'duty',
+      },
+      {
+        id: 'p2',
+        severity: 'low',
+        projectId: null,
+        projectName: null,
+        title: '全局结论',
+        body: '正文',
+        createdAt: 1,
+        acknowledged: true,
+        acknowledgedBy: 'boss',
+        note: '不适用',
+      },
+    ]);
+
+    assert.equal(patrolItems[0].id, 'patrol:p1');
+    assert.equal(patrolItems[0].source, 'duty', '值班来源的结论要带上来源');
+    assert.equal(patrolItems[0].ageMinutes, 1, '年龄要走共享口径');
+    assert.equal(patrolItems[0].ageMinutes, ageMinutes(patrolItems[0].createdAt));
+    assert.equal(patrolItems[1].projectName, '全局', '没有项目的结论落到全局');
+    assert.equal(patrolItems[1].handledBy, 'boss');
+    assert.equal(patrolItems[1].handledReason, '不适用');
+
+    const enriched = attachQuestionnaireShapes([
+      {
+        kind: 'questionnaire',
+        requestId: 'q1',
+        requestJson: JSON.stringify({ steps: [{ id: 's', question: '继续？', options: [{ id: 'o1', recommended: true }] }] }),
+      },
+      { kind: 'patrol', id: 'patrol:p1' },
+    ], [{ requestId: 'q1', optionIds: ['o1'], answer: '继续', rationale: '因为', answeredAt: 5 }]);
+
+    assert.deepEqual(enriched[0].stepIds, ['s']);
+    assert.equal(enriched[0].options[0].recommended, true);
+    assert.deepEqual(enriched[0].recommendation, {
+      optionIds: ['o1'],
+      answer: '继续',
+      rationale: '因为',
+      decidedAt: 5,
+    });
+    assert.equal(enriched[1].recommendation, undefined, '非问卷条目不能被动过');
+
+    const assembled = assembleInbox(
+      [{ id: 'r1', severity: 'high', createdAt: 1 }],
+      [{ id: 'patrol:p1', severity: 'medium', createdAt: 2 }],
+      [],
+    );
+    assert.deepEqual(assembled.map((item) => item.id), ['r1', 'patrol:p1'], '严重的在前');
+  });
+
+  await t.test('内部工作区拆分：可见项目与被藏起来的数量', () => {
+    const { visible, internalCount } = splitVisibleProjects([
+      { id: 1, workspaceDir: 'D:/Project/AppProject/Dungeon-Chesser' },
+      { id: 2, workspaceDir: 'C:/Users/x/.minimax/agents/mavis/workspace' },
+      { id: 3, workspaceDir: 'C:/Users/x/.mavis/agents/worker/miniapps/x' },
+    ]);
+
+    assert.equal(visible.length, 1);
+    assert.equal(visible[0].id, 1);
+    assert.equal(internalCount, 2, '被藏起来的项目要留着计数，不能悄悄消失');
   });
 });

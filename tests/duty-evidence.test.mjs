@@ -1,13 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DatabaseSync } from 'node:sqlite';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { computeDutyEvidence } from '../miniapps/mimic-tear/miniapp/node/view-model.mjs';
 import { evaluateDuty } from '../miniapps/mimic-tear/miniapp/node/watchdog-rules.mjs';
 import { runWatchdog } from '../miniapps/mimic-tear/miniapp/node/watchdog.mjs';
-import { tmpDir, cleanupDir } from './helpers/fixture.mjs';
+import { tmpDir, cleanupDir, makeCronDb } from './helpers/fixture.mjs';
 
 const MINUTE = 60_000;
 const NOW = Date.parse('2026-10-20T12:00:00Z');
@@ -17,69 +16,26 @@ const CRON_ID = '672fde94-0c52-466d-831e-e2919f49b64a';
 /**
  * A runtime database carrying the duty cron's run log.
  *
- * The shared fixture is deliberately left alone: it is read by every test file, and this
- * table is only needed here. The shape mirrors the runtime's own table.
+ * The tables and the factory live in the shared fixture: their shape is the runtime's own,
+ * and there is exactly one source for it now. What is left here is the part that belongs to
+ * this file — which cron it is, and what the duty chain is called.
  *
  * @param {string} dir
  * @param {Array<{id:string, status:string, createdAt:number, deliveredAt?:number|null}>} runs
  * @returns {string} the database path
  */
-function makeCronDb(dir, runs) {
-  const dbPath = join(dir, 'cron-state.sqlite');
-  const db = new DatabaseSync(dbPath);
-  db.exec(`
-    CREATE TABLE local_runtime_v2_cron_runs (
-      run_id TEXT PRIMARY KEY,
-      cron_id TEXT,
-      session_id TEXT,
-      status TEXT,
-      created_at_ms INTEGER,
-      delivered_at_ms INTEGER,
-      failed_at_ms INTEGER,
-      error_code INTEGER,
-      error TEXT,
-      retry_at_ms INTEGER,
-      retry_attempt INTEGER
-    );
-  `);
-  // The cron definition table too: the duty chain is resolved by name, so the watcher
-  // needs to see which definition is alive — and the definition must exist, or it reads
-  // "no runs" and calls it "nothing went wrong".
-  db.exec(`
-    CREATE TABLE local_runtime_v2_cron_definitions (
-      cron_id TEXT PRIMARY KEY,
-      scheduler_id TEXT,
-      agent_name TEXT,
-      name TEXT,
-      target_session_id TEXT,
-      session_target_mode TEXT,
-      revision INTEGER,
-      deleted_at_ms INTEGER,
-      created_at_ms INTEGER,
-      updated_at_ms INTEGER
-    );
-  `);
-  db.prepare(
-    `INSERT INTO local_runtime_v2_cron_definitions
-       (cron_id, scheduler_id, agent_name, name, target_session_id, deleted_at_ms)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-  ).run(CRON_ID, 'sched-duty', 'boss', '大哥值班巡检', 'sess-duty', null);
-
-  const insert = db.prepare(
-    `INSERT INTO local_runtime_v2_cron_runs
-       (run_id, cron_id, session_id, status, created_at_ms, delivered_at_ms,
-        failed_at_ms, error_code, error, retry_at_ms, retry_attempt)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  );
-  for (const run of runs) {
-    insert.run(
-      run.id, CRON_ID, 'sess-duty', run.status,
-      run.createdAt, run.deliveredAt ?? null,
-      null, null, null, null, run.retryAttempt ?? 0,
-    );
-  }
-  db.close();
-  return dbPath;
+function makeDutyCronDb(dir, runs) {
+  return makeCronDb(dir, {
+    cronId: CRON_ID,
+    sessionId: 'sess-duty',
+    definition: {
+      schedulerId: 'sched-duty',
+      agentName: 'boss',
+      name: '大哥值班巡检',
+      targetSessionId: 'sess-duty',
+    },
+    runs,
+  });
 }
 
 /** Two handovers 390 minutes apart — the shape of the 2026-10-21 evening gap. */
@@ -111,7 +67,7 @@ test('缺口一：补交班会抹掉漏班证据', async (t) => {
   await t.test('A2：watchdog 判 missed，漏轮数算得准', async () => {
     const dir = tmpDir();
     try {
-      const dbPath = makeCronDb(dir, gapRuns);
+      const dbPath = makeDutyCronDb(dir, gapRuns);
       writeFileSync(
         join(dir, 'patrol-config.json'),
         JSON.stringify({ enabled: true, intervalMinutes: 15, dutyIntervalMinutes: 30, lastRunAt: NOW - 5 * MINUTE }),
@@ -142,7 +98,7 @@ test('缺口一：补交班会抹掉漏班证据', async (t) => {
   await t.test('A4：同一段空档只报一次', async () => {
     const dir = tmpDir();
     try {
-      const dbPath = makeCronDb(dir, gapRuns);
+      const dbPath = makeDutyCronDb(dir, gapRuns);
       writeFileSync(
         join(dir, 'patrol-config.json'),
         JSON.stringify({ enabled: true, intervalMinutes: 15, dutyIntervalMinutes: 30, lastRunAt: NOW - 5 * MINUTE }),

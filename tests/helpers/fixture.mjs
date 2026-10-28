@@ -145,6 +145,113 @@ const QUESTIONNAIRE = JSON.stringify({
 });
 
 /**
+ * The runtime's cron tables.
+ *
+ * The duty chain lives in the runtime's own database: the scheduler writes the run log
+ * there, and the watchdog reads it back to tell "nothing went wrong" from "nothing ran".
+ * The definitions table belongs to the same story — a chain resolved by name has to see
+ * which definition is alive, or it reads "no runs" and calls it "all quiet".
+ *
+ * The column list is what `RuntimeStore` selects, so it must not drift from there.
+ * This DDL used to live inside `tests/duty-evidence.test.mjs`; it lives here now so
+ * that the shape has exactly one source.
+ */
+const CRON_DDL = `
+CREATE TABLE local_runtime_v2_cron_runs (
+  run_id TEXT PRIMARY KEY,
+  cron_id TEXT,
+  session_id TEXT,
+  status TEXT,
+  created_at_ms INTEGER,
+  delivered_at_ms INTEGER,
+  failed_at_ms INTEGER,
+  error_code INTEGER,
+  error TEXT,
+  retry_at_ms INTEGER,
+  retry_attempt INTEGER
+);
+CREATE TABLE local_runtime_v2_cron_definitions (
+  cron_id TEXT PRIMARY KEY,
+  scheduler_id TEXT,
+  agent_name TEXT,
+  name TEXT,
+  target_session_id TEXT,
+  session_target_mode TEXT,
+  revision INTEGER,
+  deleted_at_ms INTEGER,
+  created_at_ms INTEGER,
+  updated_at_ms INTEGER
+);
+`;
+
+/**
+ * Build a cron-state database carrying a cron's definition and its run log.
+ *
+ * Additive to this fixture on purpose: the runtime-state tables above are read by every
+ * test file, so their columns are frozen. The cron tables are a separate family and get
+ * their own factory rather than being folded into `makeRuntimeDb`.
+ *
+ * @param {string} dir directory to create the db in
+ * @param {{
+ *   cronId?: string,
+ *   sessionId?: string,
+ *   definition?: { schedulerId?: string, agentName?: string, name?: string,
+ *                  targetSessionId?: string, deletedAtMs?: number|null } | false,
+ *   runs?: Array<{ id: string, status: string, createdAt: number, deliveredAt?: number|null,
+ *                  failedAt?: number|null, errorCode?: number|null, error?: string|null,
+ *                  retryAt?: number|null, retryAttempt?: number }>,
+ * }} [options]
+ * @returns {string} absolute path of the created database
+ */
+export function makeCronDb(dir, options = {}) {
+  const {
+    cronId = 'cron-test',
+    sessionId = 'sess-cron',
+    definition = {},
+    runs = [],
+  } = options;
+
+  const dbPath = join(dir, 'cron-state.sqlite');
+  const db = new DatabaseSync(dbPath);
+  db.exec(CRON_DDL);
+
+  // The definition has to exist: a chain that resolves by name and finds no definition
+  // reads "no runs" and calls it "nothing went wrong".
+  if (definition !== false) {
+    db.prepare(
+      `INSERT INTO local_runtime_v2_cron_definitions
+         (cron_id, scheduler_id, agent_name, name, target_session_id, deleted_at_ms)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(
+      cronId,
+      definition.schedulerId ?? 'sched-test',
+      definition.agentName ?? 'boss',
+      definition.name ?? '测试定时任务',
+      definition.targetSessionId ?? sessionId,
+      definition.deletedAtMs ?? null,
+    );
+  }
+
+  const insert = db.prepare(
+    `INSERT INTO local_runtime_v2_cron_runs
+       (run_id, cron_id, session_id, status, created_at_ms, delivered_at_ms,
+        failed_at_ms, error_code, error, retry_at_ms, retry_attempt)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  for (const run of runs) {
+    insert.run(
+      run.id, cronId, sessionId, run.status,
+      run.createdAt, run.deliveredAt ?? null,
+      run.failedAt ?? null, run.errorCode ?? null, run.error ?? null,
+      run.retryAt ?? null, run.retryAttempt ?? 0,
+    );
+  }
+
+  db.close();
+  return dbPath;
+}
+
+/**
  * Build a runtime-state database populated with representative rows.
  * @param {string} dir directory to create the db in
  * @returns {string} absolute path of the created database
