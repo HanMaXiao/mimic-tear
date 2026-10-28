@@ -5,6 +5,7 @@ import {
   buildOrgTree,
   buildPatrolBrief,
   buildProjectCards,
+  normalizeConclusionSource,
   parsePatrolReport,
   questionnaireShape,
   withDutyCards,
@@ -310,7 +311,9 @@ export class ProjectService {
 
     const created = [];
     for (const finding of findings) {
-      created.push(await this.patrol.add(finding));
+      // The board's own patrol loop. The conclusion's origin is written down here, so
+      // the desk can tell the board's output apart from the duty boss's conclusions.
+      created.push(await this.patrol.add({ ...finding, source: 'board' }));
     }
 
     // The boss proposes; the board dispatches. Whether to propose at all is the boss's own
@@ -460,6 +463,9 @@ export class ProjectService {
         createdAt: finding.createdAt,
         ageMinutes: ageInMinutes(finding.createdAt),
         acknowledged: finding.acknowledged,
+        // Where the conclusion came from: the duty boss's own round, or the board's
+        // patrol loop. A conclusion written before the field existed reads as 'board'.
+        source: normalizeConclusionSource(finding.source),
         // 'user' = 大老板点过「标记已知」；'boss' = 大哥撤回了自己的结论（已不适用）。
         handledBy: finding.acknowledgedBy ?? null,
         handledReason: finding.note ?? '',
@@ -702,6 +708,9 @@ export class ProjectService {
     const record = {
       id: `dsp_${now.toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
       idempotencyKey,
+      // Which path wrote this record. The duty path writes its own records into the
+      // same ledger, so the two can be told apart.
+      source: 'board',
       projectId,
       projectName: card.name,
       targetSessionId,
@@ -784,6 +793,41 @@ export class ProjectService {
   async getDispatch(id) {
     const all = await this.persistence.listDispatches();
     return all.find((d) => d.id === id) ?? null;
+  }
+
+  /**
+   * The dispatch ledger: both paths' deliveries, newest first.
+   *
+   * The board used to see only its own deliveries — the duty boss delivers with the
+   * runtime's `session send` and wrote nothing down, so the two bosses could tell
+   * different stories without the board noticing. Both paths now write into the same
+   * ledger, each record tagged with its origin.
+   *
+   * @returns {Promise<any[]>}
+   */
+  async listDispatches() {
+    const all = await this.persistence.listDispatches();
+    const snapshot = await this.snapshot();
+    const projectOfSession = new Map();
+    for (const session of snapshot.sessions) {
+      const card = snapshot.cards.find((c) => c.id === session.projectId);
+      if (card) projectOfSession.set(session.id, card);
+    }
+    return all
+      .map((record) => {
+        const card = record.targetSessionId ? projectOfSession.get(record.targetSessionId) : null;
+        return {
+          ...record,
+          // A record written before the field existed came from the board's dispatch
+          // button: back then it was the only path that wrote dispatches.json.
+          source: normalizeConclusionSource(record.source),
+          // The duty path reports the session it delivered to; which project that
+          // session belongs to is only knowable here, where the runtime is readable.
+          projectId: record.projectId ?? card?.id ?? null,
+          projectName: record.projectName ?? card?.name ?? null,
+        };
+      })
+      .sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
   }
 
   /**
