@@ -35,12 +35,9 @@ const clientContractTest = resolve(
 /** 运行时目录：这里的代码由宿主加载，用的是 context.logger。 */
 const RUNTIME_DIR = join(packageDir, 'miniapp', 'node');
 
-/** 客户端三件套：UI 里不许出现 emoji。 */
-const CLIENT_FILES = [
-  join('miniapp', 'client', 'index.html'),
-  join('miniapp', 'client', 'assets', 'app.js'),
-  join('miniapp', 'client', 'assets', 'styles.css'),
-];
+/** 客户端的源码目录：拆成原生 ES 模块之后，文件在 assets/ 下面按目录分。 */
+const CLIENT_DIR = join(packageDir, 'miniapp', 'client');
+const CLIENT_ASSETS = join(CLIENT_DIR, 'assets');
 
 /** 源码扫描时跳过的目录。 */
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', '.vendor']);
@@ -97,6 +94,26 @@ async function listFiles(dir, base = dir) {
     out.push(relative(base, full).split(sep).join('/'));
   }
   return out.sort();
+}
+
+/**
+ * 客户端的源文件清单（相对包目录）。
+ *
+ * 客户端是一个目录，不是一份固定的文件清单：`index.html` 加 `assets/` 下面按视图拆开
+ * 的模块与样式表。写死文件名的话，每拆一次就得跟着改一次——而且改漏了不会报错，只
+ * 会让 emoji 检查悄悄少看几个文件。
+ *
+ * @returns {Promise<string[]>} 相对包目录的路径列表
+ */
+async function listClientFiles() {
+  const out = [];
+  for (const rel of await listFiles(CLIENT_DIR)) {
+    const ext = extOf(rel);
+    if (rel === 'index.html' || ext === '.js' || ext === '.css') {
+      out.push(join('miniapp', 'client', ...rel.split('/')));
+    }
+  }
+  return out;
 }
 
 /**
@@ -172,11 +189,16 @@ async function main() {
   const violations = [];
 
   // 客户端契约测试覆盖的文件如果变了，这里也要跟着变，否则 emoji 检查会漏。
-  for (const rel of CLIENT_FILES) {
-    const needle = rel.split(sep).join('/');
-    const leaf = needle.split('/').pop();
-    if (!testSource.includes(leaf)) {
-      violations.push(`客户端契约测试里找不到「${leaf}」，客户端文件清单可能已经变了，请同步 tests/client-contract.test.mjs`);
+  //
+  // 客户端已经拆成一棵模块树，契约测试是**扫目录**拿到文件清单的，不再逐个写死名字。
+  // 所以这里要问的是另一件事：契约测试还在扫目录吗？它扫的目录和这里扫的是同一个吗？
+  // 只要它还在按 '.js' 与 '.css' 递归扫 assets 目录，两边的覆盖面就是一样的。
+  for (const needle of ["'.js'", "'.css'", 'assets']) {
+    if (!testSource.includes(needle)) {
+      violations.push(
+        `客户端契约测试里找不到「${needle}」——它可能不再扫整个 assets 目录了，`
+        + '这样 emoji 检查会漏掉一部分客户端文件，请同步 tests/client-contract.test.mjs',
+      );
     }
   }
 
@@ -210,8 +232,9 @@ async function main() {
     }
   }
 
-  // 断言 3：客户端三件套里不许有 emoji（与客户端契约测试同一套正则）。
-  for (const rel of CLIENT_FILES) {
+  // 断言 3：客户端里不许有 emoji（与客户端契约测试同一套正则）。
+  const clientFiles = await listClientFiles();
+  for (const rel of clientFiles) {
     const full = join(packageDir, ...rel.split('/'));
     let content;
     try {
