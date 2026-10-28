@@ -170,6 +170,62 @@ test('client-contract', async (t) => {
     }
   });
 
+  await t.test('看门狗告警：接口、视图容器与四态都在', () => {
+    assert.ok(app.includes('/api/watchdog/alerts'), 'app.js 未引用告警日志接口');
+    assert.ok(html.includes('id="view-alerts"'), '缺少告警视图容器');
+    assert.ok(html.includes('aria-labelledby="alerts-title"'), '告警视图需要 aria-labelledby');
+    assert.ok(html.includes('data-nav="alerts"'), '侧栏缺少告警入口');
+    assert.ok(
+      html.includes('<caption class="visually-hidden">看门狗告警日志</caption>'),
+      '告警表需要用 caption 说明这张表是干什么的',
+    );
+
+    // The ids the renderer reaches for must exist: a missing one makes `el()` return null
+    // and the panel silently stays empty.
+    for (const id of ['alerts-body', 'alerts-count']) {
+      assert.ok(html.includes(`id="${id}"`), `app.js 渲染用到的 ${id} 不在 HTML 里`);
+    }
+
+    assert.ok(app.includes('function renderAlerts'), '缺少 renderAlerts');
+    assert.ok(app.includes('function loadWatchdogAlerts'), '缺少 loadWatchdogAlerts');
+
+    // The four states have to be legible on the board: loading, empty, error and full.
+    assert.ok(app.includes('正在加载告警日志'), '缺少加载态');
+    assert.ok(app.includes('看门狗还没有报过警'), '缺少空态');
+    assert.ok(app.includes('告警日志读取失败'), '缺少错误态');
+
+    // The three flips the watchdog can make, each in its own words.
+    for (const [action, label] of [['stale', '掉线'], ['recovered', '归位'], ['missed', '漏轮']]) {
+      assert.ok(app.includes(`${action}: '${label}'`), `缺少 ${action} 的文案`);
+    }
+    assert.ok(app.includes('已送达'), '缺少送达文案');
+    assert.ok(app.includes('未送达'), '缺少未送达文案');
+  });
+
+  await t.test('派工状态恢复：读回记录，并与 SSE 用同一套渲染', () => {
+    assert.ok(app.includes('/api/dispatch/'), 'app.js 未引用派工记录读取接口');
+    assert.ok(app.includes('function restoreDispatch'), '缺少 restoreDispatch');
+    assert.ok(app.includes('function normalizeDispatchOutcome'), '缺少派工结果归一化');
+    assert.ok(app.includes('function renderDispatchOutcome'), '缺少派工结果渲染');
+
+    // The live event and the restored record must go through the same renderer: a
+    // dispatch that comes back after a reload may not look like a different thing.
+    assert.match(
+      app,
+      /addEventListener\('dispatch'[\s\S]{0,400}?renderDispatchOutcome\(/,
+      'SSE 派工事件应走共用渲染',
+    );
+    assert.match(
+      app,
+      /async function restoreDispatch[\s\S]{0,2000}?renderDispatchOutcome\(/,
+      '恢复路径应走共用渲染',
+    );
+
+    for (const text of ['指令已投递给目标会话', '派工未完成：', '指令仍在投递中']) {
+      assert.ok(app.includes(text), `缺少派工文案 ${text}`);
+    }
+  });
+
   await t.test('没有远程资源引用', () => {
     const allowed = ['http://www.w3.org/2000/svg', 'http://127.0.0.1', 'http://localhost'];
     for (const [name, content] of [['index.html', html], ['app.js', app], ['styles.css', css]]) {
