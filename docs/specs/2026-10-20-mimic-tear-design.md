@@ -154,8 +154,10 @@ graph TB
 | --- | --- | --- |
 | **Node 运行时** | 读运行时状态、聚合、持久化自己的派工记录、SSE 推送 | 唯一数据出口；不解析 HTML、不做业务判断 |
 | **领域服务 ProjectService** | 所有读聚合 + 所有写（派工、确认）的唯一入口 | 单一写路径：校验 → 提交 → 广播 |
-| **Client** | 四个页面的呈现与交互 | 无凭据、无 Host 对象、无领域数据写入 |
+| **Client** | 五个视图区的呈现与交互：对话面板 + 左侧边栏三页（总览 / 决策收件箱 / 能力库）+ 项目详情子视图 | 无凭据、无 Host 对象、无领域数据写入 |
 | **大哥 agent** | 决策与派工 | 通过原生 `mavis` 工具投递，不直接碰数据库 |
+
+> **2026-10-28 补记：「四个页面」的口径订正。** 本行原写「四个页面的呈现与交互」，那是 §6 改版**之前**的形态（总览 / 决策收件箱 / 项目详情 / 能力库）。§16 改成「对话优先」之后，客户端的实际形态是 **`miniapp/client/index.html` 里的五个视图区**：`view-chat`（对话面板，落地页）、`view-overview`、`view-inbox`、`view-skills`，外加从总览下钻进去的 `view-project`。**左侧边栏是三页**（总览 / 决策收件箱 / 能力库，见 `index.html` 的 `data-nav` 导航：对话 / 总览 / 决策收件箱 / 能力库共 4 项，其中「对话」是面板本身），**项目详情是子视图，不是边栏页**。§16.1 的「对话面板 + 左侧边栏三页」与本行现在说的口径一致了。
 
 ### 3.3 写路径的硬约束
 
@@ -347,21 +349,31 @@ interface DomainGroup {
 
 ## 5. API
 
+> **2026-10-28 补记：§5 按实现重写。** 上一版 §5 在 2026-10-20 因审计项 I6 重写过一次（见 §15.9 的 I6 行），此后 §16 / §18 / §19 / §23 / §27 又陆续加了端点与 SSE 事件，§5 再次落后于实现——**与 I6 当初修的是同一类问题复发**。本表按 `miniapps/mimic-tear/miniapp/node/server.mjs` 的路由分支**逐条核对**后重写：服务端 **21 条 API 路由**（另有 2 条静态资源分支：GET `/` 与 GET `/assets/*`），SSE 事件 **12 类**。原表「`POST /api/patrol/config` 开关自动派工」一句已删除——`autoDispatch` 在 §24.7 被清掉，实现里这个端点只剩巡检开关与间隔两件事。
+
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
+| GET | `/api/stream` | SSE 长连接：连上即推一次 `snapshot` |
 | GET | `/api/overview` | KPI + 项目卡数组 + 需关注项 |
 | GET | `/api/inbox` | 决策收件箱条目（运行时项 + 大哥巡检结论） |
 | GET | `/api/projects` | 项目卡列表（与 overview 复用同一聚合） |
 | GET | `/api/projects/:id` | 项目详情：组织树 + goals + questions + tasks + plan |
-| GET | `/api/skills` | 能力库（按领域分组） |
+| GET | `/api/skills` | 能力库：按领域分组的**本机已安装** skill（扫 `~/.agents/skills` 等目录） |
+| GET | `/api/skill-library` | 可复用技能库：大哥打包出来、能派工下去的技能。**与 `/api/skills` 不是一回事**——一个扫装机目录，一个读大哥自己的库 |
 | GET | `/api/dispatch/:id` | 单次派工状态 |
 | POST | `/api/dispatch` | 下达指令到项目会话。**必须**带 `idempotencyKey`；返回 **202**（受理），实际结果通过 SSE `dispatch` 事件推送 |
 | POST | `/api/inbox/ack` | 确认一条收件箱条目（body `{ id }`） |
 | POST | `/api/permissions/:requestId` | 决定大哥的工具权限请求（body `{ decision: 'allowOnce' \| 'deny' }`） |
 | GET | `/api/patrol` | 大哥巡检配置与历史结论 |
-| POST | `/api/patrol/config` | 开关巡检、间隔、是否允许自动派工 |
+| POST | `/api/patrol/config` | 开关看板侧巡检、设巡检间隔（**不再管自动派工**，见 §24.7） |
 | POST | `/api/patrol/run` | 立即巡检一次。返回 **202**，结果通过 SSE `patrol` 事件推送 |
-| GET | `/api/stream` | SSE：`snapshot` / `update` / `dispatch` / `patrol` / `permission` |
+| POST | `/api/duty/intent` | 写下大哥的值班意图（`mode` 在岗 / 歇着）+ `requestedBy` + `note`；写完立刻广播一次 `update`（值班状态不在运行时修订号里，不主动推页面不会动） |
+| GET | `/api/watchdog/alerts` | 看门狗告警流水（最近 N 条，`?limit=` 默认 20）。告警只写文件、没人看板时就永远只有日志 |
+| POST | `/api/chat` | 跟大哥说一句话（body `{ text }`）。返回 **202** + `bossSessionId`，后续进展走 SSE `chat.*` 事件 |
+| POST | `/api/chat/answer` | 回答大哥抛出的问卷（body `{ requestId, answers }`）。返回 **202** |
+| GET | `/api/chat/history` | 大哥这段对话的完整记录（从运行时会话读回，刷新不丢） |
+| GET | `/api/chat/session` | 大哥会话的 id 与 agent 名（供宿主侧栏开**同一条**会话，见 §18 / §23） |
+| GET | `/api/chat/duty` | 值班交班轮次（按轮次分组） |
 
 ### 5.1 派工请求/响应
 
@@ -376,11 +388,22 @@ interface DomainGroup {
 
 ### 5.2 SSE 事件
 
+> **2026-10-28 补记**：事件表补齐。上一版只列了 `snapshot` / `update` / `dispatch` 三类，漏掉了 `patrol` 与 `permission`（它们当时只出现在 §5 表格 `/api/stream` 那一行的说明里），以及 §16 对话优先之后新增的 `chat.*` 六类与 §19 的 `duty`。现按 `server.mjs` 的 `broadcast()` 调用点逐条列出，共 **12 类**。另：`dispatch` 事件的字段名原写作 `phase`，实现里是 **`status`**（取值 `done` / `error`），一并订正。
+
 | event | data |
 | --- | --- |
-| `snapshot` | 完整 overview + inbox（连接时立即推送一次） |
+| `snapshot` | 完整 overview（连接时立即推送一次） |
 | `update` | 同上，运行时状态变更后推送 |
-| `dispatch` | `{ dispatchId, phase: 'running'\|'done'\|'error', text }` |
+| `dispatch` | `{ dispatchId, status: 'done'\|'error', delivered, text, error }` |
+| `patrol` | 巡检结果 `{ runAt, conclusion, dispatches, proposals, executed, findings, error }`；失败时 `{ error, findings: [] }` |
+| `permission` | `{ requestId, sessionId, toolName, reason }`——大哥要工具权限，等页面裁决 |
+| `chat.delta` | `{ text }`——大哥这句话的增量 |
+| `chat.message` | `{ text }`——一条消息落定 |
+| `chat.tool` | `{ name, phase: 'started'\|'finished', ok? }`——大哥此刻在动什么工具 |
+| `chat.question` | `{ requestId, mode, request }`——大哥抛出的问卷 |
+| `chat.done` | `{ status, text, error, request? }`——这一轮说完了 |
+| `chat.history` | `{ messages }`——对话记录有变化时重推（在宿主侧栏说的话不会动运行时修订号，只能靠它） |
+| `duty` | `{ rounds }`——值班又交班了 |
 
 ### 5.3 轮询与推送
 
@@ -393,6 +416,8 @@ Node 侧每 3 秒计算一次**廉价修订号**（`max(updated_at_ms)` + 各表
 | `dispatches.json` | 派工记录：id、项目、指令、大哥 sessionId、状态、时间 |
 | `acks.json` | 已确认的收件箱条目 id |
 | `boss-session.json` | 大哥会话 id（保持上下文连续） |
+
+> **2026-10-28 补记**：上表只列了最初三个文件，**实现里 `context.dataDir` 里实际落的东西更多**——`dismissed.json`（被排除的收件箱条目）、`patrol.json` / `patrol-config.json` / `patrol-answered.json`（巡检结论、配置与已答项）、`duty-intent.json`（值班意图，见 §27）、`managed-projects.json`（管辖名单，见 §22 / §24）、`watchdog-alert.log`（看门狗告警流水，JSONL）。这些文件全部由服务端写、客户端不碰，与上表「只写自己的 dataDir」这条硬约束不冲突。逐条依据：`miniapp/node/persistence.mjs` / `patrol-store.mjs` / `duty-intent.mjs` / `managed-projects.mjs` / `watchdog-alerts.mjs`。
 
 遵循 `security-and-state.md`：**先提交，再广播**。广播失败不回滚已提交状态；重连页面读当前快照即可恢复。
 
@@ -610,7 +635,17 @@ Node 侧每 3 秒计算一次**廉价修订号**（`max(updated_at_ms)` + 各表
 
 ## 12. 待确认
 
-- 无。四个关键决策（大哥权限边界 / 大哥载体 / 页面范围 / 视觉风格）已于 2026-10-20 确认。
+- 2026-10-20 当时无待确认：四个关键决策（大哥权限边界 / 大哥载体 / 页面范围 / 视觉风格）已于 2026-10-20 确认。
+
+> **2026-10-28 补记：这一节不再是形式上的「无」。** 四个关键决策确实已定，但**另有三件待决项散落在别处**，此前没被登记到这里。逐条列出，并标明各自现状——**这里只陈述事实，不替任何人做决定**：
+
+| # | 待决项 | 落在哪 | 现状 | 闭合它需要什么 |
+| --- | --- | --- | --- | --- |
+| 1 | 值班目标会话 `mvs_90f86d83…` 能不能被宿主的 `openSession` 打开进侧栏 | §19.7 | **待核**。判据的输入已备齐：`pluginId` / `purpose` / `origin_cron_id` 三项已查实并指向通过，但插件的 `rootSessionId` 不在 node 侧可读范围内（运行时库没有这个概念，`boss-session.json` 是看板自己的持久化），**「`root.rootSessionId !== sessionId`」这一道校验查不了** | 一次**真实宿主调用**：宿主侧 `openSession`，或在侧栏里点开值班会话看它进不进来。`openSession` 的实现不在插件源码里，不猜、不拍 |
+| 2 | Contra-Survivor 2056 额度墙背后的活（Task 8 / 9 / 10）是否重开 | §21.2 | **待大老板定**。大哥值班台账原话是「确实没做完，不是残骸——与已排除的假信号不同，**是否重开待大老板定**」；下一轮它把「待大老板定」读成了「由你定」才出的事（§21.2 记的就是那次越权） | 大老板一句明确的话。「待大老板定」与「由你定」是两个意思，**不由 agent 代读** |
+| 3 | 宿主自己的用户路径创建带预算 goal 时，**能不能传预算** | §26.2 | **证据等级不足，未查实**。2026-10-22 02:38 用户一句「持续迭代大哥，并让大哥管你」→ 建成的 goal `token_budget = null`。但那次用户**没表达预算**，证据只能到「那次没带预算」，**推不到「这条路径不接预算」** | 一次带明确预算的用户请求，或宿主侧该路径的实现依据 |
+
+三件事的共同点：**都不该由 agent 自行拍板**。第 1 件缺的是宿主能力的一次实测，第 2 件缺的是大老板的决定，第 3 件缺的是证据。三件都没闭合之前，相关章节里对应的结论都维持「待核 / 待定 / 未查实」的原样。
 
 ---
 
@@ -645,7 +680,9 @@ Mini App 定时检查（默认 15 分钟，且待决策项有变化才跑）
 
 ## 14. 独立审计发现与修复（2026-10-20）
 
-（见下文 §14）
+（见下文 §15.9）
+
+> **2026-10-28 补记：修正一处悬空的自引用。** 本节原写「（见下文 §14）」——指向自己，永远指不到东西。**审计发现与修复的实际内容在 §15.9**（表 B1 / I1–I7 / M1–M9，以及审计的独立佐证与它没能验证的部分）。本节只是标题，正文一律以 §15.9 为准。
 
 ---
 
@@ -1720,6 +1757,8 @@ Mimic Tear 卡片: managed=true  ownerSessionId=mvs_bf21987f…（就是大哥�
 
 测试 1 条（残留键既读不回来、写回去时也会被清掉）。全量 250 项全绿。
 
+> **2026-10-28 补记**：这里的「250 项」是 2026-10-20 当时的实测值，**历史记录，不改**。仓库当前的实测值是 **411 项**（`node --test` 的 TAP 输出：`tests 411 / pass 411 / fail 0`，2026-10-28 复测）。规格与计划文档里其他几处旧计数（250 / 251 / 279 / 386）已按同一口径一并订正。
+
 ## 25. 过期的问卷不是待办（2026-10-22）
 
 大哥接管 Mimic Tear 之后做的第一件事，是把 `health=blocked` 拆开看。拆出来的第一条原因是：
@@ -1761,6 +1800,8 @@ export function isUnresolvedQuestion(status) {
 `health` 还是 blocked 是对的——那条 paused goal 是真阻塞。**区别在于：现在这个 blocked 是真的，而不是被一张没人能点的卡撑出来的。**
 
 测试 1 条（过期卡不算未解决、不进收件箱；真待答卡照常阻塞）+ 夹具加一张过期卡 + 两处既有断言按新口径更新。全量 251 项全绿。
+
+> **2026-10-28 补记**：这里的「251 项」是 2026-10-22 当时的实测值，**历史记录，不改**。仓库当前实测 **411 项**（2026-10-28 复测）。
 
 ## 26. 带闸 goal 的创建能力：宿主有，但没有出口（2026-10-22）
 
@@ -1899,6 +1940,8 @@ node 侧**没有写 cron 状态的能力**（§26.2 的约束：运行时库只�
 | 已发布副本 `~/.minimax/plugins/mimic-tear` | **同步前落后 8 个文件**（含 10-22 02:52 那次「废键自愈」修复 `patrol-store.mjs`，一直没发布）→ 同步后与仓库**逐字节一致（0 处不一致）** |
 | 实机自检 | 写 `resting` → 已发布 watchdog 读到 `mode=resting` / `action=none` → 复位 `on-duty` |
 | 全量测试 | **271 项全绿**（251 既有 + 20 新增，四个新文件） |
+
+> **2026-10-28 补记**：上表的「271 项」是 2026-10-22 真机实测时的快照，**历史记录，不改**。仓库当前实测 **411 项**（2026-10-28 复测）。
 | 提交 | `3e5ae4a` 意图文件 / `d894889` 事实表与项目卡 / `00ff638` 写意图的路由 / `29752ca` watchdog 认歇着 |
 
 ## 28. 值班心跳：node 侧备选路径（2026-10-22 已实施）
