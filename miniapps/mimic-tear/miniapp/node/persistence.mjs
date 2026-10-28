@@ -1,5 +1,7 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+
+import { readJsonArray, updateJsonArray, writeJsonAtomic } from './json-ledger.mjs';
 
 /**
  * Durable state owned by the Mini App.
@@ -7,6 +9,11 @@ import { join } from 'node:path';
  * Everything lives under the Host-provided `dataDir`, never in the workspace package and
  * never in the runtime database. Files are written through a temporary file plus rename so
  * a crash mid-write cannot leave a half-written JSON document behind.
+ *
+ * The write discipline for the ledger files lives in `json-ledger.mjs` — one
+ * implementation, shared with the duty path (`patrol-store.mjs`), because
+ * `dispatches.json` has two writers in two processes and both do read-modify-write. See
+ * that module for what happens when they do not coordinate.
  */
 
 /**
@@ -31,16 +38,21 @@ export class Persistence {
 
   /** @returns {Promise<DispatchRecord[]>} */
   async listDispatches() {
-    return readJson(this.dispatchesPath, []);
+    return readJsonArray(this.dispatchesPath);
   }
 
-  /** @param {DispatchRecord} record */
+  /**
+   * Store one dispatch record, merging it into the ledger.
+   *
+   * @param {DispatchRecord} record
+   */
   async saveDispatch(record) {
-    const all = await this.listDispatches();
-    const index = all.findIndex((d) => d.id === record.id);
-    if (index === -1) all.push(record);
-    else all[index] = record;
-    await writeJson(this.dispatchesPath, all);
+    await updateJsonArray(this.dispatchesPath, (all) => {
+      const index = all.findIndex((d) => d.id === record.id);
+      if (index === -1) all.push(record);
+      else all[index] = record;
+      return all;
+    }, record.id);
     return record;
   }
 
@@ -55,15 +67,16 @@ export class Persistence {
 
   /** @returns {Promise<string[]>} */
   async listAcks() {
-    return readJson(this.acksPath, []);
+    return readJsonArray(this.acksPath);
   }
 
   /** @param {string} id */
   async addAck(id) {
-    const acks = await this.listAcks();
-    if (!acks.includes(id)) acks.push(id);
-    await writeJson(this.acksPath, acks);
-    return acks;
+    await updateJsonArray(this.acksPath, (all) => {
+      if (!all.includes(id)) all.push(id);
+      return all;
+    }, id);
+    return this.listAcks();
   }
 
   /**
@@ -77,7 +90,7 @@ export class Persistence {
    * @returns {Promise<DismissedRecord[]>}
    */
   async listDismissed() {
-    const value = await readJson(this.dismissedPath, []);
+    const value = await readJsonArray(this.dismissedPath);
     return Array.isArray(value) ? value : [];
   }
 
@@ -87,16 +100,17 @@ export class Persistence {
    * @returns {Promise<DismissedRecord[]>}
    */
   async addDismissed(id, reason) {
-    const dismissed = await this.listDismissed();
-    const existing = dismissed.find((entry) => entry.id === id);
-    if (existing) {
-      existing.reason = reason;
-      existing.at = Date.now();
-    } else {
-      dismissed.push({ id, reason, at: Date.now() });
-    }
-    await writeJson(this.dismissedPath, dismissed);
-    return dismissed;
+    await updateJsonArray(this.dismissedPath, (all) => {
+      const existing = all.find((entry) => entry.id === id);
+      if (existing) {
+        existing.reason = reason;
+        existing.at = Date.now();
+      } else {
+        all.push({ id, reason, at: Date.now() });
+      }
+      return all;
+    }, id);
+    return this.listDismissed();
   }
 
   /**
@@ -120,7 +134,7 @@ export class Persistence {
    * @param {{ sessionId: string, agent: string }} session
    */
   async setBossSession(session) {
-    await writeJson(this.bossSessionPath, session);
+    await writeJsonAtomic(this.bossSessionPath, session);
     return session;
   }
 }
@@ -130,21 +144,14 @@ async function readJson(path, fallback) {
     const raw = await readFile(path, 'utf8');
     if (!raw.trim()) return fallback;
     return JSON.parse(raw);
-  } catch {
-    return fallback;
+  } catch (error) {
+    // A missing file is normal — nothing has been written yet. A file that exists but
+    // cannot be parsed is NOT: the state is damaged, and reporting it as "nothing here"
+    // is how a dispatch record that exists on disk silently reads back as missing —
+    // which breaks the board's idempotency, because the same instruction would then be
+    // delivered twice. So a damaged file is an error, not an empty list.
+    if (error?.code === 'ENOENT') return fallback;
+    throw new Error(`读不了 ${path}：${error?.message ?? String(error)}（文件已损坏，不要当成「没有记录」）`);
   }
 }
 
-async function writeJson(path, value) {
-  await mkdir(dirname(path), { recursive: true });
-  const temporary = `${path}.tmp`;
-  await writeFile(temporary, JSON.stringify(value, null, 2), 'utf8');
-  await rename(temporary, path);
-}
-
-function dirname(path) {
-  const index = path.lastIndexOf('\\') > path.lastIndexOf('/')
-    ? path.lastIndexOf('\\')
-    : path.lastIndexOf('/');
-  return index <= 0 ? path.slice(0, 2) : path.slice(0, index);
-}

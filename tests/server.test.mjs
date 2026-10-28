@@ -2,12 +2,20 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { fileURLToPath } from 'node:url';
 
 import { createApp, createRuntimePoller, POLL_INTERVAL_MS } from '../miniapps/mimic-tear/miniapp/node/server.mjs';
 import { RuntimeStore } from '../miniapps/mimic-tear/miniapp/node/runtime-store.mjs';
+import { Persistence } from '../miniapps/mimic-tear/miniapp/node/persistence.mjs';
+import { PatrolStore } from '../miniapps/mimic-tear/miniapp/node/patrol-store.mjs';
+import { ProjectService } from '../miniapps/mimic-tear/miniapp/node/project-service.mjs';
 import { tmpDir, cleanupDir, makeRuntimeDb } from './helpers/fixture.mjs';
+
+const CLIENT_DIR = fileURLToPath(new URL('../miniapps/mimic-tear/miniapp/client', import.meta.url));
+const CLIENT_APP = join(CLIENT_DIR, 'assets', 'app.js');
 
 const OVERVIEW = {
   generatedAt: 1,
@@ -637,4 +645,332 @@ test('运行时轮询', async (t) => {
       cleanupDir(dir);
     }
   });
+});
+
+/* --------------------------------------------------------- 响应字段契约 */
+
+/**
+ * 高风险端点的字段契约。
+ *
+ * 服务端改了字段名，页面不会报错——`overview.kpi` 变成 `overview.metrics`，KPI 那一块
+ * 就不动了，页面上什么错都没有，看板上只是一片空白。所以这里对着**真的**领域服务打
+ * 一遍接口，逐个字段核对客户端还在读的那些名字。
+ *
+ * - `fields`：服务端返回的 JSON 里必须有的字段（点号路径）。改名了就是契约破了。
+ * - `items`：要逐项核对的数组在返回值的哪个位置（`null` 表示返回值本身就是那一项）。
+ * - `itemFields`：数组里第一项必须有的字段。
+ * - `clientFields`：客户端源码里必须还在读的名字。客户端改了读法，这里会响。
+ */
+const PAYLOAD_CONTRACT = [
+  {
+    endpoint: 'GET /api/overview',
+    path: '/api/overview',
+    fields: [
+      'generatedAt', 'kpi', 'kpi.projects', 'kpi.active', 'kpi.pendingDecisions', 'kpi.errors',
+      'projects', 'attention', 'internalProjectCount', 'dataWarning', 'duty',
+    ],
+    clientFields: ['kpi', 'projects', 'attention', 'internalProjectCount', 'dataWarning', 'duty'],
+  },
+  {
+    endpoint: 'GET /api/inbox',
+    path: '/api/inbox',
+    fields: ['items'],
+    items: 'items',
+    itemFields: [
+      'id', 'kind', 'severity', 'projectId', 'projectName', 'sessionId', 'sessionTitle',
+      'title', 'body', 'createdAt', 'ageMinutes', 'acknowledged', 'handledBy', 'handledReason',
+    ],
+    itemKind: 'questionnaire',
+    kindFields: ['requestId', 'stepIds', 'options', 'recommendation'],
+    clientFields: [
+      'items', 'id', 'kind', 'severity', 'projectId', 'projectName', 'sessionId', 'body',
+      'acknowledged', 'handledBy', 'handledReason', 'recommendation',
+    ],
+  },
+  {
+    endpoint: 'GET /api/projects',
+    path: '/api/projects',
+    fields: ['projects'],
+    items: 'projects',
+    itemFields: [
+      'id', 'name', 'path', 'health', 'sessionCount', 'pendingQuestions', 'lastActivityAt',
+      'activeSessions', 'erroredSessions', 'goals', 'planTasks', 'planUpdatedAt',
+    ],
+    clientFields: [
+      'projects', 'id', 'name', 'path', 'health', 'sessionCount', 'pendingQuestions',
+      'lastActivityAt', 'goals',
+    ],
+  },
+  {
+    endpoint: 'GET /api/projects/:id',
+    path: '/api/projects/1',
+    fields: ['project', 'orgTree', 'goals', 'questions', 'tasks', 'plan', 'duty'],
+    items: null,
+    itemFields: [
+      'project.id', 'project.name', 'project.path', 'project.health', 'project.sessionCount',
+      'project.pendingQuestions', 'project.erroredSessions', 'project.planUpdatedAt',
+    ],
+    clientFields: ['project', 'orgTree', 'goals', 'questions', 'plan'],
+  },
+  {
+    endpoint: 'GET /api/skills',
+    path: '/api/skills',
+    fields: ['groups', 'unmapped', 'total', 'failures'],
+    clientFields: ['groups', 'unmapped', 'total', 'failures', 'key', 'label'],
+  },
+  {
+    endpoint: 'GET /api/skill-library',
+    path: '/api/skill-library',
+    fields: [
+      'entries', 'stats', 'stats.total', 'stats.active', 'stats.stale', 'stats.retired',
+      'stats.candidates', 'domains', 'dispatchable', 'stale', 'retired', 'updatedAt',
+    ],
+    clientFields: ['entries', 'stats', 'skillName', 'status', 'domain', 'triggers'],
+  },
+  {
+    endpoint: 'GET /api/watchdog/alerts',
+    path: '/api/watchdog/alerts',
+    fields: ['alerts'],
+    items: 'alerts',
+    itemFields: ['at', 'action', 'title', 'body', 'delivered', 'error', 'note'],
+    clientFields: ['alerts', 'action', 'at', 'title', 'body', 'delivered', 'error', 'note'],
+  },
+  {
+    endpoint: 'GET /api/chat/duty',
+    path: '/api/chat/duty',
+    fields: ['rounds'],
+    clientFields: ['rounds'],
+  },
+  {
+    endpoint: 'GET /api/chat/history',
+    path: '/api/chat/history',
+    fields: ['messages'],
+    items: 'messages',
+    itemFields: ['id', 'role', 'text', 'source', 'createdAt'],
+    clientFields: ['messages', 'role', 'text', 'source'],
+  },
+  {
+    endpoint: 'GET /api/chat/session',
+    path: '/api/chat/session',
+    fields: ['bossSessionId', 'agent'],
+    clientFields: ['bossSessionId'],
+  },
+  {
+    endpoint: 'GET /api/patrol',
+    path: '/api/patrol',
+    fields: ['config', 'findings', 'config.enabled', 'config.intervalMinutes'],
+    clientFields: ['config', 'findings', 'enabled'],
+  },
+  {
+    endpoint: 'POST /api/dispatch',
+    path: '/api/dispatch',
+    method: 'POST',
+    body: { projectId: 1, instruction: '把登录页做完备', idempotencyKey: 'k-contract-1' },
+    fields: ['dispatchId', 'status', 'duplicate'],
+    clientFields: ['dispatchId', 'status'],
+  },
+  {
+    endpoint: 'GET /api/dispatch/:id',
+    // 记录是服务端自己写的：这里先真的派一次工，再把记录读回来核对。
+    path: '/api/dispatch/dsp-contract-1',
+    prepare: async (port) => {
+      const response = await post(port, '/api/dispatch', {
+        projectId: 1, instruction: '把登录页做完备', idempotencyKey: 'k-contract-2',
+      });
+      const payload = await response.json();
+      const path = `/api/dispatch/${payload.dispatchId}`;
+      // 后台投递是异步的：等它真的落定再读记录，读到的才是最终的形状。
+      for (let attempt = 0; attempt < 50; attempt += 1) {
+        const record = await (await get(port, path)).json();
+        if (record.status === 'done' || record.status === 'error') break;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      return path;
+    },
+    fields: ['id', 'status', 'text', 'error', 'projectId', 'instruction'],
+    items: null,
+    itemFields: ['id', 'status', 'text', 'error'],
+    clientFields: ['id', 'status', 'text', 'error'],
+  },
+];
+
+/**
+ * 一个真的服务端：真的领域服务、真的运行时库、真的 HTTP 栈。
+ *
+ * 字段契约必须对着**真的**返回值核对：用假的 service 的话，返回什么由测试自己说了算，
+ * 改了字段名测试还是绿的——那等于没测。
+ *
+ * @returns {Promise<{ port: number, close: () => Promise<void> }>}
+ */
+async function startContractServer() {
+  const dir = tmpDir('mimic-contract-');
+  const dataDir = join(dir, 'data');
+  mkdirSync(dataDir, { recursive: true });
+
+  const dbPath = makeRuntimeDb(dir);
+  const store = RuntimeStore.open(dbPath);
+  const persistence = new Persistence(dataDir);
+  const patrol = new PatrolStore(dataDir);
+
+  // 大哥的会话：对话记录那条路要真有东西可读。
+  await persistence.setBossSession({ sessionId: 'sess-alpha-lead', agent: 'boss' });
+  // 一条看门狗告警：告警流水那条路要真有东西可读。
+  writeFileSync(
+    join(dataDir, 'watchdog-alert.log'),
+    `${JSON.stringify({
+      at: 1_700_000_000_000,
+      action: 'stale',
+      title: '仿身泪滴 · 大哥掉线',
+      body: '已 35 分钟没有交班',
+      delivered: true,
+      error: null,
+      note: null,
+      gapTo: null,
+    })}\n`,
+    'utf8',
+  );
+
+  const service = new ProjectService({
+    store,
+    readPlan: async () => null,
+    skills: { skills: [], failures: [] },
+    domains: [],
+    persistence,
+    patrol,
+    boss: {
+      async dispatch() {
+        return {
+          bossSessionId: 'sess-alpha-lead',
+          status: 'finished',
+          text: '已投递',
+          error: null,
+          delivered: true,
+        };
+      },
+      async patrol() {
+        return {
+          bossSessionId: 'sess-alpha-lead',
+          status: 'finished',
+          text: '巡检结论',
+          error: null,
+        };
+      },
+    },
+  });
+
+  const app = createApp({ service, clientDir: CLIENT_DIR, persistence });
+  const server = createServer((request, response) => {
+    void app.handler(request, response);
+  });
+  const sockets = new Set();
+  server.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+
+  return {
+    port,
+    async close() {
+      for (const stream of app.streams) stream.end();
+      for (const socket of sockets) socket.destroy();
+      await new Promise((resolve) => server.close(resolve));
+      store.close();
+      cleanupDir(dir);
+    },
+  };
+}
+
+/**
+ * 返回值里有没有这个字段（点号路径）。
+ *
+ * @param {any} value
+ * @param {string} path
+ * @returns {boolean}
+ */
+function hasField(value, path) {
+  let cursor = value;
+  for (const part of path.split('.')) {
+    if (cursor === null || typeof cursor !== 'object') return false;
+    if (!Object.hasOwn(cursor, part)) return false;
+    cursor = cursor[part];
+  }
+  return true;
+}
+
+/**
+ * 客户端还在读这个字段吗？
+ *
+ * 按名字找的，所以它的粒度是「这个字段名在客户端里还出现过」：客户端整体改了这个
+ * 字段名会响，但只改了一处、另一处还留着旧名字时不会响。真正兜住「改名」的是服务端
+ * 那一半——服务端改了字段名，返回值里就没有它了，测试立刻响。
+ *
+ * @param {string} source app.js 的全文
+ * @param {string} field 字段名
+ * @returns {boolean}
+ */
+function clientReadsField(source, field) {
+  const escaped = field.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`\\??\\.${escaped}\\b`).test(source);
+}
+
+test('响应字段契约：服务端返回的字段名要和客户端读的一致', async (t) => {
+  const clientSource = await readFile(CLIENT_APP, 'utf8');
+  const server = await startContractServer();
+  try {
+    for (const entry of PAYLOAD_CONTRACT) {
+      await t.test(entry.endpoint, async () => {
+        const path = entry.prepare ? await entry.prepare(server.port) : entry.path;
+        const response = entry.method === 'POST'
+          ? await post(server.port, path, entry.body ?? {})
+          : await get(server.port, path);
+        assert.equal(
+          response.status,
+          entry.method === 'POST' ? 202 : 200,
+          `${entry.endpoint} 返回了 ${response.status}`,
+        );
+        const payload = await response.json();
+
+        for (const field of entry.fields ?? []) {
+          assert.ok(
+            hasField(payload, field),
+            `${entry.endpoint} 的返回值里没有 ${field} 字段——客户端读不到它，页面会静悄悄地空掉`,
+          );
+        }
+
+        if (entry.itemFields) {
+          const items = entry.items === null ? [payload] : (payload[entry.items] ?? []);
+          assert.ok(items.length > 0, `${entry.endpoint} 没有可核对的条目，字段契约没被验证`);
+          for (const field of entry.itemFields) {
+            assert.ok(
+              hasField(items[0], field),
+              `${entry.endpoint} 的条目里没有 ${field} 字段——客户端读不到它`,
+            );
+          }
+        }
+
+        if (entry.kindFields) {
+          const items = payload[entry.items] ?? [];
+          const item = items.find((candidate) => candidate.kind === entry.itemKind);
+          assert.ok(item, `${entry.endpoint} 里没有一条 ${entry.itemKind} 条目，字段契约没被验证`);
+          for (const field of entry.kindFields) {
+            assert.ok(
+              hasField(item, field),
+              `${entry.endpoint} 的 ${entry.itemKind} 条目里没有 ${field} 字段——客户端读不到它`,
+            );
+          }
+        }
+
+        for (const field of entry.clientFields ?? []) {
+          assert.ok(
+            clientReadsField(clientSource, field),
+            `客户端不再读 ${field} 字段了（${entry.endpoint}）——要么改契约，要么改回客户端`,
+          );
+        }
+      });
+    }
+  } finally {
+    await server.close();
+  }
 });
