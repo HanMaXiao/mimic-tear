@@ -1,0 +1,497 @@
+/*
+ * 看板的外壳：侧栏、开关、顶栏与值班灯。
+ *
+ * 由原 styles.css 按章节切出，规则本身逐字未改。
+ */
+
+/* ---------- shell ---------- */
+
+.app-shell {
+  display: grid;
+  grid-template-columns: var(--shell-rail) minmax(0, 1fr);
+  /* The row is bounded, so the body can never grow past the window: the conversation's
+     composer stays on screen instead of being pushed off the bottom. */
+  grid-template-rows: minmax(0, 1fr);
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+.app-body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* ---------- rail ---------- */
+
+.app-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 18px 16px 16px;
+  border-right: 1px solid var(--mcode-border);
+  background: var(--mcode-bg-secondary);
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.app-sidebar__brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 4px 20px;
+  color: var(--mcode-text);
+  text-decoration: none;
+}
+
+.brand__seal {
+  position: relative;
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--mcode-border-strong);
+  border-radius: 10px;
+  background: var(--mcode-surface);
+  color: var(--mcode-lamp);
+  transition: border-color 180ms var(--ease-out), color 180ms var(--ease-out);
+}
+
+/* The seal is drawn twice: an outer plate and a hairline inset, like a stamped mark. */
+.brand__seal::after {
+  content: '';
+  position: absolute;
+  inset: 4px;
+  border: 1px solid var(--mcode-rule);
+  border-radius: 6px;
+  pointer-events: none;
+}
+
+.app-sidebar__brand:hover .brand__seal {
+  border-color: var(--mcode-lamp);
+}
+
+.app-sidebar__names {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.app-sidebar__latin {
+  font-family: var(--mcode-console);
+  font-size: 8.5px;
+  line-height: 12px;
+  letter-spacing: 0.24em;
+  color: var(--mcode-text-subtle);
+}
+
+.app-sidebar__name {
+  margin: 0;
+  line-height: 23px;
+}
+
+.app-sidebar__role {
+  margin-top: 1px;
+  color: var(--mcode-text-muted);
+  font-size: 10.5px;
+  line-height: 15px;
+  letter-spacing: 0.04em;
+}
+
+.app-sidebar__nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.app-sidebar__nav a {
+  position: relative;
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  grid-template-areas:
+    'index label badge'
+    'index latin badge';
+  align-items: center;
+  column-gap: 8px;
+  padding: 8px 10px 8px 8px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  color: var(--mcode-text-muted);
+  text-decoration: none;
+  transition: background-color 150ms var(--ease-out), color 150ms var(--ease-out),
+    border-color 150ms var(--ease-out);
+}
+
+.nav__index {
+  grid-area: index;
+  font-family: var(--mcode-console);
+  font-size: 9.5px;
+  line-height: 14px;
+  letter-spacing: 0.1em;
+  color: var(--mcode-text-subtle);
+  font-variant-numeric: tabular-nums;
+  transition: color 150ms var(--ease-out);
+}
+
+.nav__label {
+  grid-area: label;
+  font-size: 13.5px;
+  line-height: 20px;
+}
+
+.nav__latin {
+  grid-area: latin;
+  font-family: var(--mcode-console);
+  font-size: 8px;
+  line-height: 11px;
+  letter-spacing: 0.2em;
+  color: var(--mcode-text-subtle);
+}
+
+/* The active slot is marked twice: a plate and a tick on its edge. */
+.app-sidebar__nav a::before {
+  content: '';
+  position: absolute;
+  left: -1px;
+  top: 50%;
+  width: 2px;
+  height: 0;
+  border-radius: 0 2px 2px 0;
+  background: var(--mcode-accent);
+  transform: translateY(-50%);
+  transition: height 180ms var(--ease-out);
+}
+
+.app-sidebar__nav a:hover {
+  background: var(--mcode-surface-muted);
+  color: var(--mcode-text);
+}
+
+.app-sidebar__nav a[aria-current='page'] {
+  background: var(--mcode-surface);
+  border-color: var(--mcode-border);
+  color: var(--mcode-text);
+}
+
+.app-sidebar__nav a[aria-current='page']::before {
+  height: 22px;
+}
+
+.app-sidebar__nav a[aria-current='page'] .nav__index {
+  color: var(--mcode-accent);
+}
+
+.app-sidebar__nav a[aria-current='page'] .nav__latin {
+  color: var(--mcode-accent);
+}
+
+.app-sidebar__foot {
+  margin-top: auto;
+  padding: 16px 4px 2px;
+  border-top: 1px solid var(--mcode-border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* ---------- switch ---------- */
+
+.switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--mcode-text-muted);
+  font-size: 12.5px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.switch input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.switch__track {
+  position: relative;
+  flex: none;
+  width: 32px;
+  height: 18px;
+  border: 1px solid var(--mcode-border-strong);
+  border-radius: 999px;
+  background: var(--mcode-surface-muted);
+  transition: background-color 170ms var(--ease-out), border-color 170ms var(--ease-out);
+}
+
+.switch__knob {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--mcode-surface);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 22%);
+  transition: transform 170ms var(--ease-out);
+}
+
+.switch input:checked + .switch__track {
+  background: var(--mcode-accent);
+  border-color: var(--mcode-accent);
+}
+
+.switch input:checked + .switch__track .switch__knob {
+  transform: translateX(14px);
+}
+
+.switch input:focus-visible + .switch__track {
+  outline: 2px solid var(--mcode-accent);
+  outline-offset: 2px;
+}
+
+/* ---------- top bar ---------- */
+
+.app-header {
+  flex: none;
+  border-bottom: 1px solid var(--mcode-border);
+  background: var(--mcode-bg);
+}
+
+.app-header__inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  max-width: var(--shell-max);
+  margin: 0 auto;
+  padding: 14px 32px;
+}
+
+.app-header__title {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  min-width: 0;
+}
+
+.app-header__name {
+  font-size: 17px;
+  line-height: 24px;
+  letter-spacing: 0.02em;
+}
+
+/* A tick in front of the section name: the header states the slot, not a floating label. */
+.app-header__name::before {
+  content: '';
+  display: inline-block;
+  width: 2px;
+  height: 13px;
+  margin-right: 11px;
+  border-radius: 1px;
+  background: var(--mcode-accent);
+  transform: translateY(1px);
+}
+
+.app-header__context {
+  color: var(--mcode-text-subtle);
+  font-size: 12px;
+  line-height: 18px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-header__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ---------- the duty lamp ---------- */
+
+/*
+ * The mark and the lamp are the same drop. The rail's is the name; this one is the pulse —
+ * it fills while the boss is on duty and stays low when nobody is watching.
+ *
+ * The lamp follows the duty facts only. The 「大哥在岗」 switch is not its input: that
+ * switch gates the board's own patrol loop, while the duty handover stamp is written by
+ * the duty cron alone and keeps moving whether the switch is on or off.
+ */
+.drop {
+  flex: none;
+  color: var(--mcode-text-muted);
+}
+
+.drop__shape {
+  fill: none;
+  stroke: currentColor;
+}
+
+.drop__fill {
+  fill: currentColor;
+  stroke: none;
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  transform: scaleY(0.3);
+  transition: transform 520ms var(--ease-out), opacity 240ms var(--ease-out);
+}
+
+.drop--mark .drop__fill {
+  opacity: 0.14;
+  transform: scaleY(1);
+}
+
+.duty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 4px 12px 4px 9px;
+  border: 1px solid var(--mcode-border);
+  border-radius: 999px;
+  background: var(--mcode-surface);
+  transition: border-color 220ms var(--ease-out), background-color 220ms var(--ease-out);
+}
+
+.duty__text {
+  color: var(--mcode-text-muted);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+[data-duty='live'] .duty {
+  border-color: color-mix(in srgb, var(--mcode-lamp) 55%, var(--mcode-border));
+  background: var(--mcode-lamp-soft);
+}
+
+[data-duty='live'] .duty__text {
+  color: var(--mcode-text);
+}
+
+[data-duty='live'] .drop--lamp {
+  color: var(--mcode-lamp);
+}
+
+[data-duty='live'] .drop--lamp .drop__fill {
+  opacity: 1;
+  transform: scaleY(1);
+  animation: lamp-breathe 4.6s ease-in-out infinite;
+}
+
+/* Resting is a decision, not a fault: the lamp dims and stays still. It must not
+   flicker amber — that flicker means "somebody is watching and there is trouble". */
+[data-duty='resting'] .drop--lamp {
+  color: var(--mcode-text-subtle);
+}
+
+[data-duty='resting'] .drop--lamp .drop__fill {
+  opacity: 1;
+  transform: scaleY(0.34);
+}
+
+[data-duty='resting'] .duty__text {
+  color: var(--mcode-text-subtle);
+}
+
+[data-duty='stale'] .duty {
+  border-color: color-mix(in srgb, var(--mcode-warning) 48%, var(--mcode-border));
+}
+
+[data-duty='stale'] .drop--lamp {
+  color: var(--mcode-warning);
+}
+
+[data-duty='stale'] .drop--lamp .drop__fill {
+  opacity: 1;
+  transform: scaleY(0.34);
+  animation: lamp-flicker 2.6s ease-in-out infinite;
+}
+
+[data-duty='stale'] .duty__text {
+  color: var(--mcode-warning);
+}
+
+@keyframes lamp-breathe {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+
+  50% {
+    opacity: 0.72;
+    transform: scaleY(0.9);
+  }
+}
+
+@keyframes lamp-flicker {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.3;
+  }
+}
+
+/* ---------- status ---------- */
+
+.app-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--mcode-text-subtle);
+  font-family: var(--mcode-console);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+}
+
+.app-status::before {
+  content: '';
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--mcode-text-subtle);
+}
+
+.app-status[data-state='live'] {
+  color: var(--mcode-success);
+}
+
+.app-status[data-state='live']::before {
+  background: var(--mcode-success);
+}
+
+.app-status[data-state='error'] {
+  color: var(--mcode-danger);
+}
+
+.app-status[data-state='error']::before {
+  background: var(--mcode-danger);
+}
+
+.badge {
+  grid-area: badge;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--mcode-danger);
+  color: #ffffff;
+  font-family: var(--mcode-console);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}

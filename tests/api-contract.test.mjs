@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { API_ROUTES, ROUTES } from '../miniapps/mimic-tear/miniapp/node/api-routes.mjs';
+import { readClientSource } from './helpers/client-source.mjs';
 
 /**
  * 跨层 API 契约测试。
@@ -17,10 +18,14 @@ import { API_ROUTES, ROUTES } from '../miniapps/mimic-tear/miniapp/node/api-rout
  *
  * **路由清单是从路由注册表里读出来的**，不是在测试里另抄一份：加一条路由时测试会
  * 自己发现，不用记得回来改这张表。
+ *
+ * **客户端是整棵树读进来的**，不是只读一个文件：客户端已经拆成原生 ES 模块，API
+ * 端点表住在 `assets/shared/api.js` 里，只读 `assets/app.js` 会读到一张空表——
+ * 那种测试不会失败，只会检查不到任何东西。
  */
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
-const CLIENT_APP = join(REPO_ROOT, 'miniapps', 'mimic-tear', 'miniapp', 'client', 'assets', 'app.js');
+const CLIENT_DIR = join(REPO_ROOT, 'miniapps', 'mimic-tear', 'miniapp', 'client');
 const SPEC = join(REPO_ROOT, 'docs', 'specs', '2026-10-20-mimic-tear-design.md');
 
 /**
@@ -291,14 +296,14 @@ function stripComments(source) {
 /**
  * 读客户端的 API 端点表。
  *
- * @param {string} source app.js 的全文
+ * @param {string} source 客户端全部模块的源码
  * @returns {Array<{ key: string, path: string, params: string[] }>}
  */
 function parseClientEndpoints(source) {
   const marker = source.indexOf('const API =');
-  assert.notEqual(marker, -1, 'app.js 里找不到 API 端点表（const API = { … }）');
+  assert.notEqual(marker, -1, '客户端里找不到 API 端点表（const API = { … }）');
   const openIndex = source.indexOf('{', marker);
-  assert.notEqual(openIndex, -1, 'app.js 的 API 端点表没有大括号');
+  assert.notEqual(openIndex, -1, '客户端的 API 端点表没有大括号');
   const block = stripComments(readBlock(source, openIndex));
 
   const endpoints = [];
@@ -374,7 +379,7 @@ function parseSpecSseEvents(markdown) {
 /* ---------------------------------------------------------------------- 测试 */
 
 test('api-contract', async (t) => {
-  const clientSource = await readFile(CLIENT_APP, 'utf8');
+  const clientSource = await readClientSource(CLIENT_DIR);
   const specSource = await readFile(SPEC, 'utf8');
 
   // 三方的原始清单。

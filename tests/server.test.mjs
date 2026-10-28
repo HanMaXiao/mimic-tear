@@ -13,9 +13,9 @@ import { Persistence } from '../miniapps/mimic-tear/miniapp/node/persistence.mjs
 import { PatrolStore } from '../miniapps/mimic-tear/miniapp/node/patrol-store.mjs';
 import { ProjectService } from '../miniapps/mimic-tear/miniapp/node/project-service.mjs';
 import { tmpDir, cleanupDir, makeRuntimeDb } from './helpers/fixture.mjs';
+import { readClientSource } from './helpers/client-source.mjs';
 
 const CLIENT_DIR = fileURLToPath(new URL('../miniapps/mimic-tear/miniapp/client', import.meta.url));
-const CLIENT_APP = join(CLIENT_DIR, 'assets', 'app.js');
 
 const OVERVIEW = {
   generatedAt: 1,
@@ -906,7 +906,7 @@ function hasField(value, path) {
  * 字段名会响，但只改了一处、另一处还留着旧名字时不会响。真正兜住「改名」的是服务端
  * 那一半——服务端改了字段名，返回值里就没有它了，测试立刻响。
  *
- * @param {string} source app.js 的全文
+ * @param {string} source 客户端全部模块的源码
  * @param {string} field 字段名
  * @returns {boolean}
  */
@@ -916,7 +916,7 @@ function clientReadsField(source, field) {
 }
 
 test('响应字段契约：服务端返回的字段名要和客户端读的一致', async (t) => {
-  const clientSource = await readFile(CLIENT_APP, 'utf8');
+  const clientSource = await readClientSource(CLIENT_DIR);
   const server = await startContractServer();
   try {
     for (const entry of PAYLOAD_CONTRACT) {

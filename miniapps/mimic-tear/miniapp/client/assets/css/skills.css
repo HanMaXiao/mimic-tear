@@ -1,0 +1,184 @@
+/*
+ * 能力库：领域索引与技能行。
+ *
+ * 由原 styles.css 按章节切出，规则本身逐字未改。
+ */
+
+/* ---------- skills ---------- */
+
+.skills-layout {
+  display: grid;
+  grid-template-columns: 236px minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.skills-index {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 12px;
+  border: 1px solid var(--mcode-border);
+  border-radius: var(--radius-card);
+  background: var(--mcode-surface);
+}
+
+.skills-index__label {
+  padding: 0 8px;
+  font-family: var(--mcode-console);
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  color: var(--mcode-text-subtle);
+}
+
+.domain-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.domain-nav button {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--mcode-text-muted);
+  text-align: left;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: background-color 140ms var(--ease-out), color 140ms var(--ease-out);
+}
+
+.domain-nav button::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 2px;
+  height: 0;
+  border-radius: 0 2px 2px 0;
+  background: var(--mcode-accent);
+  transform: translateY(-50%);
+  transition: height 160ms var(--ease-out);
+}
+
+.domain-nav button:hover {
+  background: var(--mcode-surface-muted);
+  color: var(--mcode-text);
+}
+
+.domain-nav button[aria-pressed='true'] {
+  background: var(--mcode-surface-muted);
+  color: var(--mcode-text);
+  font-weight: 500;
+}
+
+.domain-nav button[aria-pressed='true']::before {
+  height: 16px;
+}
+
+.domain-nav .count {
+  margin-left: auto;
+  color: var(--mcode-text-subtle);
+  font-family: var(--mcode-console);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+#skill-list {
+  counter-reset: skill;
+}
+
+.skill-row {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 13px 20px 13px 52px;
+  border-top: 1px solid var(--mcode-rule);
+}
+
+.skill-row:first-child {
+  border-top: 0;
+}
+
+.skill-row::before {
+  position: absolute;
+  left: 20px;
+  top: 14px;
+  font-family: var(--mcode-console);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  color: var(--mcode-text-subtle);
+  opacity: 0.8;
+}
+
+#skill-list .skill-row::before {
+  counter-increment: skill;
+  content: counter(skill, decimal-leading-zero);
+}
+
+#skill-library-list .skill-row::before {
+  counter-increment: entry;
+  content: counter(entry, decimal-leading-zero);
+}
+
+.skill-row__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  width: 100%;
+}
+
+.skill-row__tags {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.skill-row__name {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  font-family: var(--mcode-console);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.skill-row__desc {
+  width: 100%;
+  overflow-wrap: anywhere;
+  color: var(--mcode-text-muted);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.skill-row .item__meta {
+  width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.panel--paper .skill-row__name {
+  color: var(--mcode-paper-ink);
+}
+
+.panel--paper .skill-row__desc {
+  color: var(--mcode-paper-muted);
+}
+
+.panel--paper .skill-row {
+  border-top-color: var(--mcode-paper-border);
+}
+
+.panel--paper .skill-row::before {
+  color: var(--mcode-paper-muted);
+}

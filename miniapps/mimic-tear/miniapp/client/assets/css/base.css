@@ -1,0 +1,450 @@
+/*
+ * 把设计变量、重置、版面骨架与通用小件放在一起：所有视图共用的底子。
+ *
+ * 由原 styles.css 按章节切出，规则本身逐字未改。
+ */
+
+/*
+ * Mimic Tear — 值夜台 / NIGHT DESK.
+ *
+ * The board is the standing post of an agent that supervises other agents. The visual
+ * system has two registers, deliberately kept apart:
+ *
+ * - the CONSOLE (rail, top bar, metrics, ledger, tree) is machine chrome: ink grounds,
+ *   hairline rules, condensed signage, tabular figures. Nothing decorative competes here.
+ * - the DOSSIER (the boss's handover reports, the decisions on your desk, the dispatch
+ *   slip) is paper: a warmer ground, a severity edge, and a serif face for the prose,
+ *   because a report is a document and a document does not read like a dashboard row.
+ *
+ * One signal colour — the duty lamp — says whether anyone is watching. Semantic colour is
+ * spent only on state. No decoration, no emoji, no remote assets, no gradients.
+ */
+
+:root {
+  --shell-rail: 252px;
+  --shell-max: 1320px;
+
+  /* Type: the console speaks in DIN-like signage, the documents in 宋体. */
+  --mcode-console: 'Bahnschrift SemiCondensed', 'Bahnschrift', 'DIN Alternate', 'Arial Narrow',
+    'Segoe UI Variable Display', system-ui, sans-serif;
+  --mcode-ui: 'Microsoft YaHei UI', 'PingFang SC', 'Source Han Sans SC', 'Noto Sans CJK SC',
+    'Hiragino Sans GB', system-ui, sans-serif;
+  --mcode-document: 'Songti SC', 'STSong', 'FangSong', 'STFangsong', 'SimSun', serif;
+  --mcode-mono: 'Cascadia Mono', 'JetBrains Mono', ui-monospace, SFMono-Regular, Consolas, monospace;
+
+  --radius-card: 12px;
+  --radius-control: 8px;
+  --ease-out: cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+:root,
+[data-theme='light'] {
+  --mcode-bg: #f0eee8;
+  --mcode-bg-secondary: #e8e5de;
+  --mcode-surface: #fbfaf7;
+  --mcode-surface-muted: #f4f2ec;
+  --mcode-text: #14181c;
+  --mcode-text-muted: #565f68;
+  --mcode-text-subtle: #858d95;
+  --mcode-border: #dad6cc;
+  --mcode-border-strong: #b4afa3;
+  --mcode-accent: #2c5f88;
+  --mcode-accent-soft: #e3ebf1;
+  --mcode-success: #2f7a56;
+  --mcode-warning: #9a5f16;
+  --mcode-danger: #a94334;
+  --mcode-primary-action-bg: #14181c;
+  --mcode-primary-action-text: #fbfaf7;
+  --mcode-shadow: 0 1px 2px rgb(20 24 28 / 6%), 0 18px 40px rgb(20 24 28 / 10%);
+  --mcode-paper: #f7f2e6;
+  --mcode-paper-border: #e1d9c5;
+  --mcode-paper-ink: #1f2429;
+  --mcode-paper-muted: #6c6555;
+  --mcode-lamp: #a9752a;
+  --mcode-lamp-soft: #f1e4c6;
+  --mcode-rule: #e5e1d8;
+  color-scheme: light;
+}
+
+[data-theme='dark'] {
+  --mcode-bg: #0a0d10;
+  --mcode-bg-secondary: #0d1115;
+  --mcode-surface: #11161b;
+  --mcode-surface-muted: #161d23;
+  --mcode-text: #e8ecef;
+  --mcode-text-muted: #9aa4ae;
+  --mcode-text-subtle: #6b7680;
+  --mcode-border: #222b33;
+  --mcode-border-strong: #3b4852;
+  --mcode-accent: #8db2cd;
+  --mcode-accent-soft: #1b2a35;
+  --mcode-success: #5aa585;
+  --mcode-warning: #d98b4f;
+  --mcode-danger: #d2735f;
+  --mcode-primary-action-bg: #e8ecef;
+  --mcode-primary-action-text: #0a0d10;
+  --mcode-shadow: 0 1px 2px rgb(0 0 0 / 45%), 0 20px 48px rgb(0 0 0 / 42%);
+  --mcode-paper: #17140e;
+  --mcode-paper-border: #2e2921;
+  --mcode-paper-ink: #eae4d5;
+  --mcode-paper-muted: #9c9484;
+  --mcode-lamp: #d4a55c;
+  --mcode-lamp-soft: #372c19;
+  --mcode-rule: #1a2229;
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --mcode-bg: #0a0d10;
+    --mcode-bg-secondary: #0d1115;
+    --mcode-surface: #11161b;
+    --mcode-surface-muted: #161d23;
+    --mcode-text: #e8ecef;
+    --mcode-text-muted: #9aa4ae;
+    --mcode-text-subtle: #6b7680;
+    --mcode-border: #222b33;
+    --mcode-border-strong: #3b4852;
+    --mcode-accent: #8db2cd;
+    --mcode-accent-soft: #1b2a35;
+    --mcode-success: #5aa585;
+    --mcode-warning: #d98b4f;
+    --mcode-danger: #d2735f;
+    --mcode-primary-action-bg: #e8ecef;
+    --mcode-primary-action-text: #0a0d10;
+    --mcode-shadow: 0 1px 2px rgb(0 0 0 / 45%), 0 20px 48px rgb(0 0 0 / 42%);
+    --mcode-paper: #17140e;
+    --mcode-paper-border: #2e2921;
+    --mcode-paper-ink: #eae4d5;
+    --mcode-paper-muted: #9c9484;
+    --mcode-lamp: #d4a55c;
+    --mcode-lamp-soft: #372c19;
+    --mcode-rule: #1a2229;
+    color-scheme: dark;
+  }
+}
+
+/* ---------- base ---------- */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--mcode-bg);
+  color: var(--mcode-text);
+  font-family: var(--mcode-ui);
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+code,
+.mono {
+  font-family: var(--mcode-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+h1 {
+  margin: 0;
+  font-size: 17px;
+  line-height: 24px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+
+h2 {
+  margin: 0;
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+h3 {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 22px;
+  font-weight: 600;
+}
+
+p {
+  margin: 0;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+a {
+  color: var(--mcode-accent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+:focus-visible {
+  outline: 2px solid var(--mcode-accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+::selection {
+  background: var(--mcode-accent);
+  color: var(--mcode-bg);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--mcode-border-strong) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: var(--mcode-border-strong);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ---------- stage ---------- */
+
+main {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  width: 100%;
+  max-width: var(--shell-max);
+  margin: 0 auto;
+  padding: 26px 32px 44px;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-warning {
+  margin: 0 0 20px;
+  padding: 10px 14px;
+  border: 1px solid var(--mcode-danger);
+  border-left-width: 3px;
+  border-radius: 8px;
+  background: var(--mcode-surface);
+  color: var(--mcode-danger);
+  font-size: 13px;
+}
+
+.app-warning--inline {
+  margin: 0;
+}
+
+.view {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  min-width: 0;
+  counter-reset: section;
+  animation: view-rise 420ms var(--ease-out) both;
+}
+
+.view[hidden] {
+  display: none;
+}
+
+@keyframes view-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/*
+ * The conversation owns the whole stage: it is given the window's height outright, so
+ * the composer sits on the bottom edge and the transcript scrolls inside it. Every other
+ * view is a document — it takes the height it needs, and the stage scrolls.
+ */
+.view--chat {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  min-width: 0;
+}
+
+.section__head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+/* Sections are numbered like a dossier: the index is the slot, the title is the entry. */
+.section__head h2 {
+  position: relative;
+  counter-increment: section;
+}
+
+.section__head h2::before {
+  content: counter(section, decimal-leading-zero);
+  display: inline-block;
+  margin-right: 10px;
+  padding-right: 10px;
+  border-right: 1px solid var(--mcode-border);
+  font-family: var(--mcode-console);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  color: var(--mcode-accent);
+  vertical-align: 1px;
+}
+
+.section__head .count {
+  color: var(--mcode-text-subtle);
+  font-family: var(--mcode-console);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+}
+
+/* The packaged-skill registry is a part of the capability library, not a second section:
+   it sits under the domain list with a lighter rule, so the page still reads as one thing. */
+.section__head--sub {
+  margin-top: 14px;
+}
+
+.section__head--sub h3 {
+  position: relative;
+  padding-left: 11px;
+}
+
+.section__head--sub h3::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--mcode-rule);
+}
+
+.section__more {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--mcode-text-muted);
+  text-decoration: none;
+}
+
+.section__more:hover {
+  color: var(--mcode-accent);
+  text-decoration: underline;
+}
+
+.section__actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.section__actions--start {
+  margin-left: 0;
+  padding-bottom: 2px;
+}
+
+.section__note {
+  margin-top: -3px;
+}
+
+/* ---------- utilities ---------- */
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.icon {
+  flex: none;
+  color: currentColor;
+}
+
+.state {
+  padding: 36px 20px;
+  color: var(--mcode-text-muted);
+  text-align: center;
+  font-size: 13px;
+}
+
+.state--error {
+  color: var(--mcode-danger);
+}
+
+.empty {
+  padding: 34px 20px;
+  color: var(--mcode-text-subtle);
+  text-align: center;
+  font-size: 12.5px;
+  letter-spacing: 0.02em;
+}
+
+.empty::before {
+  content: '';
+  display: block;
+  width: 18px;
+  height: 1px;
+  margin: 0 auto 14px;
+  background: var(--mcode-border-strong);
+}
+
+.spinner {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  margin-right: 6px;
+  border: 2px solid var(--mcode-border);
+  border-top-color: var(--mcode-accent);
+  border-radius: 50%;
+  animation: spin 700ms linear infinite;
+  vertical-align: -1px;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

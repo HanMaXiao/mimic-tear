@@ -1,0 +1,122 @@
+/*
+ * 项目档案：档案头、详情网格与团队结构树。
+ *
+ * 由原 styles.css 按章节切出，规则本身逐字未改。
+ */
+
+/* ---------- project dossier head ---------- */
+
+.project-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--mcode-border);
+}
+
+.project-head__id {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.project-head__eyebrow {
+  font-family: var(--mcode-console);
+  font-size: 9.5px;
+  letter-spacing: 0.2em;
+  color: var(--mcode-text-subtle);
+}
+
+.project-head__id h2 {
+  font-size: 22px;
+  line-height: 30px;
+  letter-spacing: 0.01em;
+}
+
+.project-head__id .count {
+  color: var(--mcode-text-subtle);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.project-head .section__actions {
+  margin-left: 0;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+  gap: 26px 24px;
+  align-items: stretch;
+}
+
+/* Both cards in a row share the row's height, so a short panel does not leave a hole
+   under it while the row waits for its taller neighbour. */
+.detail-grid > .section > .panel {
+  flex: 1 1 auto;
+}
+
+.detail-grid__wide {
+  grid-column: 1;
+}
+
+.detail-grid > .section:not(.detail-grid__wide) {
+  grid-column: 2;
+}
+
+/* ---------- org tree ---------- */
+
+.tree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.tree ul {
+  list-style: none;
+  margin: 0;
+  padding-left: 24px;
+  border-left: 1px solid var(--mcode-rule);
+}
+
+.tree ul > li > .tree__row {
+  position: relative;
+}
+
+/* A horizontal tick joins each child to the vertical spine: a chain of command, not a list. */
+.tree ul > li > .tree__row::before {
+  content: '';
+  position: absolute;
+  left: -24px;
+  top: 50%;
+  width: 15px;
+  border-top: 1px solid var(--mcode-rule);
+}
+
+.tree__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  flex-wrap: wrap;
+}
+
+.tree__name {
+  font-family: var(--mcode-console);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+
+.tree__title {
+  color: var(--mcode-text-muted);
+  font-size: 12.5px;
+}
+
+.tree__error {
+  color: var(--mcode-danger);
+  font-size: 11.5px;
+}

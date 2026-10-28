@@ -1,14 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';
-import { readFile, writeFile } from 'node:fs/promises';
+import { cp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const CLIENT_DIR = fileURLToPath(new URL('../miniapps/mimic-tear/miniapp/client', import.meta.url));
 const HTML_PATH = `${CLIENT_DIR}/index.html`;
-const APP_PATH = `${CLIENT_DIR}/assets/app.js`;
+const ASSETS_DIR = `${CLIENT_DIR}/assets`;
 
 /* ------------------------------------------------------------------ DOM shim */
 
@@ -362,13 +362,18 @@ async function loadClient(options = {}) {
     });
   }
 
-  // Import with a cache-busting query so each test gets a fresh module instance.
-  // A file URL is cached by path, so a query string does not give a fresh instance.
-  // Each load gets its own copy of the client source, byte-identical to the shipped file.
-  const copyPath = `${copyDir}/app-${loadCounter}.mjs`;
-  await writeFile(copyPath, await readFile(APP_PATH, 'utf8'), 'utf8');
+  // Import the real client. The client is a tree of native ES modules now, so the whole
+  // assets tree is copied: a relative import only resolves when its module sits next to
+  // the entry. Each load gets its own copy in its own directory — Node caches modules by
+  // path, so a fresh directory is what gives a fresh module instance (and with it a
+  // fresh page state).
+  const loadDir = join(copyDir, `load-${loadCounter}`);
+  await cp(ASSETS_DIR, loadDir, { recursive: true });
+  // The temp directory has no package.json, so Node would read a .js file as CommonJS.
+  // This one says: these are ES modules.
+  await writeFile(join(loadDir, 'package.json'), JSON.stringify({ type: 'module' }), 'utf8');
   loadCounter += 1;
-  await import(new URL(`file:///${copyPath.replace(/\\/g, '/')}`).href);
+  await import(pathToFileURL(join(loadDir, 'app.js')).href);
 
   const settle = async () => {
     // The client renders from fetched data, so give the promise chain a few turns.

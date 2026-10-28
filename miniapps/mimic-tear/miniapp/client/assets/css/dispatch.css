@@ -1,0 +1,59 @@
+/*
+ * 派工单对话框。
+ *
+ * 由原 styles.css 按章节切出，规则本身逐字未改。
+ */
+
+/* ---------- dialog ---------- */
+
+dialog {
+  padding: 0;
+  border: 1px solid var(--mcode-border);
+  border-radius: var(--radius-card);
+  background: var(--mcode-surface);
+  color: var(--mcode-text);
+  box-shadow: var(--mcode-shadow);
+  max-width: 560px;
+  width: calc(100% - 32px);
+}
+
+dialog::backdrop {
+  background: rgb(6 8 10 / 58%);
+  backdrop-filter: blur(2px);
+}
+
+dialog .panel {
+  border: 0;
+  border-radius: var(--radius-card);
+}
+
+.dispatch__body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.dispatch__target {
+  padding-left: 12px;
+  border-left: 2px solid var(--mcode-lamp);
+  color: var(--mcode-paper-muted);
+  font-size: 12.5px;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+
+.dispatch__actions {
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+
+dialog select {
+  height: 36px;
+  width: 100%;
+  padding: 0 30px 0 10px;
+  border: 1px solid var(--mcode-paper-border);
+  border-radius: 8px;
+  background: var(--mcode-surface);
+  appearance: none;
+  -webkit-appearance: none;
+}

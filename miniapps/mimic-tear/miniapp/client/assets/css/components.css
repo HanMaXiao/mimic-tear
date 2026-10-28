@@ -1,0 +1,671 @@
+/*
+ * 跨视图复用的组件：卡片、表格、状态标签、条目、按钮与表单。
+ *
+ * 由原 styles.css 按章节切出，规则本身逐字未改。
+ */
+
+/* ---------- panels ---------- */
+
+.panel {
+  border: 1px solid var(--mcode-border);
+  border-radius: 12px;
+  background: var(--mcode-surface);
+  min-width: 0;
+  overflow: hidden;
+}
+
+.panel__head {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 16px 22px 13px;
+  border-bottom: 1px solid var(--mcode-border);
+}
+
+.panel__eyebrow {
+  font-family: var(--mcode-console);
+  font-size: 9px;
+  letter-spacing: 0.22em;
+  color: var(--mcode-text-subtle);
+}
+
+.panel__body {
+  padding: 18px 22px;
+}
+
+.panel__body--flush {
+  padding: 0;
+}
+
+/*
+ * Paper.
+ *
+ * A panel that holds what someone wrote — the boss's handover reports, the decisions he
+ * filed for you, the dispatch slip — is a document, not a console readout. It gets a
+ * warmer ground so the difference is structural and not only typographic. Everything that
+ * holds structured facts (counts, tables, trees) stays on the console surface.
+ */
+.panel--paper {
+  background: var(--mcode-paper);
+  border-color: var(--mcode-paper-border);
+}
+
+.panel--paper .item {
+  border-top-color: var(--mcode-paper-border);
+}
+
+.panel--paper .tag {
+  border-color: var(--mcode-paper-border);
+  color: var(--mcode-paper-muted);
+}
+
+.panel--paper .inbox-group + .inbox-group {
+  border-top-color: var(--mcode-paper-border);
+}
+
+.panel--library {
+  counter-reset: entry;
+}
+
+/* ---------- ledger table ---------- */
+
+.table-scroll {
+  position: relative;
+  overflow-x: auto;
+  max-width: 100%;
+  min-width: 0;
+}
+
+table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 9px 20px;
+  background: var(--mcode-surface-muted);
+  border-bottom: 1px solid var(--mcode-border);
+  color: var(--mcode-text-subtle);
+  font-family: var(--mcode-console);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-align: left;
+  white-space: nowrap;
+}
+
+tbody td {
+  padding: 12px 20px;
+  border-top: 1px solid var(--mcode-rule);
+  vertical-align: middle;
+}
+
+tbody tr:first-child td {
+  border-top: 0;
+}
+
+/* A narrow column must not break its own words. */
+td.nowrap,
+th.nowrap {
+  white-space: nowrap;
+}
+
+/* The project column carries a long absolute path. Letting it wrap keeps it from
+   demanding width and squeezing every other column down to nothing. */
+tbody td .item__meta {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+tbody tr {
+  transition: background-color 120ms var(--ease-out);
+}
+
+tbody tr:hover {
+  background: var(--mcode-surface-muted);
+}
+
+tbody tr:hover td:first-child {
+  box-shadow: inset 2px 0 0 var(--mcode-lamp);
+}
+
+tbody td a {
+  color: var(--mcode-text);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+tbody td a:hover {
+  color: var(--mcode-accent);
+  text-decoration: underline;
+}
+
+td.numeric,
+th.numeric {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.cell-project__name {
+  display: inline-block;
+  font-size: 13.5px;
+  line-height: 20px;
+}
+
+.cell-project__path {
+  display: block;
+  margin-top: 1px;
+  color: var(--mcode-text-subtle);
+  font-size: 10.5px;
+  line-height: 16px;
+}
+
+/* The goal cell is a count plus its proportion: two numbers and a hairline meter. */
+.goal-cell {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.goal-meter {
+  position: relative;
+  width: 48px;
+  height: 4px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--mcode-text) 13%, transparent);
+  overflow: hidden;
+}
+
+.goal-meter__fill {
+  display: block;
+  height: 100%;
+  background: var(--mcode-accent);
+}
+
+.goal-cell__text {
+  font-family: var(--mcode-console);
+  font-size: 11.5px;
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+  color: var(--mcode-text-muted);
+}
+
+.goal-cell__text b {
+  color: var(--mcode-text);
+  font-weight: 600;
+}
+
+/* ---------- status ---------- */
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+  font-size: 12.5px;
+}
+
+.status__dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--mcode-text-subtle);
+}
+
+.status--active .status__dot {
+  background: var(--mcode-success);
+}
+
+.status--blocked .status__dot {
+  background: var(--mcode-warning);
+}
+
+.status--error .status__dot {
+  background: var(--mcode-danger);
+}
+
+.status--idle .status__dot {
+  background: var(--mcode-text-subtle);
+}
+
+/* The kind of a thing is a quiet outline; its severity is a filled square chip. */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 8px;
+  border: 1px solid var(--mcode-border);
+  border-radius: 999px;
+  color: var(--mcode-text-muted);
+  font-size: 11.5px;
+  line-height: 17px;
+  white-space: nowrap;
+}
+
+.tag--high {
+  border-color: transparent;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--mcode-danger) 13%, transparent);
+  color: var(--mcode-danger);
+  font-weight: 600;
+}
+
+.tag--medium {
+  border-color: transparent;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--mcode-warning) 16%, transparent);
+  color: var(--mcode-warning);
+  font-weight: 600;
+}
+
+.tag--low {
+  border-color: transparent;
+  border-radius: 4px;
+  background: var(--mcode-surface-muted);
+  color: var(--mcode-text-muted);
+  font-weight: 600;
+}
+
+.tag--done {
+  border-color: transparent;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--mcode-success) 13%, transparent);
+  color: var(--mcode-success);
+  font-weight: 600;
+}
+
+/* ---------- items ---------- */
+
+.item-list {
+  display: flex;
+  flex-direction: column;
+}
+
+/* The inbox is read high to low; the group — not the row — carries the colour. */
+.inbox-group {
+  position: relative;
+}
+
+.inbox-group + .inbox-group {
+  border-top: 1px solid var(--mcode-rule);
+}
+
+.inbox-group::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--mcode-border-strong);
+  opacity: 0.55;
+}
+
+.inbox-group--high::before {
+  background: var(--mcode-danger);
+  opacity: 1;
+}
+
+.inbox-group--medium::before {
+  background: var(--mcode-warning);
+  opacity: 1;
+}
+
+.inbox-group--low::before {
+  background: var(--mcode-border-strong);
+  opacity: 1;
+}
+
+.inbox-group__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 22px 8px 24px;
+  background: color-mix(in srgb, var(--mcode-text) 4%, var(--mcode-paper));
+  border-bottom: 1px solid var(--mcode-paper-border);
+  color: var(--mcode-paper-muted);
+  font-family: var(--mcode-console);
+  font-size: 9.5px;
+  line-height: 16px;
+  letter-spacing: 0.16em;
+}
+
+.inbox-group__severity {
+  font-weight: 600;
+}
+
+.inbox-group--high .inbox-group__severity {
+  color: var(--mcode-danger);
+}
+
+.inbox-group--medium .inbox-group__severity {
+  color: var(--mcode-warning);
+}
+
+.inbox-group--low .inbox-group__severity {
+  color: var(--mcode-paper-muted);
+}
+
+.item {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 18px 22px 18px 24px;
+  border-top: 1px solid var(--mcode-rule);
+}
+
+.item + .item {
+  border-top: 1px solid var(--mcode-rule);
+}
+
+.item-list > .item:first-child,
+.inbox-group__head + .item {
+  border-top: 0;
+}
+
+.item__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.item__title {
+  font-size: 13.5px;
+  line-height: 20px;
+  font-weight: 600;
+}
+
+.item__meta {
+  color: var(--mcode-text-subtle);
+  font-size: 11px;
+  line-height: 17px;
+}
+
+.item__body {
+  color: var(--mcode-text-muted);
+  font-size: 13px;
+}
+
+/* Prose on the board is a document, and a document is set in 宋体. */
+.doc {
+  font-family: var(--mcode-document);
+  font-size: 14.5px;
+  line-height: 1.95;
+  color: var(--mcode-paper-ink);
+  letter-spacing: 0.01em;
+  max-width: 74ch;
+  text-wrap: pretty;
+}
+
+/* Why an item left the desk: you marked it known, or the boss withdrew it. */
+.item__note {
+  color: var(--mcode-paper-muted);
+  font-size: 11.5px;
+  line-height: 17px;
+}
+
+.item__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 3px;
+}
+
+.item--acknowledged {
+  opacity: 0.58;
+}
+
+/* ---------- buttons ---------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--mcode-border);
+  border-radius: 8px;
+  background: var(--mcode-surface);
+  color: var(--mcode-text);
+  font-size: 12.5px;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition: background-color 140ms var(--ease-out), border-color 140ms var(--ease-out),
+    color 140ms var(--ease-out), transform 90ms var(--ease-out);
+}
+
+.btn:hover {
+  background: var(--mcode-surface-muted);
+  border-color: var(--mcode-border-strong);
+}
+
+.btn:active {
+  transform: translateY(1px);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--mcode-accent);
+  outline-offset: 2px;
+}
+
+.btn[disabled] {
+  color: var(--mcode-text-subtle);
+  cursor: not-allowed;
+}
+
+.btn--primary {
+  background: var(--mcode-primary-action-bg);
+  border-color: var(--mcode-primary-action-bg);
+  color: var(--mcode-primary-action-text);
+  font-weight: 500;
+}
+
+.btn--primary:hover {
+  background: var(--mcode-primary-action-bg);
+  border-color: var(--mcode-primary-action-bg);
+  opacity: 0.88;
+}
+
+.btn--text {
+  height: 28px;
+  padding: 0 8px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--mcode-accent);
+}
+
+.btn--text:hover {
+  background: var(--mcode-surface-muted);
+  border-color: transparent;
+  color: var(--mcode-accent);
+}
+
+.btn--danger {
+  color: var(--mcode-danger);
+  border-color: var(--mcode-border);
+  background: transparent;
+}
+
+.btn--small {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+tbody td .btn {
+  height: 26px;
+  padding: 0 9px;
+  font-size: 11.5px;
+  color: var(--mcode-text-muted);
+  background: transparent;
+}
+
+tbody td .btn:hover {
+  color: var(--mcode-text);
+  background: var(--mcode-surface);
+}
+
+.app-header__actions .btn {
+  height: 30px;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+}
+
+/* ---------- forms ---------- */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.field__label {
+  color: var(--mcode-paper-muted);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.field input[type='text'],
+.field textarea {
+  width: 100%;
+  min-height: 36px;
+  padding: 8px 11px;
+  border: 1px solid var(--mcode-paper-border);
+  border-radius: 8px;
+  background: var(--mcode-surface);
+  font-size: 13px;
+}
+
+.field textarea {
+  min-height: 104px;
+  resize: vertical;
+  line-height: 1.75;
+}
+
+.field input:focus-visible,
+.field textarea:focus-visible {
+  outline: 2px solid var(--mcode-accent);
+  outline-offset: 1px;
+  border-color: var(--mcode-accent);
+}
+
+.filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.filter__label {
+  color: var(--mcode-text-subtle);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+}
+
+.select-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.select-wrap::after {
+  content: '';
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  border-right: 1.4px solid var(--mcode-text-muted);
+  border-bottom: 1.4px solid var(--mcode-text-muted);
+  transform: translateY(-70%) rotate(45deg);
+  pointer-events: none;
+}
+
+.select {
+  height: 30px;
+  max-width: 210px;
+  padding: 0 26px 0 10px;
+  border: 1px solid var(--mcode-border);
+  border-radius: 8px;
+  background: var(--mcode-surface);
+  color: var(--mcode-text);
+  font-size: 12px;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  text-overflow: ellipsis;
+}
+
+.select:hover {
+  border-color: var(--mcode-border-strong);
+}
+
+.select:focus-visible {
+  outline: 2px solid var(--mcode-accent);
+  outline-offset: 2px;
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--mcode-text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.check input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--mcode-accent);
+  cursor: pointer;
+}
+
+/* ---------- toast ---------- */
+
+.toast-host {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 20;
+  max-width: min(380px, calc(100vw - 40px));
+}
+
+.toast {
+  padding: 10px 14px;
+  border: 1px solid var(--mcode-border);
+  border-left: 3px solid var(--mcode-border-strong);
+  border-radius: 8px;
+  background: var(--mcode-surface);
+  box-shadow: var(--mcode-shadow);
+  font-size: 12.5px;
+  animation: toast-in 220ms var(--ease-out) both;
+}
+
+.toast--error {
+  border-left-color: var(--mcode-danger);
+  color: var(--mcode-danger);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
