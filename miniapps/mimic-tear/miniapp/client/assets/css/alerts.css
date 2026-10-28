@@ -1,0 +1,29 @@
+/*
+ * 看门狗告警日志的专有样式。
+ *
+ * 由原 styles.css 按章节切出，规则本身逐字未改。
+ */
+
+/* ---------- watchdog alerts ---------- */
+
+/* The alert log is a ledger of records: the facts get their own columns, the way the
+   project table gives every project its own. */
+.alerts__title {
+  display: block;
+  color: var(--mcode-text);
+  font-size: 13.5px;
+  line-height: 20px;
+  font-weight: 600;
+}
+
+.alerts__body {
+  display: block;
+  margin-top: 2px;
+  color: var(--mcode-text-muted);
+  font-size: 11.5px;
+  line-height: 1.7;
+  /* The watchdog writes the facts down in several lines; they must not be mashed into
+     one. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

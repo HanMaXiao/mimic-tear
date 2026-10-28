@@ -1,0 +1,431 @@
+/*
+ * 对话面板：交班汇报、对话气泡、问卷与输入区。
+ *
+ * 由原 styles.css 按章节切出，规则本身逐字未改。
+ */
+
+/* ---------- chat ---------- */
+
+.chat {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  flex: 1;
+  width: 100%;
+  max-width: 840px;
+  margin: 0 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* ---------- duty rounds ---------- */
+
+/*
+ * The boss's own reports. They sit above the conversation because they are what
+ * happened whether or not anyone was talking: a duty round is not something the
+ * boss said to you, and it must not be mistaken for a reply.
+ *
+ * They are paper, not console: a warmer ground, a stamped time, and the findings set
+ * in 宋体. Only the newest round is open; the rest collapse to a one-line summary, so the
+ * conversation keeps the screen.
+ */
+.chat__duty:empty {
+  display: none;
+}
+
+.chat__duty {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 34vh;
+  overflow-y: auto;
+  /* The reports give way before the conversation does: they are a standing record, the
+     transcript is the reason the page is open. */
+  flex: 0 1 auto;
+  min-height: 0;
+}
+
+.chat__duty-label {
+  font-family: var(--mcode-console);
+  font-size: 9.5px;
+  line-height: 15px;
+  letter-spacing: 0.2em;
+  color: var(--mcode-text-subtle);
+}
+
+.chat__duty-round {
+  border: 1px solid var(--mcode-paper-border);
+  border-radius: 10px;
+  background: var(--mcode-paper);
+  color: var(--mcode-paper-ink);
+}
+
+.chat__duty-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 13px;
+  cursor: pointer;
+  list-style: none;
+}
+
+/* The default disclosure triangle is replaced by the row itself. */
+.chat__duty-head::-webkit-details-marker {
+  display: none;
+}
+
+.chat__duty-round[open] .chat__duty-head {
+  border-bottom: 1px solid var(--mcode-paper-border);
+}
+
+.chat__duty-head:hover .chat__duty-when {
+  color: var(--mcode-accent);
+  border-color: var(--mcode-accent);
+}
+
+.chat__duty-when {
+  flex: none;
+  padding: 1px 7px;
+  border: 1px solid var(--mcode-paper-border);
+  border-radius: 4px;
+  font-family: var(--mcode-console);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  color: var(--mcode-paper-muted);
+  transition: color 140ms var(--ease-out), border-color 140ms var(--ease-out);
+}
+
+.chat__duty-counts {
+  font-size: 11.5px;
+  color: var(--mcode-paper-muted);
+}
+
+.chat__duty-list {
+  margin: 0;
+  padding: 10px 13px 12px;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.chat__duty-item {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--mcode-paper-ink);
+}
+
+.chat__duty-item::before {
+  content: '';
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 1px;
+  background: var(--mcode-paper-muted);
+  transform: translateY(-3px);
+}
+
+.chat__duty-item--high::before {
+  background: var(--mcode-danger);
+}
+
+.chat__duty-item--medium::before {
+  background: var(--mcode-warning);
+}
+
+.chat__duty-item--low::before {
+  background: var(--mcode-paper-muted);
+}
+
+.chat__duty-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: var(--mcode-document);
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.chat__duty-project,
+.chat__duty-tag {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 10.5px;
+  color: var(--mcode-paper-muted);
+}
+
+.chat__duty-item--high .chat__duty-title {
+  color: var(--mcode-danger);
+}
+
+/* ---------- conversation ---------- */
+
+.chat__log {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 2px 6px;
+}
+
+.chat__intro {
+  max-width: 52ch;
+  padding-top: 6px;
+  color: var(--mcode-text-muted);
+  font-size: 13px;
+  line-height: 22px;
+}
+
+.chat__intro p {
+  margin: 0 0 7px;
+}
+
+.chat__intro p:first-child {
+  color: var(--mcode-text);
+  font-family: var(--mcode-document);
+  font-size: 18px;
+  line-height: 28px;
+}
+
+.chat__intro-hint {
+  color: var(--mcode-text-subtle);
+}
+
+.chat__msg {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 70ch;
+}
+
+.chat__msg--me {
+  align-self: flex-end;
+  align-items: flex-end;
+}
+
+.chat__msg--boss {
+  align-self: flex-start;
+  width: 100%;
+}
+
+.chat__who {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--mcode-text-subtle);
+  font-family: var(--mcode-console);
+  font-size: 9.5px;
+  letter-spacing: 0.2em;
+}
+
+.chat__msg--boss .chat__who::before {
+  content: '';
+  width: 10px;
+  border-top: 1px solid var(--mcode-lamp);
+}
+
+.chat__bubble {
+  font-size: 13.5px;
+  line-height: 1.9;
+  overflow-wrap: anywhere;
+}
+
+/* The boss's line is a filed note — a brass edge, no bubble. Yours is a plate on the right. */
+.chat__msg--boss .chat__bubble {
+  padding-left: 16px;
+  border-left: 1px solid var(--mcode-lamp);
+}
+
+.chat__msg--me .chat__bubble {
+  padding: 9px 14px;
+  border: 1px solid var(--mcode-border);
+  border-radius: 12px 12px 3px 12px;
+  background: var(--mcode-surface);
+}
+
+.chat__msg--streaming .chat__bubble::after {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 13px;
+  margin-left: 4px;
+  background: var(--mcode-accent);
+  vertical-align: -2px;
+  animation: caret 1s steps(2, start) infinite;
+}
+
+@keyframes caret {
+  50% {
+    opacity: 0;
+  }
+}
+
+.chat__tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chat__tool {
+  padding: 1px 8px;
+  border: 1px solid var(--mcode-border);
+  border-radius: 999px;
+  color: var(--mcode-text-subtle);
+  font-family: var(--mcode-console);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+}
+
+.chat__tool--failed {
+  color: var(--mcode-danger);
+  border-color: color-mix(in srgb, var(--mcode-danger) 40%, transparent);
+}
+
+/* A line said in the Host chat side panel is marked, so the user can tell which of the two
+   views it came from. */
+.chat__from-host {
+  margin-left: 6px;
+  padding: 0 5px;
+  border: 1px solid var(--mcode-border);
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0;
+  color: var(--mcode-text-muted);
+}
+
+.chat__msg--host .chat__bubble {
+  border-left-style: dashed;
+}
+
+/* ---------- questionnaire ---------- */
+
+.chat__ask {
+  align-self: flex-start;
+  width: 100%;
+  max-width: 64ch;
+  padding: 16px 18px;
+  border: 1px solid var(--mcode-paper-border);
+  border-radius: var(--radius-card);
+  background: var(--mcode-paper);
+}
+
+.chat__ask-title {
+  margin: 0 0 12px;
+  font-family: var(--mcode-document);
+  font-size: 15px;
+  line-height: 24px;
+  font-weight: 600;
+  color: var(--mcode-paper-ink);
+}
+
+.chat__step {
+  margin-bottom: 14px;
+}
+
+.chat__question {
+  margin: 0 0 9px;
+  font-size: 13px;
+  line-height: 1.75;
+  color: var(--mcode-paper-ink);
+}
+
+.chat__options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chat__option {
+  padding: 6px 12px;
+  border: 1px solid var(--mcode-paper-border);
+  border-radius: 8px;
+  background: var(--mcode-surface);
+  color: var(--mcode-text);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: border-color 140ms var(--ease-out), background-color 140ms var(--ease-out),
+    color 140ms var(--ease-out);
+}
+
+.chat__option:hover {
+  border-color: var(--mcode-border-strong);
+}
+
+.chat__option--on {
+  border-color: var(--mcode-accent);
+  background: var(--mcode-accent-soft);
+  color: var(--mcode-accent);
+  font-weight: 500;
+}
+
+.chat__ask .btn {
+  margin-top: 2px;
+}
+
+/* ---------- composer ---------- */
+
+/* The row above the composer: a way into the Host's own chat side panel. */
+.chat__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  min-height: 28px;
+}
+
+.chat__composer {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  padding: 7px 7px 7px 14px;
+  border: 1px solid var(--mcode-border-strong);
+  border-radius: 14px;
+  background: var(--mcode-surface);
+  transition: border-color 160ms var(--ease-out);
+}
+
+.chat__composer:focus-within {
+  border-color: var(--mcode-accent);
+  box-shadow: inset 0 0 0 1px var(--mcode-accent);
+}
+
+.chat__composer textarea {
+  flex: 1;
+  min-width: 0;
+  min-height: 30px;
+  max-height: 160px;
+  padding: 5px 2px;
+  border: 0;
+  background: transparent;
+  color: var(--mcode-text);
+  font: inherit;
+  font-size: 13.5px;
+  line-height: 22px;
+  resize: none;
+}
+
+.chat__composer textarea:focus {
+  outline: none;
+}
+
+.chat__composer .btn {
+  height: 34px;
+  padding: 0 18px;
+}
+
+.chat__hint {
+  margin-top: -8px;
+  color: var(--mcode-text-subtle);
+  font-family: var(--mcode-console);
+  font-size: 9.5px;
+  letter-spacing: 0.12em;
+  text-align: right;
+}

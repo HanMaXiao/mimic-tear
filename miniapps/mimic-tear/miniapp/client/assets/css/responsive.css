@@ -1,0 +1,282 @@
+/*
+ * 窄屏与减少动效的适配：放在最后加载，才能盖住前面的规则。
+ *
+ * 由原 styles.css 按章节切出，规则本身逐字未改。
+ */
+
+/* ---------- responsive ---------- */
+
+@media (max-width: 1180px) {
+  .kpi-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .detail-grid__wide,
+  .detail-grid > .section:not(.detail-grid__wide) {
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 1020px) {
+  .skills-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .skills-index {
+    padding: 12px;
+  }
+
+  .domain-nav {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .domain-nav button {
+    width: auto;
+  }
+}
+
+@media (max-width: 960px) {
+  main {
+    padding: 20px 20px 36px;
+  }
+
+  .app-header__inner {
+    padding: 12px 20px;
+  }
+
+  /* The rail becomes a top strip on a narrow screen. */
+  .app-shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .app-sidebar {
+    flex-direction: row;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 14px;
+    padding: 10px 20px;
+    border-right: 0;
+    border-bottom: 1px solid var(--mcode-border);
+    overflow: visible;
+  }
+
+  .app-sidebar__brand {
+    padding: 0;
+    gap: 10px;
+  }
+
+  .app-sidebar__nav {
+    flex-direction: row;
+    gap: 2px;
+    order: 2;
+    margin-left: auto;
+  }
+
+  .app-sidebar__nav a {
+    grid-template-columns: auto auto;
+    grid-template-areas: 'label badge';
+    padding: 7px 11px;
+  }
+
+  .nav__index,
+  .nav__latin {
+    display: none;
+  }
+
+  .app-sidebar__nav a[aria-current='page']::before {
+    left: 50%;
+    top: auto;
+    bottom: -1px;
+    width: 18px;
+    height: 2px;
+    border-radius: 2px 2px 0 0;
+    transform: translateX(-50%);
+  }
+
+  .app-sidebar__foot {
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+    order: 3;
+    margin-top: 0;
+    margin-left: 0;
+    padding: 0;
+    border-top: 0;
+  }
+
+  .app-warning {
+    margin-bottom: 16px;
+  }
+}
+
+@media (max-width: 700px) {
+  .app-sidebar {
+    row-gap: 10px;
+  }
+
+  .app-sidebar__names {
+    display: none;
+  }
+
+  .app-sidebar__nav {
+    order: 3;
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .app-sidebar__nav a {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+
+  .app-sidebar__foot {
+    order: 2;
+    margin-left: auto;
+  }
+
+  .app-status {
+    display: none;
+  }
+
+  .app-header__inner {
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .app-header__title {
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+    gap: 2px 12px;
+  }
+
+  .app-header__actions {
+    flex: 1 1 100%;
+    flex-wrap: nowrap;
+    justify-content: flex-end;
+    align-items: flex-start;
+  }
+
+  .duty {
+    flex: 1 1 0;
+    min-width: 0;
+    border-radius: 8px;
+  }
+
+  .duty__text {
+    font-size: 11.5px;
+    line-height: 16px;
+  }
+
+  .kpi {
+    padding: 15px 16px 13px;
+  }
+
+  .kpi::after {
+    right: 12px;
+    top: 12px;
+  }
+
+  .section__actions {
+    margin-left: 0;
+  }
+
+  .project-head {
+    align-items: flex-start;
+  }
+
+  .project-head .section__actions {
+    width: 100%;
+  }
+
+  .chat__duty {
+    max-height: 24vh;
+  }
+
+  .chat__hint {
+    display: none;
+  }
+
+  .chat {
+    max-width: 100%;
+  }
+
+  .toast-host {
+    right: 12px;
+    bottom: 12px;
+    left: 12px;
+    max-width: none;
+  }
+}
+
+@media (max-width: 520px) {
+  main {
+    padding: 16px 14px 30px;
+  }
+
+  .app-header__inner {
+    padding: 10px 14px;
+  }
+
+  .app-sidebar {
+    padding: 10px 14px;
+  }
+
+  .app-sidebar__nav a {
+    padding: 7px 8px;
+    font-size: 12.5px;
+  }
+
+  .kpi__value {
+    font-size: 30px;
+  }
+
+  .kpi__foot {
+    display: none;
+  }
+
+  .section__head h2::before {
+    margin-right: 8px;
+    padding-right: 8px;
+  }
+
+  .item {
+    padding: 16px 16px 16px 18px;
+  }
+
+  .inbox-group__head {
+    padding-left: 18px;
+    padding-right: 16px;
+  }
+
+  .skill-row {
+    padding-left: 44px;
+  }
+
+  .skill-row::before {
+    left: 16px;
+  }
+
+  .chat__msg {
+    max-width: 100%;
+  }
+
+  dialog {
+    width: calc(100% - 20px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
