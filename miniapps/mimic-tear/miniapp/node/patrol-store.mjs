@@ -2,6 +2,8 @@ import { randomBytes } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
+import { normalizeConclusionSource } from './view-model.mjs';
+
 /**
  * One write queue per data directory.
  *
@@ -27,11 +29,17 @@ const writeQueues = new Map();
 /**
  * @typedef {{ id:string, createdAt:number, projectId:number|null, projectName:string|null,
  *             severity:'high'|'medium'|'low', title:string, body:string,
+ *             source:'duty'|'board',
  *             acknowledged:boolean, acknowledgedBy:'user'|'boss'|null, note:string }} PatrolFinding
  * @typedef {{ enabled:boolean, intervalMinutes:number,
  *             dutyIntervalMinutes:number,
  *             lastRunAt:number|null, lastBoardPatrolAt:number|null,
  *             lastSignature:string|null }} PatrolConfig
+ * @typedef {{ id:string, idempotencyKey:string|null, source:'duty'|'board',
+ *             projectId:number|null, projectName:string|null, targetSessionId:string|null,
+ *             instruction:string, status:'queued'|'running'|'done'|'error',
+ *             bossSessionId:string|null, text:string, error:string|null,
+ *             createdAt:number, updatedAt:number }} DispatchRecord
  */
 
 const DEFAULT_CONFIG = {
@@ -60,6 +68,10 @@ export class PatrolStore {
     this.findingsPath = join(this.dataDir, 'patrol.json');
     this.configPath = join(this.dataDir, 'patrol-config.json');
     this.answeredPath = join(this.dataDir, 'patrol-answered.json');
+    // The dispatch ledger is the BOARD's file (the board path writes it), but the duty
+    // path writes into it too — that is the whole point of the ledger: both bosses'
+    // deliveries end up in one place instead of two private histories.
+    this.dispatchesPath = join(this.dataDir, 'dispatches.json');
   }
 
   /**
@@ -80,10 +92,22 @@ export class PatrolStore {
     return run;
   }
 
-  /** @returns {Promise<PatrolFinding[]>} */
+  /**
+   * Every conclusion in the pool, with its origin spelled out.
+   *
+   * A conclusion written before the `source` field existed carries no origin at all.
+   * It is not dropped: it reads as `board` — the origin that produces conclusions with
+   * no duty handover behind them.
+   *
+   * @returns {Promise<PatrolFinding[]>}
+   */
   async list() {
     const value = await readJson(this.findingsPath, []);
-    return Array.isArray(value) ? value : [];
+    const list = Array.isArray(value) ? value : [];
+    return list.map((finding) => ({
+      ...finding,
+      source: normalizeConclusionSource(finding?.source, 'board'),
+    }));
   }
 
   /** @param {PatrolFinding[]} findings */
@@ -93,7 +117,14 @@ export class PatrolStore {
   }
 
   /**
-   * @param {Omit<PatrolFinding, 'id'|'createdAt'|'acknowledged'>} input
+   * Add one conclusion to the pool.
+   *
+   * The origin defaults to `duty` because the store's main writer is the duty path —
+   * the CLI the boss calls from its cron round. The board's own patrol loop says so
+   * explicitly (`source: 'board'`), and the watchdog's notices are duty-side news
+   * about the duty chain, so they read as `duty` too.
+   *
+   * @param {Omit<PatrolFinding, 'id'|'createdAt'|'acknowledged'|'source'> & {source?:'duty'|'board'}} input
    * @returns {Promise<PatrolFinding>}
    */
   async add(input) {
@@ -106,6 +137,7 @@ export class PatrolStore {
         acknowledgedBy: null,
         note: '',
         ...input,
+        source: normalizeConclusionSource(input?.source, 'duty'),
       };
       findings.unshift(finding);
       // Keep the history bounded; the board only ever shows the recent tail.
@@ -182,8 +214,84 @@ export class PatrolStore {
         optionIds: entry.optionIds ?? [],
       });
       await writeJson(this.answeredPath, answered.slice(0, 200));
+
+      // Answering a card on the boss's behalf IS a delivery: the duty boss sends its
+      // conclusion to the owner session with the runtime's `session send`. That is a
+      // dispatch, so it belongs in the dispatch ledger — otherwise the board's history
+      // shows only what the board itself sent, and the two bosses drift apart in silence.
+      //
+      // The record is written here rather than through `recordDutyDispatch` on purpose:
+      // that method queues on the same directory, and a queued task must never wait for
+      // the task it is already inside of.
+      //
+      // Best-effort, and deliberately so: this runs inside the duty path's report, and
+      // a report that throws means the round never hands over — the board would then
+      // report a duty boss that actually did hand over. The answer itself is already
+      // recorded above; the audit trail must not be able to cost the handover.
+      try {
+        await this.#appendDispatch(buildDutyDispatchRecord({
+          targetSessionId: entry.sessionId,
+          instruction: entry.answer ?? '',
+          text: entry.rationale ?? '',
+        }));
+      } catch {
+        // The ledger is an account of what was delivered, not the delivery itself.
+      }
       return answered;
     });
+  }
+
+  /**
+   * The dispatch ledger — both paths, in the order they were written.
+   *
+   * @returns {Promise<DispatchRecord[]>}
+   */
+  async listDispatches() {
+    return readJsonArray(this.dispatchesPath);
+  }
+
+  /**
+   * Record one delivery made by the duty path.
+   *
+   * The duty boss delivers with the runtime's `session send`, so before this the board's
+   * dispatch history only ever showed the board path's own deliveries — and the two
+   * bosses could tell different stories without the board noticing. The record is the
+   * same shape as a board dispatch, with `source: 'duty'` so the client can label the
+   * two differently later.
+   *
+   * The idempotency key stays OUT of the board's key space: a duty record carries
+   * `idempotencyKey: null`, so `findDispatchByKey` can never match it and the board's
+   * duplicate detection stays exactly what it was.
+   *
+   * A caller on the duty path should treat a failure as best-effort: the ledger is an
+   * account of what was delivered, and a failed write must not cost the round its
+   * handover.
+   *
+   * @param {{ projectId?:number|null, projectName?:string|null, targetSessionId?:string|null,
+   *           instruction?:string, text?:string, status?:string, bossSessionId?:string|null,
+   *           error?:string|null }} input
+   * @returns {Promise<DispatchRecord>}
+   */
+  async recordDutyDispatch(input) {
+    const record = buildDutyDispatchRecord(input);
+    return this.enqueue(async () => {
+      await this.#appendDispatch(record);
+      return record;
+    });
+  }
+
+  /**
+   * Put one record into the dispatch ledger, keeping everybody else's records.
+   *
+   * The ledger has two writers: the board (its own process) and the duty path (a
+   * separate one). A plain overwrite would drop the other side's record, and a dropped
+   * board record breaks the board's idempotency — the same key would be delivered twice.
+   *
+   * @param {DispatchRecord} record
+   * @returns {Promise<void>}
+   */
+  async #appendDispatch(record) {
+    await appendToJsonArray(this.dispatchesPath, record);
   }
 
   /** @param {string} requestId */
@@ -291,4 +399,149 @@ function dirname(path) {
     ? path.lastIndexOf('\\')
     : path.lastIndexOf('/');
   return index <= 0 ? path.slice(0, 2) : path.slice(0, index);
+}
+
+/**
+ * Build a dispatch record for something the duty path delivered.
+ *
+ * `idempotencyKey` is deliberately null: the board path's keys live in their own
+ * namespace, and a duty record must never be found by a board key lookup — that would
+ * turn a fresh instruction into a false "already delivered".
+ *
+ * @param {{ projectId?:number|null, projectName?:string|null, targetSessionId?:string|null,
+ *           instruction?:string, text?:string, status?:string, bossSessionId?:string|null,
+ *           error?:string|null }} input
+ * @returns {DispatchRecord}
+ */
+function buildDutyDispatchRecord(input) {
+  const now = Date.now();
+  return {
+    id: `dsp_duty_${now.toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+    idempotencyKey: null,
+    source: 'duty',
+    projectId: input?.projectId ?? null,
+    projectName: input?.projectName ?? null,
+    targetSessionId: input?.targetSessionId ?? null,
+    instruction: typeof input?.instruction === 'string' ? input.instruction : '',
+    status: input?.status ?? 'done',
+    bossSessionId: input?.bossSessionId ?? null,
+    text: typeof input?.text === 'string' ? input.text : '',
+    error: input?.error ?? null,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+/**
+ * Read a JSON array file, strictly.
+ *
+ * A corrupt file throws instead of falling back to an empty array: the ledger holds
+ * other people's records, and "start over" would throw them away.
+ *
+ * @param {string} path
+ * @returns {Promise<any[]>}
+ */
+async function readJsonArray(path) {
+  let raw;
+  try {
+    raw = await readFile(path, 'utf8');
+  } catch (error) {
+    if (error?.code === 'ENOENT') return [];
+    throw error;
+  }
+  if (!raw.trim()) return [];
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`${path} 里的内容不是合法 JSON，拒绝对它做追加：${error?.message ?? error}`);
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error(`${path} 不是一个数组，拒绝对它做追加`);
+  }
+  return parsed;
+}
+
+/**
+ * Merge one record into a list, replacing the record with the same id.
+ *
+ * @param {any[]} list
+ * @param {any} record
+ * @returns {any[]}
+ */
+function mergeById(list, record) {
+  const index = list.findIndex((item) => item?.id === record.id);
+  if (index === -1) return [...list, record];
+  const next = [...list];
+  next[index] = record;
+  return next;
+}
+
+/**
+ * Whether two lists hold the same records, in the same order.
+ *
+ * The comparison is on the whole record, not just its id: the other writer may have
+ * CHANGED a record (a dispatch moving from `queued` to `done`), and a merge that kept
+ * our older copy would undo that.
+ *
+ * @param {any[]} left
+ * @param {any[]} right
+ * @returns {boolean}
+ */
+function sameRecords(left, right) {
+  if (left.length !== right.length) return false;
+  return left.every((item, index) => JSON.stringify(item) === JSON.stringify(right[index]));
+}
+
+/**
+ * Append one record to a JSON array file without losing anybody else's records.
+ *
+ * The dispatch ledger has two writers in two processes, and both do read-modify-write.
+ * A plain overwrite drops whatever the other side wrote in the meantime — and a dropped
+ * board record breaks the board's idempotency, because the same key would then be
+ * delivered twice.
+ *
+ * So the write is done in three steps:
+ *
+ *  1. read, merge, write to a UNIQUE temporary file (a fixed name lets one writer
+ *     rename the file out from under the other);
+ *  2. read once more — if another writer landed in between, merge their records in and
+ *     write the temporary file again;
+ *  3. rename, then check that our record is still there. If the other writer landed
+ *     after our rename with an older read, our record is the one that was dropped —
+ *     so we put it back. The merge is by id, so this can never duplicate anything.
+ *
+ * @param {string} path
+ * @param {any} record
+ * @returns {Promise<void>}
+ */
+async function appendToJsonArray(path, record) {
+  let lastError = null;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const temporary = `${path}.${process.pid}.${Date.now()}.${randomBytes(6).toString('hex')}.tmp`;
+    try {
+      await mkdir(dirname(path), { recursive: true });
+      for (let round = 0; round < 3; round += 1) {
+        const current = await readJsonArray(path);
+        const merged = mergeById(current, record);
+        await writeFile(temporary, `${JSON.stringify(merged, null, 2)}\n`, 'utf8');
+        // Somebody else may have written between our read and this write. If the file
+        // changed, their records have to go into ours too.
+        const latest = await readJsonArray(path);
+        if (sameRecords(latest, current)) break;
+      }
+      await rename(temporary, path);
+
+      const after = await readJsonArray(path);
+      if (after.some((item) => item?.id === record.id)) return;
+      // Our record was the one that got dropped — the other writer's read was older
+      // than ours. Write it again (the merge is by id, so this cannot duplicate it).
+      await delay(20 * (attempt + 1));
+    } catch (error) {
+      lastError = error;
+      await rm(temporary, { force: true }).catch(() => {});
+      await delay(20 * (attempt + 1));
+    }
+  }
+  throw lastError ?? new Error(`写不进派工记录：${path}`);
 }

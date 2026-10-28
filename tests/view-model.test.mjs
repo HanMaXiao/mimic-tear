@@ -9,6 +9,7 @@ import {
   buildKpi,
   buildDutyStatus,
   dutyStaleAfterMinutes,
+  normalizeConclusionSource,
   questionnaireBody,
   projectName,
   sessionErrorBody,
@@ -418,5 +419,63 @@ test('view-model', async (t) => {
     assert.equal(projectName('D:/projects/alpha/'), 'alpha');
     assert.equal(projectName('D:\\projects\\alpha'), 'alpha');
     assert.equal(projectName(''), '未知项目');
+  });
+
+  await t.test('结论的来源只有两种：值班交班与看板巡检', () => {
+    assert.equal(normalizeConclusionSource('duty'), 'duty');
+    assert.equal(normalizeConclusionSource('board'), 'board');
+  });
+
+  await t.test('旧结论没有来源字段：按 board 兜底，但不能被丢掉', () => {
+    // A conclusion written before the field existed carries no origin. Dropping it
+    // would take something off the user's desk without saying so, so it is kept and
+    // reads as 'board' — the origin that produces conclusions with no duty round.
+    assert.equal(normalizeConclusionSource(undefined), 'board');
+    assert.equal(normalizeConclusionSource(null), 'board');
+    assert.equal(normalizeConclusionSource(''), 'board');
+    assert.equal(normalizeConclusionSource('胡写的'), 'board');
+    assert.equal(normalizeConclusionSource(undefined, 'duty'), 'duty', '调用方可以自己定兜底');
+  });
+
+  await t.test('值班行的「N 条结论待你过目」不能把两种来源混在一起数', () => {
+    const duty = buildDutyStatus({
+      config: {
+        lastRunAt: NOW - 5 * 60_000,
+        intervalMinutes: 15,
+        dutyIntervalMinutes: 30,
+      },
+      findings: [
+        { acknowledged: false, source: 'duty' },
+        { acknowledged: false, source: 'duty' },
+        { acknowledged: false, source: 'board' },
+        { acknowledged: false },
+        { acknowledged: true, source: 'duty' },
+      ],
+      now: NOW,
+    });
+
+    assert.equal(duty.openFindings, 4, '总数不变——现有客户端读的还是这个字段');
+    assert.equal(duty.dutyOpenFindings, 2, '值班交班产生的结论要单独数');
+    assert.equal(duty.boardOpenFindings, 2, '看板自己巡检出来的与旧结论都算 board');
+    assert.equal(duty.dutyOpenFindings + duty.boardOpenFindings, duty.openFindings, '两种来源加起来必须等于总数，不能凭空多出或漏掉一条');
+  });
+
+  await t.test('结论被确认或撤回之后，两种来源的待办数都要跟着减', () => {
+    const duty = buildDutyStatus({
+      config: {
+        lastRunAt: NOW - 5 * 60_000,
+        intervalMinutes: 15,
+        dutyIntervalMinutes: 30,
+      },
+      findings: [
+        { acknowledged: true, source: 'duty' },
+        { acknowledged: true, source: 'board' },
+      ],
+      now: NOW,
+    });
+
+    assert.equal(duty.openFindings, 0);
+    assert.equal(duty.dutyOpenFindings, 0);
+    assert.equal(duty.boardOpenFindings, 0);
   });
 });

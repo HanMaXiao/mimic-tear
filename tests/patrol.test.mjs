@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { PatrolStore } from '../miniapps/mimic-tear/miniapp/node/patrol-store.mjs';
+import { Persistence } from '../miniapps/mimic-tear/miniapp/node/persistence.mjs';
 import { ProjectService, DomainError } from '../miniapps/mimic-tear/miniapp/node/project-service.mjs';
 import {
   boardPatrolAction,
@@ -609,6 +610,244 @@ test('patrol', async (t) => {
         () => service.runPatrol(),
         (error) => error instanceof DomainError && error.code === 'patrol_unavailable',
       );
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  await t.test('结论要带来源：值班路径写的算 duty，看板自己巡检的算 board', async () => {
+    const dir = tmpDir();
+    const dataDir = join(dir, 'data');
+    const patrol = new PatrolStore(dataDir);
+    try {
+      // The duty path (the CLI the boss calls from its cron round) writes through the
+      // store without saying where the conclusion came from.
+      const duty = await patrol.add({
+        projectId: 1,
+        projectName: 'alpha',
+        severity: 'high',
+        title: '值班结论',
+        body: '这一轮发现的问题',
+      });
+      assert.equal(duty.source, 'duty', '值班路径写的结论来源是 duty');
+
+      // The board's own patrol loop says so explicitly.
+      const board = await patrol.add({
+        projectId: 1,
+        projectName: 'alpha',
+        severity: 'medium',
+        title: '看板结论',
+        body: '这一轮发现的问题',
+        source: 'board',
+      });
+      assert.equal(board.source, 'board');
+
+      const stored = await patrol.list();
+      assert.equal(stored.length, 2);
+      assert.equal(stored.find((f) => f.title === '值班结论').source, 'duty');
+      assert.equal(stored.find((f) => f.title === '看板结论').source, 'board');
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  await t.test('旧结论没有来源字段：默认 board，一条都不能少', async () => {
+    const dir = tmpDir();
+    const dataDir = join(dir, 'data');
+    try {
+      // A conclusion written before the field existed.
+      mkdirSync(dataDir, { recursive: true });
+      writeFileSync(join(dataDir, 'patrol.json'), JSON.stringify([
+        {
+          id: 'patrol_legacy',
+          createdAt: 1,
+          projectId: 1,
+          projectName: 'alpha',
+          severity: 'high',
+          title: '旧结论',
+          body: '还没有来源字段时写的',
+          acknowledged: false,
+          acknowledgedBy: null,
+          note: '',
+        },
+      ]), 'utf8');
+
+      const patrol = new PatrolStore(dataDir);
+      const findings = await patrol.list();
+      assert.equal(findings.length, 1, '旧结论不能被丢掉');
+      assert.equal(findings[0].source, 'board', '旧结论按 board 兜底');
+      assert.equal(findings[0].title, '旧结论', '旧结论的内容一个字都不能少');
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  await t.test('值班路径的投递要进派工账，标成 duty', async () => {
+    const dir = tmpDir();
+    const dataDir = join(dir, 'data');
+    const patrol = new PatrolStore(dataDir);
+    try {
+      await patrol.recordDutyDispatch({
+        targetSessionId: 'sess-alpha-lead',
+        instruction: '把 P1 排到明天',
+        text: '按你的要求排的',
+      });
+
+      const dispatches = JSON.parse(readFileSync(join(dataDir, 'dispatches.json'), 'utf8'));
+      assert.equal(dispatches.length, 1, '值班路径的投递要落在看板那本账里');
+      assert.equal(dispatches[0].source, 'duty');
+      assert.equal(dispatches[0].targetSessionId, 'sess-alpha-lead');
+      assert.equal(dispatches[0].instruction, '把 P1 排到明天');
+      assert.equal(dispatches[0].status, 'done');
+      // The board's idempotency key space stays untouched: a duty record can never be
+      // found by a board key lookup, so a fresh instruction is never a false duplicate.
+      assert.equal(dispatches[0].idempotencyKey, null);
+      assert.notEqual(dispatches[0].id.startsWith('dsp_duty_'), false, '值班记录的 id 要有自己的前缀');
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  await t.test('大哥代答时的那次投递也要记账——不然两条线索各说各话', async () => {
+    const dir = tmpDir();
+    const dataDir = join(dir, 'data');
+    const patrol = new PatrolStore(dataDir);
+    try {
+      await patrol.markAnswered({
+        requestId: 'req-1',
+        sessionId: 'sess-alpha-lead',
+        answer: '选方案 A',
+        rationale: '风险可逆',
+        optionIds: ['a'],
+      });
+
+      const dispatches = JSON.parse(readFileSync(join(dataDir, 'dispatches.json'), 'utf8'));
+      assert.equal(dispatches.length, 1, '代答也是一次真实投递');
+      assert.equal(dispatches[0].source, 'duty');
+      assert.equal(dispatches[0].targetSessionId, 'sess-alpha-lead');
+      assert.equal(dispatches[0].instruction, '选方案 A');
+
+      // The same card answered twice is still one delivery — no double counting.
+      await patrol.markAnswered({
+        requestId: 'req-1',
+        sessionId: 'sess-alpha-lead',
+        answer: '选方案 A',
+        rationale: '风险可逆',
+        optionIds: ['a'],
+      });
+      const again = JSON.parse(readFileSync(join(dataDir, 'dispatches.json'), 'utf8'));
+      assert.equal(again.length, 1, '同一张卡不能被记成两次投递');
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  await t.test('值班路径写账不能把看板已有的派工记录挤掉', async () => {    const dir = tmpDir();
+    const dataDir = join(dir, 'data');
+    const patrol = new PatrolStore(dataDir);
+    try {
+      // The board writes its own record first, the way the dispatch button does.
+      const persistence = new Persistence(dataDir);
+      await persistence.saveDispatch({
+        id: 'dsp_board_1',
+        idempotencyKey: 'key-1',
+        source: 'board',
+        projectId: 1,
+        projectName: 'alpha',
+        targetSessionId: 'sess-alpha-lead',
+        instruction: '看板下达的指令',
+        status: 'done',
+        bossSessionId: 'boss-session-1',
+        text: '',
+        error: null,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+
+      await patrol.recordDutyDispatch({
+        targetSessionId: 'sess-beta-lead',
+        instruction: '值班投递的指令',
+      });
+
+      const dispatches = JSON.parse(readFileSync(join(dataDir, 'dispatches.json'), 'utf8'));
+      assert.equal(dispatches.length, 2, '两条记录都要在');
+      assert.ok(
+        dispatches.some((d) => d.id === 'dsp_board_1' && d.idempotencyKey === 'key-1'),
+        '看板那条记录不能被值班写入挤掉——它一丢，同一个幂等键就会被投递两次',
+      );
+      assert.ok(dispatches.some((d) => d.source === 'duty'));
+
+      // And the board's key lookup still finds its own record only.
+      const found = await persistence.findDispatchByKey('key-1');
+      assert.equal(found?.id, 'dsp_board_1');
+      assert.equal(await persistence.findDispatchByKey('duty'), null, '值班记录不能被看板的键查到');
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  await t.test('值班路径（CLI report）写出来的结论，来源是 duty', () => {
+    const dir = tmpDir();
+    const dbPath = makeRuntimeDb(dir);
+    const dataDir = join(dir, 'data');
+    try {
+      // The real duty path: the boss runs `report --duty-stamp` from its cron round.
+      const reportFile = join(dir, 'report.json');
+      writeFileSync(reportFile, JSON.stringify({
+        findings: [{
+          projectId: 1,
+          projectName: 'alpha',
+          severity: 'high',
+          title: '值班结论',
+          body: '需要你处理',
+        }],
+        answered: [],
+      }), 'utf8');
+      runCli(dbPath, dataDir, ['report', '--file', reportFile, '--duty-stamp']);
+
+      const findings = JSON.parse(readFileSync(join(dataDir, 'patrol.json'), 'utf8'));
+      assert.equal(findings.length, 1);
+      assert.equal(findings[0].source, 'duty', '值班路径写出来的结论必须带 duty 来源');
+
+      // And the boss's own fact sheet can tell the two origins apart.
+      const facts = runCli(dbPath, dataDir);
+      assert.equal(facts.duty.dutyOpenFindings, 1);
+      assert.equal(facts.duty.boardOpenFindings, 0);
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  await t.test('派工账坏了：不能被清空重来，交班也不能因此丢掉', async () => {
+    const dir = tmpDir();
+    const dataDir = join(dir, 'data');
+    const patrol = new PatrolStore(dataDir);
+    try {
+      mkdirSync(dataDir, { recursive: true });
+      // A ledger that cannot be parsed. Overwriting it would throw away records that
+      // are still the only trace of what was delivered.
+      writeFileSync(join(dataDir, 'dispatches.json'), '{ 这不是 JSON', 'utf8');
+
+      await assert.rejects(
+        () => patrol.recordDutyDispatch({ targetSessionId: 'sess-alpha-lead', instruction: 'x' }),
+        (error) => /JSON|数组/.test(String(error?.message ?? '')),
+        '写坏了的账要报错，不能默默重来',
+      );
+      assert.equal(
+        readFileSync(join(dataDir, 'dispatches.json'), 'utf8'),
+        '{ 这不是 JSON',
+        '坏掉的内容不能被覆盖掉',
+      );
+
+      // And the duty path's handover must not die because of it: the answer is still
+      // recorded, and the round still hands over.
+      await patrol.markAnswered({
+        requestId: 'req-1',
+        sessionId: 'sess-alpha-lead',
+        answer: '选方案 A',
+      });
+      const answered = await patrol.listAnswered();
+      assert.equal(answered.length, 1, '代答记录必须落盘');
     } finally {
       cleanupDir(dir);
     }

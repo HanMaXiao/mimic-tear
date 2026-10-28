@@ -10,6 +10,7 @@ import { normalizeDutyIntent } from './duty-intent.mjs';
 
 /**
  * @typedef {'active'|'idle'|'blocked'|'error'} Health
+ * @typedef {'duty'|'board'} ConclusionSource
  * @typedef {{ id:number, kind:string, workspaceDir:string, pinned:boolean, hidden:boolean,
  *             orderIndex:number, recentAt:number|null, latestActivityAt:number|null,
  *             sessionCount:number }} ProjectRow
@@ -35,7 +36,8 @@ import { normalizeDutyIntent } from './duty-intent.mjs';
  *             severity:'high'|'medium'|'low', projectId:number, projectName:string,
  *             sessionId:string|null, sessionTitle:string|null, title:string, body:string,
  *             createdAt:number, ageMinutes:number, acknowledged:boolean,
- *             handledBy:'user'|'boss'|null, handledReason:string }} InboxItem
+ *             handledBy:'user'|'boss'|null, handledReason:string,
+ *             source?:ConclusionSource }} InboxItem
  * @typedef {{ id:string, agentName:string, title:string, status:string,
  *             role:'lead'|'member', purpose:string|null, error:string|null,
  *             children:OrgNode[] }} OrgNode
@@ -51,6 +53,28 @@ import { normalizeDutyIntent } from './duty-intent.mjs';
 
 /** Inbox severities, ordered from most to least urgent. */
 const SEVERITY_ORDER = { high: 0, medium: 1, low: 2 };
+
+/**
+ * Normalise the origin of a conclusion.
+ *
+ * A conclusion is either produced by the boss's cron duty round (`duty`) or by the
+ * board's own patrol loop (`board`). The two used to be indistinguishable: the client
+ * labelled every one of them 「大哥巡检」, and the duty line's "N conclusions awaiting
+ * your review" counted both — so a number that grew because of the board's own patrol
+ * looked like the duty boss had more to say.
+ *
+ * A conclusion written before the field existed carries no source at all. It is NOT
+ * dropped: it defaults to `board`, which is the origin that produces conclusions without
+ * a duty handover behind them.
+ *
+ * @param {any} value
+ * @param {ConclusionSource} [fallback] what an unknown or missing source means here
+ * @returns {ConclusionSource}
+ */
+export function normalizeConclusionSource(value, fallback = 'board') {
+  if (value === 'duty' || value === 'board') return value;
+  return fallback;
+}
 
 /**
  * Whether a questionnaire is still waiting for an answer.
@@ -406,12 +430,13 @@ export function dutyStaleAfterMinutes(dutyIntervalMinutes) {
  *
  * @param {{config:{lastRunAt:number|null,intervalMinutes:number,
  *                 dutyIntervalMinutes?:number},
- *          findings:Array<{acknowledged:boolean, acknowledgedBy?:string|null}>,
+ *          findings:Array<{acknowledged:boolean, acknowledgedBy?:string|null, source?:string}>,
  *          dismissed?:Array<{id:string, reason?:string}>,
  *          intent?:{mode?:string, since?:number|null, requestedBy?:string|null, note?:string},
  *          now?:number}} input
  * @returns {{lastRunAt:number|null, intervalMinutes:number, dutyIntervalMinutes:number,
  *            findings:number, openFindings:number, withdrawn:number,
+ *            dutyOpenFindings:number, boardOpenFindings:number,
  *            dismissed:number, staleAfterMinutes:number, stale:boolean, neverRan:boolean,
  *            ageMinutes:number|null, missedRounds:number|null,
  *            mode:'on-duty'|'resting', resting:boolean, modeSince:number|null,
@@ -439,6 +464,14 @@ export function buildDutyStatus(input) {
     dutyIntervalMinutes,
     findings: findings.length,
     openFindings: findings.filter((finding) => !finding.acknowledged).length,
+    // The same number, split by origin. The duty line must be able to say how many of
+    // the conclusions on the desk came from the duty round and how many from the
+    // board's own patrol loop — one number for both reads as one thing, and it is two.
+    // A conclusion written before the field existed counts as `board`.
+    dutyOpenFindings: findings.filter((finding) => !finding.acknowledged
+      && normalizeConclusionSource(finding.source) === 'duty').length,
+    boardOpenFindings: findings.filter((finding) => !finding.acknowledged
+      && normalizeConclusionSource(finding.source) === 'board').length,
     // Conclusions the boss retracted itself. They leave the attention list, so the board has
     // to say how many were withdrawn — otherwise the boss could quietly clear your desk.
     withdrawn: findings.filter((finding) => finding.acknowledgedBy === 'boss').length,
