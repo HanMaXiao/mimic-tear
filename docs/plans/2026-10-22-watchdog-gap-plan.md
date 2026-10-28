@@ -104,7 +104,9 @@ run_id | cron_id | session_id | status | created_at_ms | delivered_at_ms | faile
 | A2 | 缺口能被算出来 | 一个带 `local_runtime_v2_cron_runs` 表与两行（gap 390m）的库 → 断言 watchdog 判 `missed` 且 `missedRounds === 12` | ✅（表建在测试文件本地，**没动共享夹具** `tests/helpers/fixture.mjs`） |
 | A3 | 真实库回归 | `node watchdog.mjs --dry-run` 的 JSON 里的 `missedRounds` | ✅ 逐段 2 / 14 / 13 / 12 / 4 + 尾部 1 = **46**（03:1x 快照的 41 已过期：41 + 新窗口 4 + 尾部 1） |
 | A4 | 不重复报 | 连跑两次 tick → alert 文件里同一段空档（同一 `to`）只出现一次 | ✅（生产已验证：05:45 那轮报过一次并写进 `reportedGaps`，之后的 dry-run 不再报） |
-| A5 | 旧行为没坏 | `lastRunAt` 够老 → 仍然报 `stale`；够新且无空档 → `none`。现有 watchdog 单测全绿 | ✅ 全量 279 项全绿 |
+| A5 | 旧行为没坏 | `lastRunAt` 够老 → 仍然报 `stale`；够新且无空档 → `none`。现有 watchdog 单测全绿 | ✅ 全量 411 项全绿 |
+
+> **2026-10-28 补记**：A5 那行的全量条数由 279 订正为 **411**（`node --test` 的 TAP 输出：`tests 411 / pass 411 / fail 0`，2026-10-28 复测）。279 是 2026-10-22 验收当时的数字，已过期。
 
 ### 1.5 明确不做
 
@@ -182,13 +184,15 @@ run_id | cron_id | session_id | status | created_at_ms | delivered_at_ms | faile
 ## 3. 顺序与切分
 
 ```
-片 1（缺口一，纯 node）✅ 已执行    片 2（缺口二）⬜ 未做
+片 1（缺口一，纯 node）✅ 已执行    片 2（缺口二）✅ 文件侧已做，计划任务那半做不成
   ├ RuntimeStore.listCronRuns         ├ alert 文件改 JSONL + 总是写（可单测）
   ├ computeDutyEvidence（纯函数）      ├ GET /api/watchdog/alerts（只加字段）
-  ├ watchdog 三态判定 + 去重           ├ 实测 S4U 能不能注册
-  ├ 夹具加表 + 单测                    └ 注册任务（能则 S4U，不能则回退）
+  ├ watchdog 三态判定 + 去重           ├ 实测 S4U 能不能注册 → 建不起来（Access is denied）
+  ├ 夹具加表 + 单测                    └ 注册任务（能则 S4U，不能则回退）→ 回退到文件侧
   └ 真实库回归
 ```
+
+> **2026-10-28 补记：这一行的状态自相矛盾，已订正。** 原写「片 2（缺口二）⬜ 未做」，但同一份文件的开头状态行与 §2 的状态块都写着**缺口二文件侧已实现并发布**（`c77d992` / `79590fe` / `144dce7` / `f19b0b9`）——**「未做」与本文件自己的记录冲突**。准确的口径是：**文件侧（B2–B6）已做并发布；计划任务那半（S4U）实测建不起来**（`schtasks /create` → `ERROR: Access is denied.`，非管理员不允许），按 §2.4 自带回退走——所以准确说法是**「文件侧已做，那半受权限所限做不成」**，而不是「未做」，也不是「全做完了」。
 
 **片 1 先做**：不碰 Windows、不碰权限、纯 node，风险最低，且它是缺口二的前提（没有 missed 状态，alert 文件里也没东西可写）。
 

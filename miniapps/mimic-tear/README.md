@@ -39,7 +39,9 @@
 
 - MiniMax Code 桌面端（Windows / macOS）
 - Node.js ≥ 22（用到 `node:sqlite`），开发与测试在 Node 24 上验证
-- 测试：`node --test`（386 个用例，无第三方依赖）
+- 测试：`node --test`（411 个用例，无第三方依赖）
+
+> **2026-10-28 补记**：用例数由 386 订正为 **411**（`node --test` 的 TAP 输出：`tests 411 / pass 411 / fail 0`，2026-10-28 复测）。386 是旧数字，已过期。
 
 ## 目录
 

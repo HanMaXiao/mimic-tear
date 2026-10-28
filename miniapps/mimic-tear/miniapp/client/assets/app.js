@@ -14,11 +14,16 @@ const API = {
   skills: '/api/skills',
   skillLibrary: '/api/skill-library',
   dispatch: '/api/dispatch',
+  // The dispatch record read back by its id. This is how a dispatch that was still in
+  // flight when the page was closed finds its result.
+  dispatchStatus: (id) => `/api/dispatch/${id}`,
   ack: '/api/inbox/ack',
   permission: (requestId) => `/api/permissions/${requestId}`,
   patrol: '/api/patrol',
   patrolConfig: '/api/patrol/config',
   patrolRun: '/api/patrol/run',
+  // The watchdog's alert log: every alert it ever raised, delivered or not.
+  watchdogAlerts: '/api/watchdog/alerts',
   chat: '/api/chat',
   chatAnswer: '/api/chat/answer',
   chatSession: '/api/chat/session',
@@ -51,6 +56,17 @@ const state = {
   // remember its own target: deriving it from the current route silently sends the
   // instruction to whichever project was opened last.
   dispatchTarget: { projectId: null, sessionId: null },
+  // The dispatch this page is waiting for. The dispatch itself lives on the server; the
+  // page only remembers its id, so a reload can read the record back instead of losing
+  // an instruction that is still on its way.
+  dispatchId: null,
+  dispatch: null,
+  // The dispatches already announced on this page, so a restored outcome and a live
+  // event never say the same thing twice.
+  announcedDispatches: new Set(),
+  // The watchdog's alert log. `null` means "not read yet" — the panel is still loading.
+  alerts: null,
+  alertsError: null,
   // The conversation with the boss. `messages` is the transcript; `streaming` is the reply
   // being written right now; `question` is the questionnaire the boss is waiting on.
   // `bossSessionId` is the boss's own session, needed to open the same conversation in the
@@ -170,6 +186,33 @@ const KIND_LABEL = {
   'plan-blocked': '计划阻塞',
   patrol: '大哥巡检',
 };
+
+/**
+ * The three things the watchdog's log can say.
+ *
+ * The watchdog flips between them: the boss went quiet (`stale`), the boss came back
+ * (`recovered`), or rounds were lost on the way (`missed`). The board speaks in words;
+ * the raw name stays on the tag, so the log can still be matched against the watchdog's
+ * own output.
+ */
+const ALERT_ACTION_LABEL = {
+  stale: '掉线',
+  recovered: '归位',
+  missed: '漏轮',
+};
+
+/** How loud each kind of alert is, in the board's existing tag vocabulary. */
+const ALERT_ACTION_TONE = {
+  stale: 'tag--high',
+  recovered: 'tag--done',
+  missed: 'tag--medium',
+};
+
+/** How many entries the alert log shows at once. */
+const ALERT_LIMIT = 50;
+
+/** How many columns the alert table has — the four states span all of them. */
+const ALERT_COLUMNS = 5;
 
 function toast(message, kind = 'info') {
   const host = el('toast-host');
@@ -910,6 +953,145 @@ function renderSkillLibrary() {
     .join('');
 }
 
+/* ------------------------------------------------------------ watchdog alerts */
+
+/**
+ * A duration in words.
+ *
+ * @param {number} minutes
+ * @returns {string}
+ */
+function durationLabel(minutes) {
+  const total = Number(minutes);
+  if (!Number.isFinite(total) || total < 0) return '—';
+  if (total < 60) return `${Math.round(total)} 分钟`;
+  if (total < 1440) return `${Math.round(total / 60)} 小时`;
+  return `${Math.round(total / 1440)} 天`;
+}
+
+/**
+ * How long the condition an alert reports lasted.
+ *
+ * The alert record does not carry a duration field: the watchdog writes the facts down in
+ * its own words ("已 35 分钟没有交班"). The number of minutes is therefore read from the
+ * body — the first "N 分钟" is the duration in every message the watchdog writes (the
+ * silence for a stale boss, the downtime for a recovered one, the gap for a missed round).
+ * A record that ever carries the number outright is used as it is.
+ *
+ * @param {any} alert
+ * @returns {string}
+ */
+function alertDurationLabel(alert) {
+  const explicit = Number(alert?.durationMinutes ?? alert?.gapMinutes ?? NaN);
+  if (Number.isFinite(explicit)) return durationLabel(explicit);
+  const match = /(\d+)\s*分钟/.exec(String(alert?.body ?? ''));
+  if (match) return durationLabel(Number(match[1]));
+  return '—';
+}
+
+/**
+ * The moment an alert was written down, in local time.
+ *
+ * @param {number} timestamp
+ * @returns {string}
+ */
+function alertMoment(timestamp) {
+  const time = Number(timestamp);
+  if (!Number.isFinite(time) || time <= 0) return '—';
+  const date = new Date(time);
+  if (Number.isNaN(date.getTime())) return '—';
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/**
+ * One alert, as a row of the log.
+ *
+ * @param {any} alert
+ * @returns {string}
+ */
+function alertRowHtml(alert) {
+  const action = String(alert?.action ?? '');
+  const label = ALERT_ACTION_LABEL[action] ?? (action || '未知');
+  const tone = ALERT_ACTION_TONE[action] ?? '';
+  const delivered = alert?.delivered === true;
+  // Why the notification did not land: the error first, the note second. One of the two is
+  // always the reason, and saying which one is the difference between "it failed" and
+  // "it failed because the notifications are switched off".
+  const reason = alert?.error || alert?.note || '';
+
+  return `
+    <tr>
+      <td class="nowrap">
+        <span class="cell-project__name">${escapeHtml(alertMoment(alert?.at))}</span>
+        <span class="cell-project__path">${escapeHtml(relativeTime(alert?.at))}</span>
+      </td>
+      <td class="nowrap"><span class="tag ${tone}" title="${escapeHtml(action)}">${escapeHtml(label)}</span></td>
+      <td class="nowrap">${escapeHtml(alertDurationLabel(alert))}</td>
+      <td class="nowrap">
+        <span class="tag ${delivered ? 'tag--done' : 'tag--high'}">${delivered ? '已送达' : '未送达'}</span>
+        ${reason ? `<span class="cell-project__path">${escapeHtml(reason)}</span>` : ''}
+      </td>
+      <td>
+        <span class="alerts__title">${escapeHtml(alert?.title ?? '')}</span>
+        <span class="alerts__body">${escapeHtml(alert?.body ?? '')}</span>
+      </td>
+    </tr>`;
+}
+
+/**
+ * The alert log, in its four states.
+ *
+ * A log that says nothing has to say *why* it says nothing: "still loading" and "the read
+ * failed" are different facts, and a panel that shows an empty table for both makes the
+ * second one look like the first.
+ */
+function renderAlerts() {
+  const body = el('alerts-body');
+  if (!body) return;
+  const count = el('alerts-count');
+  const alerts = state.alerts;
+
+  if (alerts === null) {
+    if (count) count.textContent = '';
+    body.innerHTML = `<tr><td colspan="${ALERT_COLUMNS}"><div class="state"><span class="spinner" aria-hidden="true"></span>正在加载告警日志…</div></td></tr>`;
+    return;
+  }
+  if (state.alertsError) {
+    if (count) count.textContent = '';
+    body.innerHTML = `<tr><td colspan="${ALERT_COLUMNS}"><div class="state state--error">告警日志读取失败：${escapeHtml(state.alertsError)}</div></td></tr>`;
+    return;
+  }
+  if (!alerts.length) {
+    if (count) count.textContent = '';
+    body.innerHTML = `<tr><td colspan="${ALERT_COLUMNS}"><div class="empty">看门狗还没有报过警。</div></td></tr>`;
+    return;
+  }
+  if (count) count.textContent = `${alerts.length} 条`;
+  body.innerHTML = alerts.map(alertRowHtml).join('');
+}
+
+/**
+ * Read the alert log.
+ *
+ * The log is read fresh every time the panel is opened: it is a record of what happened
+ * while nobody was looking, so a cached copy would be the one thing it must never be.
+ */
+async function loadWatchdogAlerts() {
+  state.alerts = null;
+  state.alertsError = null;
+  renderAlerts();
+
+  try {
+    const payload = await request(`${API.watchdogAlerts}?limit=${ALERT_LIMIT}`);
+    state.alerts = Array.isArray(payload?.alerts) ? payload.alerts : [];
+  } catch (error) {
+    state.alerts = [];
+    state.alertsError = error.message;
+  }
+  renderAlerts();
+}
+
 /* -------------------------------------------------------------------- chat */
 
 /**
@@ -1269,6 +1451,7 @@ const VIEWS = {
   inbox: 'view-inbox',
   project: 'view-project',
   skills: 'view-skills',
+  alerts: 'view-alerts',
 };
 
 /**
@@ -1322,6 +1505,14 @@ function renderHeaderContext() {
     const installed = scan ? `${scan.total} 个技能 · ${scan.groups.length} 个领域` : '正在加载…';
     const packaged = library ? `已封装 ${library.stats?.active ?? 0} 个可派工` : null;
     setHeader('能力库', packaged ? `${installed} · ${packaged}` : installed);
+    return;
+  }
+  if (view === 'alerts') {
+    const alerts = state.alerts;
+    setHeader(
+      '看门狗告警',
+      alerts === null ? '正在加载…' : (alerts.length ? `${alerts.length} 条告警` : '还没有告警'),
+    );
     return;
   }
   setHeader('对话', '大哥的交班与对话');
@@ -1413,6 +1604,14 @@ async function renderRoute() {
       }
     }
     renderSkills();
+    await overviewPromise;
+    return;
+  }
+
+  if (route.name === 'alerts') {
+    // The alert log is read on every visit: it is the record of what happened while the
+    // board was closed, so a stale copy would defeat the whole point of it.
+    await loadWatchdogAlerts();
     await overviewPromise;
     return;
   }
@@ -1516,8 +1715,10 @@ function connectStream() {
 
   eventSource.addEventListener('dispatch', (event) => {
     const payload = JSON.parse(event.data);
-    if (payload.delivered) toast('指令已投递给目标会话');
-    else toast(`派工未完成：${payload.error || '大哥未确认投递'}`, 'error');
+    renderDispatchOutcome(normalizeDispatchOutcome(payload));
+    // The dispatch is finished: there is nothing left to restore after a reload.
+    const dispatchId = payload?.dispatchId ?? payload?.id ?? null;
+    if (dispatchId) forgetDispatchId(dispatchId);
     void refresh();
   });
 
@@ -1689,7 +1890,7 @@ async function submitDispatch(event) {
   submit.textContent = '下达中…';
 
   try {
-    await request(API.dispatch, {
+    const payload = await request(API.dispatch, {
       method: 'POST',
       body: JSON.stringify({
         projectId: target.projectId,
@@ -1698,6 +1899,9 @@ async function submitDispatch(event) {
         idempotencyKey: crypto.randomUUID(),
       }),
     });
+    // The id is what makes the dispatch recoverable: the page can read the record back
+    // after a reload instead of losing the instruction on the way.
+    rememberDispatchPayload(payload);
     el('dispatch-dialog').close();
     toast('指令已交给大哥，正在投递');
   } catch (error) {
@@ -1712,6 +1916,248 @@ function showDispatchError(message) {
   const node = el('dispatch-error');
   node.hidden = false;
   node.textContent = message;
+}
+
+/* ------------------------------------------------------- dispatch recovery */
+
+/**
+ * Where the id of the dispatch this page is waiting for is kept.
+ *
+ * The dispatch itself lives on the server; the page only has to remember which one to ask
+ * for. `localStorage` is the obvious place, but it is not guaranteed to exist (a sandboxed
+ * frame, a test shim), so every access is guarded — a page that cannot remember still
+ * works, it just cannot recover.
+ */
+let dispatchStoreCache;
+
+/**
+ * The store this page keeps its dispatch id in.
+ *
+ * The store is looked up once and then kept: it belongs to this page, and a page that
+ * swapped stores underneath itself would forget the dispatch it is waiting for.
+ *
+ * @returns {Storage|null}
+ */
+function dispatchStore() {
+  if (dispatchStoreCache === undefined) {
+    try {
+      dispatchStoreCache = globalThis.localStorage ?? null;
+    } catch {
+      dispatchStoreCache = null;
+    }
+  }
+  return dispatchStoreCache;
+}
+
+const DISPATCH_ID_KEY = 'mimic-tear:dispatch-id';
+
+/**
+ * Remember the dispatch this page is waiting for.
+ *
+ * @param {string} id
+ */
+function rememberDispatchId(id) {
+  const value = String(id ?? '');
+  if (!value) return;
+  state.dispatchId = value;
+  try {
+    dispatchStore()?.setItem(DISPATCH_ID_KEY, value);
+  } catch {
+    // A blocked or full store must not break the dispatch: the page still works, it just
+    // cannot recover from a reload.
+  }
+}
+
+/**
+ * The dispatch id this page remembers, if any.
+ *
+ * @returns {string|null}
+ */
+function readRememberedDispatchId() {
+  try {
+    return dispatchStore()?.getItem(DISPATCH_ID_KEY) || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Forget a dispatch: it is finished, so there is nothing left to restore.
+ *
+ * @param {string|null} id only the dispatch with this id is forgotten; another dispatch
+ *   this page is waiting for is left alone.
+ */
+function forgetDispatchId(id) {
+  if (id && state.dispatchId && state.dispatchId !== id) return;
+  state.dispatchId = null;
+  try {
+    const store = dispatchStore();
+    // Only drop the key when it still points at this dispatch: another page may have
+    // taken over the slot, and that page's dispatch must not be forgotten by this one.
+    if (!id || store?.getItem(DISPATCH_ID_KEY) === id) store?.removeItem(DISPATCH_ID_KEY);
+  } catch {
+    // Nothing to do: the in-memory copy is gone, which is what this page needs.
+  }
+}
+
+/**
+ * Is this dispatch still on its way?
+ *
+ * @param {string} status
+ * @returns {boolean}
+ */
+function isPendingDispatch(status) {
+  return status === 'queued' || status === 'running';
+}
+
+/**
+ * One shape for both kinds of dispatch outcome.
+ *
+ * The live event says `delivered`; the stored record says `status`. The two have to end up
+ * in the same shape, or a restored result would be a different thing from a live one.
+ *
+ * @param {any} source
+ * @returns {{dispatchId:string|null, status:string, delivered:boolean, text:string, error:string|null}}
+ */
+function normalizeDispatchOutcome(source) {
+  const status = String(source?.status ?? '');
+  const delivered = typeof source?.delivered === 'boolean' ? source.delivered : status === 'done';
+  return {
+    dispatchId: source?.dispatchId ?? source?.id ?? null,
+    status,
+    delivered,
+    text: source?.text ?? '',
+    error: source?.error ?? null,
+  };
+}
+
+/**
+ * The one place a dispatch outcome becomes something the user sees.
+ *
+ * The live path is the SSE 'dispatch' event; the recovery path is the record read back
+ * from the server after a reload. Both go through here, so a dispatch that was restored
+ * can never look different from one that arrived live.
+ *
+ * @param {{dispatchId:string|null, status:string, delivered:boolean, error:string|null}} outcome
+ */
+function renderDispatchOutcome(outcome) {
+  if (!outcome) return;
+
+  if (isPendingDispatch(outcome.status)) {
+    // Still on its way: this is a state, not a verdict. The outcome follows.
+    toast('指令仍在投递中');
+    return;
+  }
+
+  const key = outcome.dispatchId ?? '';
+  if (key) {
+    // The live event and the restored record describe the same dispatch; saying it twice
+    // would read as two dispatches.
+    if (state.announcedDispatches.has(key)) return;
+    state.announcedDispatches.add(key);
+  }
+
+  if (outcome.delivered) toast('指令已投递给目标会话');
+  else toast(`派工未完成：${outcome.error || '大哥未确认投递'}`, 'error');
+}
+
+/**
+ * Remember the dispatch this page is waiting for.
+ *
+ * Only a dispatch that is still on its way is worth remembering: a finished one has
+ * already been announced, and a reload must not repeat it.
+ *
+ * @param {any} payload
+ */
+function rememberDispatchPayload(payload) {
+  const id = payload?.dispatchId ?? payload?.id ?? null;
+  if (!id) return;
+  if (isPendingDispatch(payload?.status)) {
+    rememberDispatchId(id);
+    return;
+  }
+  forgetDispatchId(id);
+}
+
+/** How long the page waits before it looks at an in-flight dispatch again. */
+const DISPATCH_POLL_MS = 1500;
+
+/** How many times it looks before it stops looking on its own. */
+const DISPATCH_POLL_MAX = 20;
+
+/**
+ * Keep an eye on a dispatch that is still on its way.
+ *
+ * The server keeps the record, so the page can ask again. It stops on its own: a dispatch
+ * that never finishes must not keep the page busy forever.
+ *
+ * @param {string} id
+ * @param {number} [attempt]
+ */
+function scheduleDispatchPoll(id, attempt = 0) {
+  if (attempt >= DISPATCH_POLL_MAX) return;
+  const timer = setTimeout(() => {
+    void pollDispatch(id, attempt + 1);
+  }, DISPATCH_POLL_MS);
+  // In Node the timer would keep the process alive; a browser has nothing to unref.
+  if (timer && typeof timer.unref === 'function') timer.unref();
+}
+
+/**
+ * Read a dispatch again and see whether it has arrived.
+ *
+ * @param {string} id
+ * @param {number} attempt
+ */
+async function pollDispatch(id, attempt) {
+  try {
+    const record = await request(API.dispatchStatus(id));
+    state.dispatch = record;
+    const outcome = normalizeDispatchOutcome(record);
+    if (isPendingDispatch(outcome.status)) {
+      // Still running: keep waiting, but do not repeat the notice.
+      scheduleDispatchPoll(id, attempt);
+      return;
+    }
+    renderDispatchOutcome(outcome);
+    forgetDispatchId(id);
+  } catch (error) {
+    // The record is gone (404): there is nothing left to wait for. Anything else is a
+    // transient failure, so the id is kept and the next reload can try again.
+    if (error?.status === 404) forgetDispatchId(id);
+  }
+}
+
+/**
+ * The dispatch that was still in flight when this page was opened.
+ *
+ * A dispatch runs on the server, in the background: the page only hears about it over
+ * SSE. Reload the page while one is running and that announcement is lost — the
+ * instruction looks like it never went anywhere. The server kept the record, so the page
+ * reads it back by id and says the same thing the live event would have said.
+ *
+ * @returns {Promise<void>}
+ */
+async function restoreDispatch() {
+  const id = readRememberedDispatchId();
+  if (!id) return;
+
+  try {
+    const record = await request(API.dispatchStatus(id));
+    state.dispatch = record;
+    const outcome = normalizeDispatchOutcome(record);
+    renderDispatchOutcome(outcome);
+    if (isPendingDispatch(outcome.status)) {
+      scheduleDispatchPoll(id);
+      return;
+    }
+    // It is finished: there is nothing left to restore after the next reload.
+    forgetDispatchId(id);
+  } catch (error) {
+    // The record is gone (404): there is nothing to restore. Anything else is a transient
+    // failure, so the id is kept and the next reload can try again.
+    if (error?.status === 404) forgetDispatchId(id);
+  }
 }
 
 
@@ -1830,6 +2276,9 @@ el('inbox-pending-only').addEventListener('change', (event) => {
 
 el('refresh-button').addEventListener('click', () => {
   void refresh();
+  // The alert log is a record of the past: it is a separate read, and it only matters
+  // while the log is on screen.
+  if (currentRoute().name === 'alerts') void loadWatchdogAlerts();
 });
 
 /* --------------------------------------------------------------- patrol */
@@ -1924,4 +2373,7 @@ void renderRoute();
 void loadPatrolConfig();
 void loadDutyRounds();
 void loadChatHistory();
+// A dispatch that was still on its way when the page was closed is read back here: the
+// server kept the record, and the page must not pretend the instruction never went out.
+void restoreDispatch();
 connectStream();

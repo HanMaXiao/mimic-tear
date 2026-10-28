@@ -207,6 +207,48 @@ const OVERVIEW = {
 let overviewOverride = null;
 // Lets a test drive the inbox payload.
 let inboxOverride = null;
+// Lets a test drive the watchdog's alert log.
+let alertsOverride = null;
+// Lets a test drive the dispatch record the page reads back by id. A function is called
+// on every read, so a test can make a dispatch change while the page is watching it.
+let dispatchStatusOverride = null;
+
+/**
+ * The dispatch record the server hands back on GET /api/dispatch/:id.
+ *
+ * @returns {any}
+ */
+function dispatchRecord() {
+  if (typeof dispatchStatusOverride === 'function') return dispatchStatusOverride();
+  return dispatchStatusOverride ?? {
+    id: 'd1',
+    status: 'done',
+    text: '好，交给你了',
+    error: null,
+    projectId: 1,
+    projectName: 'alpha',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+}
+
+/**
+ * A `localStorage` stand-in.
+ *
+ * The page remembers the dispatch it is waiting for across a reload, so the store has to
+ * outlive a single load — otherwise "the page was reloaded" cannot be simulated.
+ *
+ * @returns {any}
+ */
+function createStorage() {
+  const map = new Map();
+  return {
+    getItem: (key) => (map.has(key) ? map.get(key) : null),
+    setItem: (key, value) => { map.set(key, String(value)); },
+    removeItem: (key) => { map.delete(key); },
+    clear: () => { map.clear(); },
+  };
+}
 
 const PROJECT_DETAIL = {
   project: PROJECTS[0],
@@ -231,14 +273,28 @@ const PROJECT_DETAIL = {
 /**
  * Load the real client module against a DOM shim and return handles for driving it.
  *
- * @param {{ search?: string, mcode?: any }} [options] query string the page is loaded with;
- *   `mcode` stands in for the Host bridge the real page gets from the preload.
+ * @param {{ search?: string, mcode?: any, keepStorage?: boolean, storage?: any,
+ *           fail?: string[], hang?: string[] }} [options] query string the page is loaded
+ *   with; `mcode` stands in for the Host bridge the real page gets from the preload;
+ *   `keepStorage` keeps the remembered dispatch, which is what a reload looks like;
+ *   `storage` supplies the page's own store, so two loads can share one;
+ *   `fail` and `hang` are path prefixes whose read fails or never answers.
  */
 async function loadClient(options = {}) {
   const html = await readFile(HTML_PATH, 'utf8');
   registry.clear();
   allElements.length = 0;
   buildDom(html);
+
+  // Every page gets its own store: the client holds on to the store it first saw, so a
+  // background poll from an earlier page can never touch this page's dispatch.
+  const store = options.storage ?? createStorage();
+  if (!options.keepStorage) store.clear();
+  Object.defineProperty(globalThis, 'localStorage', {
+    value: store,
+    configurable: true,
+    writable: true,
+  });
 
   const calls = [];
   const sseListeners = new Map();
@@ -269,9 +325,15 @@ async function loadClient(options = {}) {
     close() {}
   };
 
-  globalThis.fetch = async (url, options = {}) => {
-    calls.push({ method: options.method ?? 'GET', url, body: options.body ? JSON.parse(options.body) : null });
+  globalThis.fetch = async (url, request = {}) => {
+    calls.push({ method: request.method ?? 'GET', url, body: request.body ? JSON.parse(request.body) : null });
     const path = String(url);
+    for (const prefix of options.fail ?? []) {
+      if (path.startsWith(prefix)) throw new Error('读取失败');
+    }
+    for (const prefix of options.hang ?? []) {
+      if (path.startsWith(prefix)) return new Promise(() => {});
+    }
     let payload = {};
     if (path.startsWith('/api/overview')) payload = overviewOverride ?? OVERVIEW;
     else if (path.startsWith('/api/inbox')) payload = inboxOverride ?? { items: [] };
@@ -279,8 +341,11 @@ async function loadClient(options = {}) {
     else if (path.startsWith('/api/patrol')) payload = { config: { enabled: false }, findings: [] };
     else if (path.startsWith('/api/projects/')) payload = PROJECT_DETAIL;
     else if (path.startsWith('/api/projects')) payload = { projects: PROJECTS };
+    else if (path.startsWith('/api/watchdog/alerts')) payload = alertsOverride ?? { alerts: [] };
+    // The record read back by id comes before the bare dispatch path: both start with
+    // "/api/dispatch".
+    else if (path.startsWith('/api/dispatch/')) payload = dispatchRecord();
     else if (path.startsWith('/api/dispatch')) payload = { dispatchId: 'd1', status: 'queued' };
-    else if (path.startsWith('/api/chat/session')) payload = { bossSessionId: 'mvs_boss_1', agent: 'boss' };
     else if (path.startsWith('/api/chat/session')) payload = { bossSessionId: 'mvs_boss_1', agent: 'boss' };
     else if (path.startsWith('/api/chat/history')) payload = { messages: [] };
     else if (path.startsWith('/api/chat/duty')) payload = { rounds: [] };
@@ -334,6 +399,34 @@ async function loadClient(options = {}) {
 }
 
 /* ------------------------------------------------------------------- tests */
+
+/**
+ * What the toast host is saying.
+ *
+ * @param {any} client
+ * @returns {string}
+ */
+function toastText(client) {
+  const host = client.element('toast-host');
+  if (!host) return '';
+  return host.children.map((node) => node.textContent).join(' ').trim();
+}
+
+/**
+ * Send one instruction to the first project through the real dialog.
+ *
+ * @param {any} client
+ * @param {string} instruction
+ */
+async function dispatchToAlpha(client, instruction) {
+  const buttons = client.element('projects-body').querySelectorAll('[data-action]')
+    .filter((button) => button.dataset.action === 'dispatch' && button.dataset.project === '1');
+  assert.ok(buttons.length, '项目 1 应有下达指令按钮');
+  client.click(buttons[0]);
+  client.element('dispatch-instruction').value = instruction;
+  client.element('dispatch-form').dispatchEvent({ type: 'submit', preventDefault() {} });
+  await client.settle();
+}
 
 test('client behavior (DOM shim)', async (t) => {
   await t.test('派工目标来自对话框自己的目标，不来自当前路由', async () => {
@@ -929,5 +1022,196 @@ test('client behavior (DOM shim)', async (t) => {
       '非法主题值要当作没给，不能落到任意一个主题上',
     );
     void client;
+  });
+
+  await t.test('看门狗告警：日志把时间、类型、持续时长和送达状态都说出来', async () => {
+    alertsOverride = {
+      alerts: [
+        {
+          at: Date.now() - 30 * 60_000,
+          action: 'stale',
+          title: '仿身泪滴 · 大哥掉线',
+          body: '已 30 分钟没有交班（超过 20 分钟阈值）。',
+          delivered: false,
+          error: '通知没送出去',
+          note: null,
+          gapTo: null,
+        },
+        {
+          at: Date.now() - 5 * 60_000,
+          action: 'recovered',
+          title: '仿身泪滴 · 大哥已归位',
+          body: '已恢复交班。掉线持续约 12 分钟。',
+          delivered: true,
+          error: null,
+          note: null,
+          gapTo: null,
+        },
+      ],
+    };
+    try {
+      const client = await loadClient();
+      await client.navigate('#/alerts');
+      await client.settle();
+
+      const body = client.element('alerts-body');
+      assert.ok(body, '告警面板要存在');
+      const html = body.innerHTML;
+      assert.match(html, /掉线/, '要标出告警类型');
+      assert.match(html, /归位/, '恢复也要有自己的说法');
+      assert.match(html, /30 分钟/, '要给出持续时长');
+      assert.match(html, /12 分钟/, '恢复告警也要有持续时长');
+      assert.match(html, /未送达/, '没送到的通知要说出来');
+      assert.match(html, /已送达/, '送到的通知也要说出来');
+      assert.match(html, /通知没送出去/, '没送达的原因要写出来');
+      assert.match(html, /仿身泪滴 · 大哥掉线/, '告警标题要渲染出来');
+      assert.match(client.element('alerts-count').textContent, /2 条/, '计数要说清楚');
+    } finally {
+      alertsOverride = null;
+    }
+  });
+
+  await t.test('看门狗告警：告警里的运行时文本必须转义', async () => {
+    alertsOverride = {
+      alerts: [{
+        at: Date.now(),
+        action: 'stale',
+        title: '<script>alert(1)</script>',
+        body: '已 5 分钟没有交班',
+        delivered: false,
+        error: '<img src=x onerror=alert(1)>',
+        note: null,
+      }],
+    };
+    try {
+      const client = await loadClient();
+      await client.navigate('#/alerts');
+      await client.settle();
+
+      const html = client.element('alerts-body').innerHTML;
+      assert.equal(html.includes('<script>'), false, '标题里的标签不能被当成标签渲染');
+      assert.match(html, /&lt;script&gt;/, '标题要转义后显示');
+      assert.equal(html.includes('<img src=x'), false, '错误信息里的标签不能被当成标签渲染');
+    } finally {
+      alertsOverride = null;
+    }
+  });
+
+  await t.test('看门狗告警：加载中、空和读失败说得不是同一句话', async () => {
+    // 读取一直没回来：这是「正在加载」。
+    const loading = await loadClient({ hang: ['/api/watchdog/alerts'] });
+    await loading.navigate('#/alerts');
+    await loading.settle();
+    assert.match(
+      loading.element('alerts-body').innerHTML,
+      /正在加载告警日志/,
+      '读取没回来时说「正在加载」',
+    );
+
+    // 日志里一条都没有：这是「没有告警」。
+    alertsOverride = { alerts: [] };
+    try {
+      const empty = await loadClient();
+      await empty.navigate('#/alerts');
+      await empty.settle();
+      assert.match(
+        empty.element('alerts-body').innerHTML,
+        /看门狗还没有报过警/,
+        '没有告警时说「还没有报过警」',
+      );
+    } finally {
+      alertsOverride = null;
+    }
+
+    // 读取失败：这和「没有告警」是两件事，必须分开说。
+    const broken = await loadClient({ fail: ['/api/watchdog/alerts'] });
+    await broken.navigate('#/alerts');
+    await broken.settle();
+    assert.match(
+      broken.element('alerts-body').innerHTML,
+      /告警日志读取失败/,
+      '读失败要说失败，不能装作没有告警',
+    );
+  });
+
+  await t.test('刷新页面后，在途的派工会被读回来', async () => {
+    dispatchStatusOverride = { id: 'd1', status: 'done', text: '好，交给你了', error: null };
+    const store = createStorage();
+
+    // 第一页：下达一条指令，页面自己记住派工 id。
+    const first = await loadClient({ storage: store });
+    await first.settle();
+    await dispatchToAlpha(first, '把 alpha 的结算逻辑修一下');
+
+    // 第二页：相当于刷新页面。同一个存储，派工 id 还在。
+    const second = await loadClient({ storage: store, keepStorage: true });
+    await second.settle();
+
+    const read = second.calls.find((call) => call.url.startsWith('/api/dispatch/'));
+    assert.ok(read, '刷新后必须把派工记录读回来');
+    assert.match(read.url, /\/api\/dispatch\/d1$/, '读回的是刚才那条派工');
+    assert.match(toastText(second), /指令已投递给目标会话/, '读回来的结果要告诉大老板');
+  });
+
+  await t.test('恢复出来的派工结果，和 SSE 派工事件说同一句话', async () => {
+    // 现场：SSE 派工事件。
+    const live = await loadClient();
+    await live.settle();
+    live.fireSse('dispatch', {
+      dispatchId: 'd1',
+      status: 'done',
+      delivered: true,
+      text: '好，交给你了',
+      error: null,
+    });
+    await live.settle();
+    const liveText = toastText(live);
+    assert.match(liveText, /指令已投递给目标会话/);
+
+    // 恢复：先下达一条指令（页面记住 id），再刷新，从服务端读回同一条。
+    dispatchStatusOverride = { id: 'd1', status: 'done', text: '好，交给你了', error: null };
+    const store = createStorage();
+    const first = await loadClient({ storage: store });
+    await first.settle();
+    await dispatchToAlpha(first, '把 alpha 的结算逻辑修一下');
+
+    const second = await loadClient({ storage: store, keepStorage: true });
+    await second.settle();
+    const restoredText = toastText(second);
+
+    assert.equal(
+      restoredText,
+      liveText,
+      '恢复出来的结果必须和现场事件一模一样——同一个派工不能有两种说法',
+    );
+  });
+
+  await t.test('刷新后派工还在跑，看板说「仍在投递中」，跑完了才报结果', async () => {
+    // 第一次读到「还在跑」，第二次才拿到结果。
+    let reads = 0;
+    dispatchStatusOverride = () => {
+      reads += 1;
+      return reads === 1
+        ? { id: 'd1', status: 'running', text: '', error: null }
+        : { id: 'd1', status: 'done', text: '好，交给你了', error: null };
+    };
+
+    const store = createStorage();
+    const first = await loadClient({ storage: store });
+    await first.settle();
+    await dispatchToAlpha(first, '把 alpha 的结算逻辑修一下');
+
+    const second = await loadClient({ storage: store, keepStorage: true });
+    await second.settle();
+    assert.match(
+      toastText(second),
+      /指令仍在投递中/,
+      '还在跑要说还在跑——不能把在途说成失败',
+    );
+
+    // 页面会继续盯着：跑完了才报结果。
+    await new Promise((resolve) => setTimeout(resolve, 1700));
+    await second.settle();
+    assert.match(toastText(second), /指令已投递给目标会话/, '派工跑完了要说结果');
   });
 });

@@ -57,6 +57,11 @@
             <span class="nav__label">能力库</span>
             <span class="nav__latin">SKILLS</span>
           </a>
+          <a href="#/alerts" data-nav="alerts">
+            <span class="nav__index" aria-hidden="true">05</span>
+            <span class="nav__label">看门狗告警</span>
+            <span class="nav__latin">ALERTS</span>
+          </a>
         </nav>
 
         <div class="app-sidebar__foot">
@@ -368,6 +373,38 @@
                 大哥从真实执行里提炼、封装并登记的标准化技能。后面遇到同类活会直接调度它们，不重复造轮子。
               </p>
               <div class="panel panel--paper panel--library" id="skill-library-list"></div>
+            </div>
+          </section>
+
+          <!-- ================= 看门狗告警 ================= -->
+          <section id="view-alerts" class="view" aria-labelledby="alerts-title" hidden>
+            <div class="section">
+              <div class="section__head">
+                <h2 id="alerts-title">看门狗告警</h2>
+                <span class="count" id="alerts-count"></span>
+              </div>
+              <p class="item__body section__note">
+                看门狗把每一次告警都写进了日志——通知送没送到都写。看板关着的时候发生了什么，这里都留着。
+              </p>
+              <div class="panel">
+                <div class="panel__body panel__body--flush">
+                  <div class="table-scroll">
+                    <table>
+                      <caption class="visually-hidden">看门狗告警日志</caption>
+                      <thead>
+                        <tr>
+                          <th scope="col">时间</th>
+                          <th scope="col">类型</th>
+                          <th scope="col">持续</th>
+                          <th scope="col">通知送达</th>
+                          <th scope="col">内容</th>
+                        </tr>
+                      </thead>
+                      <tbody id="alerts-body"></tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
             </div>
           </section>
         </main>
