@@ -3,6 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
     <title>仿身泪滴</title>
     <link rel="stylesheet" href="/assets/styles.css" />
   </head>
@@ -10,42 +11,49 @@
     <div class="app-shell">
       <aside class="app-sidebar">
         <a class="app-sidebar__brand" href="#/chat">
-          <svg
-            class="drop drop--mark"
-            width="22"
-            height="22"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.5"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
-            <path class="drop__shape" d="M12 3.2c3.2 3.1 5 6 5 8.8A5 5 0 0 1 7 12c0-2.8 1.8-5.7 5-8.8Z" />
-            <path class="drop__fill" d="M12 3.2c3.2 3.1 5 6 5 8.8A5 5 0 0 1 7 12c0-2.8 1.8-5.7 5-8.8Z" />
-          </svg>
+          <span class="brand__seal">
+            <svg
+              class="drop drop--mark"
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path class="drop__shape" d="M12 3.2c3.2 3.1 5 6 5 8.8A5 5 0 0 1 7 12c0-2.8 1.8-5.7 5-8.8Z" />
+              <path class="drop__fill" d="M12 3.2c3.2 3.1 5 6 5 8.8A5 5 0 0 1 7 12c0-2.8 1.8-5.7 5-8.8Z" />
+            </svg>
+          </span>
           <span class="app-sidebar__names">
-            <h1 class="app-sidebar__name">仿身泪滴</h1>
             <span class="app-sidebar__latin">MIMIC TEAR</span>
+            <h1 class="app-sidebar__name">仿身泪滴</h1>
+            <span class="app-sidebar__role">多智能体指挥部</span>
           </span>
         </a>
 
         <nav class="app-sidebar__nav" aria-label="主导航">
           <a href="#/chat" data-nav="chat" aria-current="page">
+            <span class="nav__index" aria-hidden="true">01</span>
             <span class="nav__label">对话</span>
             <span class="nav__latin">CHAT</span>
           </a>
           <a href="#/overview" data-nav="overview">
+            <span class="nav__index" aria-hidden="true">02</span>
             <span class="nav__label">总览</span>
             <span class="nav__latin">OVERVIEW</span>
           </a>
           <a href="#/inbox" data-nav="inbox">
+            <span class="nav__index" aria-hidden="true">03</span>
             <span class="nav__label">决策收件箱</span>
             <span class="nav__latin">INBOX</span>
             <span class="badge" id="inbox-badge" hidden>0</span>
           </a>
           <a href="#/skills" data-nav="skills">
+            <span class="nav__index" aria-hidden="true">04</span>
             <span class="nav__label">能力库</span>
             <span class="nav__latin">SKILLS</span>
           </a>
@@ -66,306 +74,315 @@
 
       <div class="app-body">
         <header class="app-header">
-          <div class="app-header__title">
-            <h2 class="app-header__name" id="view-title">对话</h2>
-            <p class="app-header__context" id="view-context">与大哥的对话</p>
-          </div>
-          <div class="app-header__actions">
-            <div class="duty">
-              <svg
-                class="drop drop--lamp"
-                width="15"
-                height="15"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.6"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                aria-hidden="true"
-              >
-                <path class="drop__shape" d="M12 3.2c3.2 3.1 5 6 5 8.8A5 5 0 0 1 7 12c0-2.8 1.8-5.7 5-8.8Z" />
-                <path class="drop__fill" d="M12 3.2c3.2 3.1 5 6 5 8.8A5 5 0 0 1 7 12c0-2.8 1.8-5.7 5-8.8Z" />
-              </svg>
-              <span class="duty__text" id="duty-status" role="status"></span>
+          <div class="app-header__inner">
+            <div class="app-header__title">
+              <h2 class="app-header__name" id="view-title">对话</h2>
+              <p class="app-header__context" id="view-context">与大哥的对话</p>
             </div>
-            <span class="app-header__rule" aria-hidden="true"></span>
-            <button type="button" class="btn btn--small" id="patrol-run-button" aria-label="立即巡检一次">巡检</button>
-            <button type="button" class="btn btn--small" id="refresh-button" aria-label="刷新数据">刷新</button>
+            <div class="app-header__actions">
+              <div class="duty">
+                <svg
+                  class="drop drop--lamp"
+                  width="15"
+                  height="15"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path class="drop__shape" d="M12 3.2c3.2 3.1 5 6 5 8.8A5 5 0 0 1 7 12c0-2.8 1.8-5.7 5-8.8Z" />
+                  <path class="drop__fill" d="M12 3.2c3.2 3.1 5 6 5 8.8A5 5 0 0 1 7 12c0-2.8 1.8-5.7 5-8.8Z" />
+                </svg>
+                <span class="duty__text" id="duty-status" role="status"></span>
+              </div>
+              <button type="button" class="btn btn--small" id="patrol-run-button" aria-label="立即巡检一次">巡检</button>
+              <button type="button" class="btn btn--small" id="refresh-button" aria-label="刷新数据">刷新</button>
+            </div>
           </div>
         </header>
 
-        <div class="app-warning" id="data-warning" role="alert" hidden></div>
-
         <main id="app-main">
-      <!-- ================= 与大哥对话 ================= -->
-      <section id="view-chat" class="view" aria-labelledby="chat-title">
-        <h2 id="chat-title" class="visually-hidden">与大哥的对话</h2>
-        <div class="chat">
-          <div
-            class="chat__duty"
-            id="chat-duty"
-            role="region"
-            aria-label="大哥的值班交班汇报"
-          ></div>
-          <div
-            class="chat__log"
-            id="chat-log"
-            role="log"
-            aria-live="polite"
-            aria-label="与大哥的对话记录"
-          ></div>
-          <div class="chat__actions">
-            <button
-              type="button"
-              class="btn btn--small btn--text"
-              id="chat-open-host"
-              aria-label="在宿主聊天侧栏打开与大哥的对话"
-            >
-              <svg
-                class="icon"
-                width="13"
-                height="13"
-                viewBox="0 0 16 16"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.4"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                aria-hidden="true"
-              >
-                <path d="M9.5 2.5H13.5V6.5" />
-                <path d="M13.5 2.5 7.5 8.5" />
-                <path d="M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3" />
-              </svg>
-              在宿主侧栏打开
-            </button>
-          </div>
-          <form class="chat__composer" id="chat-form">
-            <label class="visually-hidden" for="chat-input">给大哥的消息</label>
-            <textarea
-              id="chat-input"
-              name="text"
-              rows="1"
-              placeholder="告诉大哥：哪个项目有什么需求、盯紧谁、什么时候开始、什么时候停"
-              required
-            ></textarea>
-            <button type="submit" class="btn btn--primary" id="chat-send">发送</button>
-          </form>
-          <p class="chat__hint">回车发送 · Shift + 回车换行</p>
-        </div>
-      </section>
+          <div class="app-warning" id="data-warning" role="alert" hidden></div>
 
-      <!-- ================= 总览 ================= -->
-      <section id="view-overview" class="view" aria-labelledby="overview-title" hidden>
-        <h2 id="overview-title" class="visually-hidden">总览</h2>
-        <div class="kpi-row" id="kpi-row">
-          <div class="kpi" id="kpi-tile-projects">
-            <p class="kpi__label">项目总数</p>
-            <p class="kpi__value" id="kpi-projects">—</p>
-            <p class="kpi__foot">已登记的工作区</p>
-          </div>
-          <div class="kpi" id="kpi-tile-active">
-            <p class="kpi__label">正在推进</p>
-            <p class="kpi__value" id="kpi-active">—</p>
-            <p class="kpi__foot">有会话在跑</p>
-          </div>
-          <a class="kpi kpi--link" id="kpi-tile-pending" href="#/inbox">
-            <p class="kpi__label">待你决策</p>
-            <p class="kpi__value" id="kpi-pending">—</p>
-            <p class="kpi__foot">去收件箱</p>
-          </a>
-          <div class="kpi" id="kpi-tile-errors">
-            <p class="kpi__label">异常项目</p>
-            <p class="kpi__value" id="kpi-errors">—</p>
-            <p class="kpi__foot">会话报错</p>
-          </div>
-        </div>
-
-        <section class="section" aria-labelledby="attention-title">
-          <div class="section__head">
-            <h2 id="attention-title">需你处理</h2>
-            <span class="count" id="attention-count"></span>
-            <a class="section__more" href="#/inbox">全部决策</a>
-          </div>
-          <div class="panel panel--paper">
-            <div class="panel__body panel__body--flush">
-              <div class="item-list" id="attention-list"></div>
+          <!-- ================= 与大哥对话 ================= -->
+          <section id="view-chat" class="view view--chat" aria-labelledby="chat-title">
+            <h2 id="chat-title" class="visually-hidden">与大哥的对话</h2>
+            <div class="chat">
+              <div
+                class="chat__duty"
+                id="chat-duty"
+                role="region"
+                aria-label="大哥的值班交班汇报"
+              ></div>
+              <div
+                class="chat__log"
+                id="chat-log"
+                role="log"
+                aria-live="polite"
+                aria-label="与大哥的对话记录"
+              ></div>
+              <div class="chat__actions">
+                <button
+                  type="button"
+                  class="btn btn--small btn--text"
+                  id="chat-open-host"
+                  aria-label="在宿主聊天侧栏打开与大哥的对话"
+                >
+                  <svg
+                    class="icon"
+                    width="13"
+                    height="13"
+                    viewBox="0 0 16 16"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.4"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M9.5 2.5H13.5V6.5" />
+                    <path d="M13.5 2.5 7.5 8.5" />
+                    <path d="M12 9.5v3a1 1 0 0 1-1 1H3.5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3" />
+                  </svg>
+                  在宿主侧栏打开
+                </button>
+              </div>
+              <form class="chat__composer" id="chat-form">
+                <label class="visually-hidden" for="chat-input">给大哥的消息</label>
+                <textarea
+                  id="chat-input"
+                  name="text"
+                  rows="1"
+                  placeholder="告诉大哥：哪个项目有什么需求、盯紧谁、什么时候开始、什么时候停"
+                  required
+                ></textarea>
+                <button type="submit" class="btn btn--primary" id="chat-send">发送</button>
+              </form>
+              <p class="chat__hint">回车发送 · Shift + 回车换行</p>
             </div>
-          </div>
-        </section>
+          </section>
 
-        <section class="section" aria-labelledby="projects-title">
-          <div class="section__head">
-            <h2 id="projects-title">项目</h2>
-            <span class="count" id="projects-count"></span>
-          </div>
-          <div class="panel">
-            <div class="panel__body panel__body--flush">
-              <div class="table-scroll">
-                <table>
-                  <caption class="visually-hidden">全部项目的当前状态</caption>
-                  <thead>
-                    <tr>
-                      <th scope="col">项目</th>
-                      <th scope="col">状态</th>
-                      <th scope="col">Goal</th>
-                      <th scope="col" class="numeric">会话</th>
-                      <th scope="col" class="numeric">待决策</th>
-                      <th scope="col">最后活动</th>
-                      <th scope="col"><span class="visually-hidden">操作</span></th>
-                    </tr>
-                  </thead>
-                  <tbody id="projects-body"></tbody>
-                </table>
+          <!-- ================= 总览 ================= -->
+          <section id="view-overview" class="view" aria-labelledby="overview-title" hidden>
+            <h2 id="overview-title" class="visually-hidden">总览</h2>
+            <div class="kpi-row" id="kpi-row">
+              <div class="kpi" id="kpi-tile-projects">
+                <p class="kpi__label">项目总数</p>
+                <p class="kpi__value" id="kpi-projects">—</p>
+                <p class="kpi__foot">已登记的工作区</p>
+              </div>
+              <div class="kpi" id="kpi-tile-active">
+                <p class="kpi__label">正在推进</p>
+                <p class="kpi__value" id="kpi-active">—</p>
+                <p class="kpi__foot">有会话在跑</p>
+              </div>
+              <a class="kpi kpi--link" id="kpi-tile-pending" href="#/inbox">
+                <p class="kpi__label">待你决策</p>
+                <p class="kpi__value" id="kpi-pending">—</p>
+                <p class="kpi__foot">去收件箱</p>
+              </a>
+              <div class="kpi" id="kpi-tile-errors">
+                <p class="kpi__label">异常项目</p>
+                <p class="kpi__value" id="kpi-errors">—</p>
+                <p class="kpi__foot">会话报错</p>
               </div>
             </div>
-          </div>
-        </section>
-      </section>
 
-      <!-- ================= 决策收件箱 ================= -->
-      <section id="view-inbox" class="view" aria-labelledby="inbox-title" hidden>
-        <div class="section">
-          <div class="section__head">
-            <h2 id="inbox-title">决策收件箱</h2>
-            <span class="count" id="inbox-count"></span>
-          </div>
-          <div class="section__actions">
-            <div class="filter">
-              <label class="filter__label" for="inbox-filter">项目</label>
-              <span class="select-wrap">
-                <select class="select" id="inbox-filter" aria-label="按项目过滤">
-                  <option value="">全部项目</option>
-                </select>
-              </span>
-            </div>
-            <div class="filter">
-              <label class="filter__label" for="inbox-kind">类型</label>
-              <span class="select-wrap">
-                <select class="select" id="inbox-kind" aria-label="按类型过滤">
-                  <option value="">全部类型</option>
-                </select>
-              </span>
-            </div>
-            <label class="check" for="inbox-pending-only">
-              <input type="checkbox" id="inbox-pending-only" checked />
-              <span>只看未确认</span>
-            </label>
-          </div>
-          <div class="panel panel--paper">
-            <div class="panel__body panel__body--flush">
-              <div class="item-list" id="inbox-list"></div>
-            </div>
-          </div>
-        </div>
-      </section>
+            <section class="section" aria-labelledby="attention-title">
+              <div class="section__head">
+                <h2 id="attention-title">需你处理</h2>
+                <span class="count" id="attention-count"></span>
+                <a class="section__more" href="#/inbox">全部决策</a>
+              </div>
+              <div class="panel panel--paper">
+                <div class="panel__body panel__body--flush">
+                  <div class="item-list" id="attention-list"></div>
+                </div>
+              </div>
+            </section>
 
-      <!-- ================= 项目详情 ================= -->
-      <section id="view-project" class="view" aria-labelledby="project-title" hidden>
-        <div class="section">
-          <div class="section__head">
-            <h2 id="project-title">项目详情</h2>
-            <span class="count mono" id="project-path"></span>
-            <div class="section__actions">
-              <button type="button" class="btn btn--small" id="project-dispatch-button">
-                下达指令
-              </button>
-              <button type="button" class="btn btn--small" id="project-back-button">返回总览</button>
-            </div>
-          </div>
-        </div>
+            <section class="section" aria-labelledby="projects-title">
+              <div class="section__head">
+                <h2 id="projects-title">项目</h2>
+                <span class="count" id="projects-count"></span>
+              </div>
+              <div class="panel">
+                <div class="panel__body panel__body--flush">
+                  <div class="table-scroll">
+                    <table>
+                      <caption class="visually-hidden">全部项目的当前状态</caption>
+                      <thead>
+                        <tr>
+                          <th scope="col">项目</th>
+                          <th scope="col">状态</th>
+                          <th scope="col">Goal</th>
+                          <th scope="col" class="numeric">会话</th>
+                          <th scope="col" class="numeric">待决策</th>
+                          <th scope="col">最后活动</th>
+                          <th scope="col"><span class="visually-hidden">操作</span></th>
+                        </tr>
+                      </thead>
+                      <tbody id="projects-body"></tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </section>
 
-        <div class="kpi-row" id="project-kpi"></div>
-
-        <section class="section" aria-labelledby="org-title">
-          <div class="section__head">
-            <h2 id="org-title">团队结构</h2>
-            <span class="count" id="org-count"></span>
-          </div>
-          <div class="panel">
-            <div class="panel__body">
-              <ul class="tree" id="org-tree"></ul>
-            </div>
-          </div>
-        </section>
-
-        <section class="section" aria-labelledby="goal-title">
-          <div class="section__head">
-            <h2 id="goal-title">Goal</h2>
-            <span class="count" id="goal-count"></span>
-          </div>
-          <div class="panel">
-            <div class="panel__body panel__body--flush">
-              <div class="item-list" id="goal-list"></div>
-            </div>
-          </div>
-        </section>
-
-        <section class="section" aria-labelledby="plan-title">
-          <div class="section__head">
-            <h2 id="plan-title">计划任务</h2>
-            <span class="count" id="plan-count"></span>
-          </div>
-          <div class="panel">
-            <div class="panel__body panel__body--flush">
-              <div class="item-list" id="plan-list"></div>
-            </div>
-          </div>
-        </section>
-
-        <section class="section" aria-labelledby="question-title">
-          <div class="section__head">
-            <h2 id="question-title">待答问题</h2>
-            <span class="count" id="question-count"></span>
-          </div>
-          <div class="panel">
-            <div class="panel__body panel__body--flush">
-              <div class="item-list" id="question-list"></div>
-            </div>
-          </div>
-        </section>
-      </section>
-
-      <!-- ================= 能力库 ================= -->
-      <section id="view-skills" class="view" aria-labelledby="skills-title" hidden>
-        <div class="section">
-          <div class="section__head">
-            <h2 id="skills-title">能力库</h2>
-            <span class="count" id="skills-count"></span>
-          </div>
-          <p class="item__body section__note">
-            这些是「大哥」调度任务时依据的领域知识，不是给你执行的清单。
-          </p>
-          <div class="skills-layout">
-            <nav class="domain-nav" id="domain-nav" aria-label="能力领域"></nav>
-            <div class="panel">
-              <div class="panel__body panel__body--flush">
-                <div id="skill-list"></div>
+          <!-- ================= 决策收件箱 ================= -->
+          <section id="view-inbox" class="view" aria-labelledby="inbox-title" hidden>
+            <div class="section">
+              <div class="section__head">
+                <h2 id="inbox-title">决策收件箱</h2>
+                <span class="count" id="inbox-count"></span>
+              </div>
+              <div class="section__actions section__actions--start">
+                <div class="filter">
+                  <label class="filter__label" for="inbox-filter">项目</label>
+                  <span class="select-wrap">
+                    <select class="select" id="inbox-filter" aria-label="按项目过滤">
+                      <option value="">全部项目</option>
+                    </select>
+                  </span>
+                </div>
+                <div class="filter">
+                  <label class="filter__label" for="inbox-kind">类型</label>
+                  <span class="select-wrap">
+                    <select class="select" id="inbox-kind" aria-label="按类型过滤">
+                      <option value="">全部类型</option>
+                    </select>
+                  </span>
+                </div>
+                <label class="check" for="inbox-pending-only">
+                  <input type="checkbox" id="inbox-pending-only" checked />
+                  <span>只看未确认</span>
+                </label>
+              </div>
+              <div class="panel panel--paper">
+                <div class="panel__body panel__body--flush">
+                  <div class="item-list" id="inbox-list"></div>
+                </div>
               </div>
             </div>
-          </div>
-          <div class="section__head section__head--sub">
-            <h3>已封装技能库</h3>
-            <span class="count" id="skill-library-count"></span>
-          </div>
-          <p class="item__body section__note">
-            大哥从真实执行里提炼、封装并登记的标准化技能。后面遇到同类活会直接调度它们，不重复造轮子。
-          </p>
-          <div id="skill-library-list"></div>
-        </div>
-      </section>
-    </main>
+          </section>
+
+          <!-- ================= 项目详情 ================= -->
+          <section id="view-project" class="view" aria-labelledby="project-title" hidden>
+            <div class="project-head">
+              <div class="project-head__id">
+                <span class="project-head__eyebrow">项目档案 / PROJECT</span>
+                <h2 id="project-title">项目详情</h2>
+                <span class="count mono" id="project-path"></span>
+              </div>
+              <div class="section__actions">
+                <button type="button" class="btn btn--small" id="project-dispatch-button">
+                  下达指令
+                </button>
+                <button type="button" class="btn btn--small btn--text" id="project-back-button">返回总览</button>
+              </div>
+            </div>
+
+            <div class="kpi-row" id="project-kpi"></div>
+
+            <div class="detail-grid">
+              <section class="section detail-grid__wide" aria-labelledby="org-title">
+                <div class="section__head">
+                  <h2 id="org-title">团队结构</h2>
+                  <span class="count" id="org-count"></span>
+                </div>
+                <div class="panel">
+                  <div class="panel__body">
+                    <ul class="tree" id="org-tree"></ul>
+                  </div>
+                </div>
+              </section>
+
+              <section class="section" aria-labelledby="goal-title">
+                <div class="section__head">
+                  <h2 id="goal-title">Goal</h2>
+                  <span class="count" id="goal-count"></span>
+                </div>
+                <div class="panel">
+                  <div class="panel__body panel__body--flush">
+                    <div class="item-list" id="goal-list"></div>
+                  </div>
+                </div>
+              </section>
+
+              <section class="section detail-grid__wide" aria-labelledby="plan-title">
+                <div class="section__head">
+                  <h2 id="plan-title">计划任务</h2>
+                  <span class="count" id="plan-count"></span>
+                </div>
+                <div class="panel">
+                  <div class="panel__body panel__body--flush">
+                    <div class="item-list" id="plan-list"></div>
+                  </div>
+                </div>
+              </section>
+
+              <section class="section" aria-labelledby="question-title">
+                <div class="section__head">
+                  <h2 id="question-title">待答问题</h2>
+                  <span class="count" id="question-count"></span>
+                </div>
+                <div class="panel">
+                  <div class="panel__body panel__body--flush">
+                    <div class="item-list" id="question-list"></div>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </section>
+
+          <!-- ================= 能力库 ================= -->
+          <section id="view-skills" class="view" aria-labelledby="skills-title" hidden>
+            <div class="section">
+              <div class="section__head">
+                <h2 id="skills-title">能力库</h2>
+                <span class="count" id="skills-count"></span>
+              </div>
+              <p class="item__body section__note">
+                这些是「大哥」调度任务时依据的领域知识，不是给你执行的清单。
+              </p>
+              <div class="skills-layout">
+                <aside class="skills-index">
+                  <p class="skills-index__label">领域索引 / DOMAINS</p>
+                  <nav class="domain-nav" id="domain-nav" aria-label="能力领域"></nav>
+                </aside>
+                <div class="panel">
+                  <div class="panel__body panel__body--flush">
+                    <div id="skill-list"></div>
+                  </div>
+                </div>
+              </div>
+              <div class="section__head section__head--sub">
+                <h3>已封装技能库</h3>
+                <span class="count" id="skill-library-count"></span>
+              </div>
+              <p class="item__body section__note">
+                大哥从真实执行里提炼、封装并登记的标准化技能。后面遇到同类活会直接调度它们，不重复造轮子。
+              </p>
+              <div class="panel panel--paper panel--library" id="skill-library-list"></div>
+            </div>
+          </section>
+        </main>
+      </div>
     </div>
 
     <!-- ================= 派工面板 ================= -->
     <dialog id="dispatch-dialog" aria-labelledby="dispatch-dialog-title">
-      <form method="dialog" class="panel" id="dispatch-form">
+      <form method="dialog" class="panel panel--paper dispatch" id="dispatch-form">
         <div class="panel__head">
+          <span class="panel__eyebrow">派工单 / ORDER</span>
           <h2 id="dispatch-dialog-title">下达指令</h2>
         </div>
         <div class="panel__body dispatch__body">
-          <p class="item__body" id="dispatch-target"></p>
+          <p class="item__body dispatch__target" id="dispatch-target"></p>
           <div class="field">
             <label class="field__label" for="dispatch-instruction">指令内容</label>
             <textarea
@@ -384,7 +401,7 @@
             </span>
           </div>
           <div class="app-warning app-warning--inline" id="dispatch-error" role="alert" hidden></div>
-          <div class="item__actions">
+          <div class="item__actions dispatch__actions">
             <button type="button" class="btn" id="dispatch-cancel">取消</button>
             <button type="submit" class="btn btn--primary" id="dispatch-submit">下达</button>
           </div>

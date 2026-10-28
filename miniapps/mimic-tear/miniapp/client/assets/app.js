@@ -376,8 +376,8 @@ function attentionItemHtml(item) {
         <span class="tag tag--${item.severity}">${SEVERITY_LABEL[item.severity] ?? item.severity}</span>
         <span class="tag">${KIND_LABEL[item.kind] ?? item.kind}</span>
         <span class="item__title">${escapeHtml(item.title)}</span>
-        <span class="item__meta">${escapeHtml(item.projectName)} · ${waitingLabel(item.createdAt)}${requestIdMark(item)}</span>
       </div>
+      <p class="item__meta">${escapeHtml(item.projectName)} · ${waitingLabel(item.createdAt)}${requestIdMark(item)}</p>
       <p class="item__body doc">${escapeHtml(card.text)}</p>
       ${card.extra > 0 ? `<p class="item__note">另有 ${card.extra} 问 · 去回答会带上全文</p>` : ''}
       ${acknowledgedNoteHtml(item)}
@@ -490,19 +490,28 @@ function renderDutyStatus(duty) {
 }
 
 function projectRowHtml(project) {
-  const activeGoals = (project.goals ?? []).filter((goal) => goal.status === 'active').length;
+  const goals = project.goals ?? [];
+  const activeGoals = goals.filter((goal) => goal.status === 'active').length;
+  // The proportion is already implied by the two numbers; the meter only makes it readable
+  // at a glance. It is decorative, so the count stays in text for the screen reader.
+  const ratio = goals.length ? Math.round((activeGoals / goals.length) * 100) : 0;
   return `
     <tr>
       <td>
-        <a href="#/project/${project.id}">${escapeHtml(project.name)}</a>
-        <div class="item__meta mono">${escapeHtml(project.path)}</div>
+        <a class="cell-project__name" href="#/project/${project.id}">${escapeHtml(project.name)}</a>
+        <span class="cell-project__path mono">${escapeHtml(project.path)}</span>
       </td>
       <td>
         <span class="status status--${project.health}">
           <span class="status__dot" aria-hidden="true"></span>${HEALTH_LABEL[project.health] ?? project.health}
         </span>
       </td>
-      <td class="nowrap">${activeGoals} 个进行中 / ${(project.goals ?? []).length} 个</td>
+      <td class="nowrap">
+        <span class="goal-cell">
+          <span class="goal-meter" aria-hidden="true"><span class="goal-meter__fill" style="width: ${ratio}%"></span></span>
+          <span class="goal-cell__text"><b>${activeGoals}</b> / ${goals.length} 进行中</span>
+        </span>
+      </td>
       <td class="numeric">${project.sessionCount}</td>
       <td class="numeric">${project.pendingQuestions}</td>
       <td>${relativeTime(project.lastActivityAt)}</td>
@@ -583,8 +592,8 @@ function inboxItemHtml(item) {
       <div class="item__head">
         <span class="tag">${KIND_LABEL[item.kind] ?? item.kind}</span>
         <span class="item__title">${escapeHtml(item.title)}</span>
-        <span class="item__meta">${escapeHtml(item.projectName)} · ${relativeTime(item.createdAt)}${requestIdMark(item)}</span>
       </div>
+      <p class="item__meta">${escapeHtml(item.projectName)} · ${relativeTime(item.createdAt)}${requestIdMark(item)}</p>
       <p class="item__body doc">${escapeHtml(card.text)}</p>
       ${card.extra > 0 ? `<p class="item__note">另有 ${card.extra} 问 · 去回答会带上全文</p>` : ''}
       ${acknowledgedNoteHtml(item)}
@@ -885,11 +894,15 @@ function renderSkillLibrary() {
 
   container.innerHTML = entries
     .map(
-      (entry) => `<div class="skill-row">
-        <span class="skill-row__name">${escapeHtml(entry.skillName)}</span>
+      (entry) => `<div class="skill-row skill-row--entry">
+        <div class="skill-row__head">
+          <span class="skill-row__name">${escapeHtml(entry.skillName)}</span>
+          <span class="skill-row__tags">
+            <span class="tag ${statusClass[entry.status] ?? ''}">${escapeHtml(statusLabel[entry.status] ?? entry.status)}</span>
+            ${entry.domain ? `<span class="tag">${escapeHtml(entry.domain)}</span>` : ''}
+          </span>
+        </div>
         ${entry.title && entry.title !== entry.skillName ? `<span class="skill-row__desc">${escapeHtml(entry.title)}</span>` : ''}
-        <span class="tag ${statusClass[entry.status] ?? ''}">${escapeHtml(statusLabel[entry.status] ?? entry.status)}</span>
-        ${entry.domain ? `<span class="tag">${escapeHtml(entry.domain)}</span>` : ''}
         ${(entry.triggers ?? []).length ? `<span class="skill-row__desc">触发词：${escapeHtml(entry.triggers.join('、'))}</span>` : ''}
         <span class="item__meta mono">派工 ${entry.usageCount ?? 0} 次 · 成功 ${entry.successCount ?? 0} 次${entry.lastError ? ` · ${escapeHtml(entry.lastError)}` : ''}</span>
       </div>`,
@@ -1335,8 +1348,11 @@ function showView(name) {
   for (const [key, id] of Object.entries(VIEWS)) {
     el(id).hidden = key !== name;
   }
+  // A project dossier is opened from the ledger, so the ledger stays the marked slot:
+  // otherwise the rail would look like it has no current section at all.
+  const active = name === 'project' ? 'overview' : name;
   for (const link of document.querySelectorAll('[data-nav]')) {
-    if (link.dataset.nav === name) link.setAttribute('aria-current', 'page');
+    if (link.dataset.nav === active) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');
   }
   state.view = name;
