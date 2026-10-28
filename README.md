@@ -84,14 +84,18 @@ cp -R mimic-tear/miniapps/mimic-tear ~/.minimax/plugins/mimic-tear
 ## 开发
 
 ```bash
-# 跑全部测试（411 个，node:test，无第三方依赖）
+# 跑全部测试（node:test，无第三方依赖；条数以 node --test 的输出为准）
 node --test
 
 # 把插件发布到本机 MiniMax Code（安装目录 ~/.minimax/plugins/mimic-tear）
 node miniapps/mimic-tear/miniapp/node/server.mjs   # 或用 Agent 的 /miniapp-creator
 ```
 
-> **2026-10-28 补记**：测试条数由 386 订正为 **411**（`node --test` 的 TAP 输出：`tests 411 / pass 411 / fail 0`，2026-10-28 复测）。386 是旧数字，已过期。
+> **2026-10-28 补记**：用例数由 386 订正为 **411**（`node --test` 的 TAP 输出：`tests 411 / pass 411 / fail 0`，2026-10-28 复测）。386 是旧数字，已过期。
+>
+> **2026-10-28 再补记**：上面这个 411 又过期了——本轮补的守卫与契约测试把它推到了 **525**。
+> 写死条数只会一次次过期，所以上面那行改成「以 `node --test` 的输出为准」：条数是**产物**，
+> 不是**常量**。要一个准确的数字，跑一次 `node --test` 看最后那几行。
 
 仓库结构：
 
