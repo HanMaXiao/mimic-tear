@@ -35,7 +35,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { appendAlert } from './watchdog-alerts.mjs';
-import { computeDutyEvidence } from './view-model.mjs';
+import { computeDutyEvidence, DEFAULT_DUTY_INTERVAL_MINUTES } from './view-model.mjs';
 import { DUTY_CRON_SEED, readDutyChain } from './duty-chain.mjs';
 
 /**
@@ -135,11 +135,11 @@ export async function readDutyConfig(dataDir) {
     const minutes = Number(value?.dutyIntervalMinutes);
     const pinned = typeof value?.dutyCronId === 'string' ? value.dutyCronId.trim() : '';
     return {
-      periodMinutes: Number.isFinite(minutes) && minutes > 0 ? minutes : 30,
+      periodMinutes: Number.isFinite(minutes) && minutes > 0 ? minutes : DEFAULT_DUTY_INTERVAL_MINUTES,
       dutyCronId: pinned || null,
     };
   } catch {
-    return { periodMinutes: 30, dutyCronId: null };
+    return { periodMinutes: DEFAULT_DUTY_INTERVAL_MINUTES, dutyCronId: null };
   }
 }
 
@@ -156,7 +156,7 @@ export async function readDutyConfig(dataDir) {
  */
 export function evaluateDutyHeartbeat(input) {
   const runs = input?.runs ?? [];
-  const periodMs = Number(input?.periodMs) > 0 ? Number(input.periodMs) : 30 * 60_000;
+  const periodMs = Number(input?.periodMs) > 0 ? Number(input.periodMs) : DEFAULT_DUTY_INTERVAL_MINUTES * 60_000;
   const now = resolveNow(input?.now);
   const lastTriggeredSlot = input?.lastTriggeredSlot ?? null;
 
@@ -231,7 +231,9 @@ export function describeDutyHeartbeat(decision) {
 export async function getDutyHeartbeatStatus(options = {}) {
   const dataDir = options.dataDir ?? null;
   const now = resolveNow(options.now);
-  const config = dataDir ? await readDutyConfig(dataDir) : { periodMinutes: 30, dutyCronId: null };
+  const config = dataDir
+    ? await readDutyConfig(dataDir)
+    : { periodMinutes: DEFAULT_DUTY_INTERVAL_MINUTES, dutyCronId: null };
   const periodMs = Number(options.periodMs) > 0 ? Number(options.periodMs) : config.periodMinutes * 60_000;
   const state = dataDir ? await readHeartbeatState(dataDir) : {};
   // The **pin** (the user's decision, from the duty config) and the **seed** (the built-in

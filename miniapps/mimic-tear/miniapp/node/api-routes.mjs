@@ -110,8 +110,11 @@ const STATIC_ROUTES = [
 /**
  * API 路由表。
  *
- * 21 条，一条都不能少：其中 `GET /api/dispatch/:id`、`POST /api/duty/intent`、
- * `GET /api/watchdog/alerts` 客户端目前没调用，但它们是真实存在的契约。
+ * 21 条，一条都不能少。其中 `POST /api/duty/intent` 客户端目前没调用——它由大哥走
+ * `mavis` 工具那一侧用——但它是真实存在的契约。
+ *
+ * `GET /api/dispatch/:id` 与 `GET /api/watchdog/alerts` 曾经也是「服务端有、客户端
+ * 没接」，后来板面补上了：派工状态恢复与看门狗告警面板各用一条。
  *
  * @type {Route[]}
  */

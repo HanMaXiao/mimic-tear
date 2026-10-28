@@ -11,6 +11,9 @@ Binaries/
 DerivedDataCache/
 *.tmp
 
+# Local analysis scratch (project-advice scanner output)
+.ai-advice/
+
 # Editor / IDE
 .vscode/
 .idea/
