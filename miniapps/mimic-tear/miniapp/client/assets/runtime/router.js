@@ -17,6 +17,7 @@ import { renderInbox } from '../views/inbox.js';
 import { renderProject } from '../views/project.js';
 import { renderSkills } from '../views/skills.js';
 import { loadWatchdogAlerts } from '../views/alerts.js';
+import { renderSessions } from '../views/sessions.js';
 
 export const VIEWS = {
   chat: 'view-chat',
@@ -25,6 +26,7 @@ export const VIEWS = {
   project: 'view-project',
   skills: 'view-skills',
   alerts: 'view-alerts',
+  sessions: 'view-sessions',
 };
 
 /**
@@ -134,6 +136,16 @@ export async function renderRoute() {
     // The alert log is read on every visit: it is the record of what happened while the
     // board was closed, so a stale copy would defeat the whole point of it.
     await loadWatchdogAlerts();
+    await overviewPromise;
+    return;
+  }
+
+  if (route.name === 'sessions') {
+    // The live session list comes from the Host, not from this board's API, so there is
+    // nothing to fetch here: the observer pushes it in and the view redraws itself.
+    // The board's own snapshot is still loaded, because the header and the KPI row read
+    // it and the two must not disagree about the projects.
+    renderSessions();
     await overviewPromise;
     return;
   }

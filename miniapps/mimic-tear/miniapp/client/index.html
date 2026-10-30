@@ -13,6 +13,7 @@
     <link rel="stylesheet" href="/assets/css/skills.css" />
     <link rel="stylesheet" href="/assets/css/chat.css" />
     <link rel="stylesheet" href="/assets/css/alerts.css" />
+    <link rel="stylesheet" href="/assets/css/sessions.css" />
     <link rel="stylesheet" href="/assets/css/dispatch.css" />
     <link rel="stylesheet" href="/assets/css/responsive.css" />
   </head>
@@ -71,6 +72,11 @@
             <span class="nav__label">看门狗告警</span>
             <span class="nav__latin">ALERTS</span>
           </a>
+          <a href="#/sessions" data-nav="sessions">
+            <span class="nav__index" aria-hidden="true">06</span>
+            <span class="nav__label">会话实况</span>
+            <span class="nav__latin">SESSIONS</span>
+          </a>
         </nav>
 
         <div class="app-sidebar__foot">
@@ -113,6 +119,7 @@
                 <span class="duty__text" id="duty-status" role="status"></span>
               </div>
               <button type="button" class="btn btn--small" id="patrol-run-button" aria-label="立即巡检一次">巡检</button>
+              <button type="button" class="btn btn--small" id="desk-toggle" aria-label="把看板弹成桌面窗口">放到桌面</button>
               <button type="button" class="btn btn--small" id="refresh-button" aria-label="刷新数据">刷新</button>
             </div>
           </div>
@@ -173,8 +180,15 @@
                   placeholder="告诉大哥：哪个项目有什么需求、盯紧谁、什么时候开始、什么时候停"
                   required
                 ></textarea>
+                <div class="chat__voice">
+                  <button type="button" class="btn btn--small" id="voice-start" aria-label="开始录音">录音</button>
+                  <button type="button" class="btn btn--small" id="voice-stop" aria-label="停止录音并转写" disabled>停止</button>
+                  <button type="button" class="btn btn--small" id="voice-cancel" aria-label="取消这一轮录音" disabled>取消</button>
+                </div>
                 <button type="submit" class="btn btn--primary" id="chat-send">发送</button>
               </form>
+              <p class="chat__voice-msg" id="voice-message" role="status"></p>
+              <p class="chat__voice-partial" id="voice-partial" aria-live="polite"></p>
               <p class="chat__hint">回车发送 · Shift + 回车换行</p>
             </div>
           </section>
@@ -413,6 +427,29 @@
                     </table>
                   </div>
                 </div>
+              </div>
+            </div>
+          </section>
+
+          <!-- ================= 会话实况 ================= -->
+          <section id="view-sessions" class="view" aria-labelledby="sessions-title" hidden>
+            <div class="section">
+              <div class="section__head">
+                <h2 id="sessions-title">会话实况</h2>
+                <span class="count" id="session-connection" role="status"></span>
+              </div>
+              <p class="item__body section__note">
+                这是宿主给出的事实：这台机器上现在有哪些会话、谁在跑、谁在等一个回答。和你自己的项目账本不同——它不经过大哥。
+              </p>
+              <div class="session-layout">
+                <section class="session-panel" aria-labelledby="session-list-title">
+                  <h3 id="session-list-title" class="visually-hidden">会话清单</h3>
+                  <ul class="session-list-live" id="session-list-live"></ul>
+                </section>
+                <section class="session-panel session-detail" aria-labelledby="session-detail-title">
+                  <h3 id="session-detail-title">最新结果</h3>
+                  <div id="session-detail-live"></div>
+                </section>
               </div>
             </div>
           </section>

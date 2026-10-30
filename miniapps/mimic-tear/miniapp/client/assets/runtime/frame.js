@@ -186,6 +186,20 @@ export function renderHeaderContext() {
     );
     return;
   }
+  if (view === 'sessions') {
+    // The live session list is the Host's own truth, so the header counts it directly
+    // rather than reading the board's runtime snapshot: the two answer different
+    // questions — the boss's ledger says what the projects think, this says what is
+    // actually running on this machine right now.
+    const rows = state.sessions?.sessions ?? [];
+    const running = rows.filter((row) => row.running).length;
+    const asking = rows.filter((row) => row.needsAnswer).length;
+    const context = asking
+      ? `${rows.length} 个会话 · ${running} 个在跑 · ${asking} 个在等回答`
+      : `${rows.length} 个会话 · ${running} 个在跑`;
+    setHeader('会话实况', state.sessions?.availability === 'ready' ? context : '正在连接宿主…');
+    return;
+  }
   setHeader('对话', '大哥的交班与对话');
 }
 

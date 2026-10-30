@@ -1,0 +1,212 @@
+/**
+ * 会话实况：宿主会话表 + 语音输入 + 桌面窗口的样式。
+ *
+ * 这一块的颜色全部走板子已有的变量，所以它在深浅两种主题下都跟着走；
+ * 桌面窗口模式另有一套紧凑布局——窗口窄，表格必须换行而不是撑破。
+ */
+
+/* -------------------------------------------------- 会话清单 */
+
+.session-layout {
+  display: grid;
+  grid-template-columns: minmax(240px, 340px) 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+.session-panel {
+  background: var(--panel, rgba(255, 255, 255, 0.04));
+  border: 1px solid var(--line, rgba(255, 255, 255, 0.1));
+  border-radius: 10px;
+  padding: 12px;
+  min-width: 0;
+}
+
+.session-panel > h3 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  opacity: 0.72;
+}
+
+.session-list-live {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+
+.session-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  padding: 6px 8px;
+}
+
+.session-row--selected {
+  border-color: var(--accent, #6ee7d5);
+  background: rgba(110, 231, 213, 0.08);
+}
+
+/* 等回答的会话要一眼看见：它左边压一条红线。 */
+.session-row--ask {
+  border-left: 3px solid var(--danger, #f87171);
+}
+
+.session-row__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.session-row__title {
+  font-size: 13px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-row__meta {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 11px;
+  opacity: 0.66;
+}
+
+.session-row__status--running {
+  color: var(--accent, #6ee7d5);
+  opacity: 1;
+}
+
+.session-row__status--error {
+  color: var(--danger, #f87171);
+  opacity: 1;
+}
+
+.session-row__status--aborted {
+  color: var(--warn, #fbbf24);
+  opacity: 1;
+}
+
+.session-row__flags {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tag--live {
+  color: var(--accent, #6ee7d5);
+  border-color: var(--accent, #6ee7d5);
+}
+
+/* -------------------------------------------------- 最新结果 */
+
+.session-detail__head {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  margin-bottom: 10px;
+}
+
+.session-detail__title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.session-detail__status {
+  font-size: 11px;
+  opacity: 0.6;
+}
+
+.session-detail__reply {
+  margin: 0;
+  padding: 12px;
+  border-radius: 8px;
+  background: var(--panel-quiet, rgba(0, 0, 0, 0.16));
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+
+#session-connection[data-state='not_permitted'],
+#session-connection[data-state='unavailable'] {
+  color: var(--danger, #f87171);
+}
+
+/* -------------------------------------------------- 语音输入 */
+
+.chat__voice {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.chat__voice-msg,
+.chat__voice-partial {
+  margin: 4px 0 0;
+  font-size: 11px;
+  opacity: 0.7;
+  min-height: 1em;
+}
+
+.chat__voice-msg[data-state='recording'],
+.chat__voice-msg[data-state='transcribing'] {
+  color: var(--accent, #6ee7d5);
+  opacity: 1;
+}
+
+/* -------------------------------------------------- 桌面窗口 */
+
+:root[data-desk-mode='window'] .app-sidebar,
+:root[data-desk-mode='window'] .app-header__context {
+  display: none;
+}
+
+:root[data-desk-mode='window'] .app-body {
+  grid-template-columns: 1fr;
+}
+
+/* 清单声明了 frame:false，窗口没有系统标题栏，也就没有系统自带的拖动区。
+   这里给页头补一块可拖动区域，否则弹出来的窗口挪不动。 */
+:root[data-desk-mode='window'] .app-header__title {
+  -webkit-app-region: drag;
+  padding: 4px 0;
+}
+
+:root[data-desk-mode='window'] .app-header__actions,
+:root[data-desk-mode='window'] .app-header__title button {
+  -webkit-app-region: no-drag;
+}
+
+:root[data-desk-mode='window'] .session-layout {
+  grid-template-columns: 1fr;
+}
+
+:root[data-desk-mode='window'] .session-list-live {
+  max-height: 30vh;
+}
+
+:root[data-desk-mode='window'] .session-detail__reply {
+  max-height: 30vh;
+}

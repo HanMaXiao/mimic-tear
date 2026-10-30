@@ -27,5 +27,9 @@ export const API = {
   chatSession: '/api/chat/session',
   chatDuty: '/api/chat/duty',
   chatHistory: '/api/chat/history',
+  // The conversations that are waiting for an answer, read from the runtime. This is
+  // the durable truth behind the "等回答" mark; the Host's event stream only covers
+  // asks raised after the page subscribed.
+  sessionPendingAsks: '/api/sessions/pending-asks',
   stream: '/api/stream',
 };

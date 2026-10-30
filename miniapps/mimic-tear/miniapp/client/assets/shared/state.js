@@ -25,6 +25,10 @@ export const state = {
   view: 'chat',
   // The board's last word on the duty boss. The lamp in the header is driven by it.
   duty: null,
+  // The live session snapshot read from the Host: every conversation the user can see,
+  // with its status, whether a turn is running, and whether it is waiting for an answer.
+  // `null` means "not connected yet".
+  sessions: null,
   // The project and session the dispatch dialog is currently aimed at. The dialog must
   // remember its own target: deriving it from the current route silently sends the
   // instruction to whichever project was opened last.

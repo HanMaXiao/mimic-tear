@@ -360,6 +360,7 @@ interface DomainGroup {
 | GET | `/api/projects/:id` | 项目详情：组织树 + goals + questions + tasks + plan |
 | GET | `/api/skills` | 能力库：按领域分组的**本机已安装** skill（扫 `~/.agents/skills` 等目录） |
 | GET | `/api/skill-library` | 可复用技能库：大哥打包出来、能派工下去的技能。**与 `/api/skills` 不是一回事**——一个扫装机目录，一个读大哥自己的库 |
+| GET | `/api/sessions/pending-asks` | 还在等回答的卡，按会话归拢。**「会话实况」页标「等回答」的权威来源**：宿主的事件流只覆盖订阅之后新起的提问，运行时里的待答卡是持久状态 |
 | GET | `/api/dispatch/:id` | 单次派工状态 |
 | POST | `/api/dispatch` | 下达指令到项目会话。**必须**带 `idempotencyKey`；返回 **202**（受理），实际结果通过 SSE `dispatch` 事件推送 |
 | POST | `/api/inbox/ack` | 确认一条收件箱条目（body `{ id }`） |

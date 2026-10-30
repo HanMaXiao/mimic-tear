@@ -40,6 +40,9 @@ function makeFakeService() {
     async getSkills() {
       return { groups: [{ key: 'unreal', label: 'UE5', skills: [] }], unmapped: [], total: 0, failures: 0 };
     },
+    getPendingAsks() {
+      return { asks: [{ id: 'ask1', sessionId: 'mvs_1', createdAt: 1 }] };
+    },
     async getSkillLibrary() {
       return {
         entries: [{ id: 'sl1', skillName: 'watchdog-verify', status: 'active', triggers: ['看门狗'] }],
@@ -726,6 +729,14 @@ const PAYLOAD_CONTRACT = [
       'stats.candidates', 'domains', 'dispatchable', 'stale', 'retired', 'updatedAt',
     ],
     clientFields: ['entries', 'stats', 'skillName', 'status', 'domain', 'triggers'],
+  },
+  {
+    // The durable source behind the "等回答" mark. Its list can legitimately be empty,
+    // so only the container's shape is pinned here.
+    endpoint: 'GET /api/sessions/pending-asks',
+    path: '/api/sessions/pending-asks',
+    fields: ['asks'],
+    clientFields: ['asks', 'sessionId'],
   },
   {
     endpoint: 'GET /api/watchdog/alerts',

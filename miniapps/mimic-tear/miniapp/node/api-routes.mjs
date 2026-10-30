@@ -179,6 +179,18 @@ const API_ROUTES = [
     },
   },
   {
+    // Which conversations are waiting for an answer, read straight from the runtime.
+    // The Host's event stream only covers asks raised after the page subscribed;
+    // this one is the durable truth, so the board survives a reload.
+    method: 'GET',
+    path: '/api/sessions/pending-asks',
+    kind: 'api',
+    broadcast: [],
+    async handler(ctx) {
+      ctx.sendJson(200, ctx.service.getPendingAsks());
+    },
+  },
+  {
     // The reusable-skill registry: the skills the boss packages and dispatches from.
     // Separate from /api/skills, which is a scan of what is installed on the machine.
     method: 'GET',
