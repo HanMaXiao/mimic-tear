@@ -1,10 +1,23 @@
 /*
  * 窄屏与减少动效的适配：放在最后加载，才能盖住前面的规则。
  *
- * 由原 styles.css 按章节切出，规则本身逐字未改。
+ * 响应式的原则只有一条：**没有信息被隐藏。**
+ * 窄屏靠横向滚动（表格）、堆叠（网格）与换行（导航）解决，
+ * 不靠「不显示」——藏起来的字段等于删掉的功能。
  */
 
 /* ---------- responsive ---------- */
+
+/* 超宽屏：主内容放宽，仪表的数字和纸面的正文都不至于被拉得太长。 */
+@media (min-width: 1600px) {
+  :root {
+    --shell-rail: 276px;
+  }
+
+  .chat {
+    max-width: 960px;
+  }
+}
 
 @media (max-width: 1180px) {
   .kpi-row {
@@ -19,6 +32,10 @@
   .detail-grid > .section:not(.detail-grid__wide) {
     grid-column: auto;
   }
+
+  .session-layout {
+    grid-template-columns: minmax(240px, 320px) 1fr;
+  }
 }
 
 @media (max-width: 1020px) {
@@ -27,7 +44,7 @@
   }
 
   .skills-index {
-    padding: 12px;
+    padding: var(--mcode-space-3);
   }
 
   .domain-nav {
@@ -42,11 +59,11 @@
 
 @media (max-width: 960px) {
   main {
-    padding: 20px 20px 36px;
+    padding: var(--mcode-space-5) var(--mcode-space-5) var(--mcode-space-6);
   }
 
   .app-header__inner {
-    padding: 12px 20px;
+    padding: var(--mcode-space-3) var(--mcode-space-5);
   }
 
   /* The rail becomes a top strip on a narrow screen. */
@@ -59,8 +76,8 @@
     flex-direction: row;
     align-items: center;
     flex-wrap: wrap;
-    gap: 8px 14px;
-    padding: 10px 20px;
+    gap: var(--mcode-space-2) var(--mcode-space-3);
+    padding: 10px var(--mcode-space-5);
     border-right: 0;
     border-bottom: 1px solid var(--mcode-border);
     overflow: visible;
@@ -84,6 +101,10 @@
     padding: 7px 11px;
   }
 
+  .app-sidebar__nav a:hover {
+    transform: none;
+  }
+
   .nav__index,
   .nav__latin {
     display: none;
@@ -102,7 +123,7 @@
   .app-sidebar__foot {
     flex-direction: row;
     align-items: center;
-    gap: 12px;
+    gap: var(--mcode-space-3);
     order: 3;
     margin-top: 0;
     margin-left: 0;
@@ -111,7 +132,16 @@
   }
 
   .app-warning {
-    margin-bottom: 16px;
+    margin-bottom: var(--mcode-space-4);
+  }
+
+  /* 会话清单与最新结果上下叠放：窄屏上并排会把两边都压扁。 */
+  .session-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .session-list-live {
+    max-height: 32vh;
   }
 }
 
@@ -165,7 +195,7 @@
   .duty {
     flex: 1 1 0;
     min-width: 0;
-    border-radius: 8px;
+    border-radius: var(--mcode-radius-sm);
   }
 
   .duty__text {
@@ -216,15 +246,15 @@
 
 @media (max-width: 520px) {
   main {
-    padding: 16px 14px 30px;
+    padding: var(--mcode-space-4) var(--mcode-space-3) var(--mcode-space-5);
   }
 
   .app-header__inner {
-    padding: 10px 14px;
+    padding: 10px var(--mcode-space-3);
   }
 
   .app-sidebar {
-    padding: 10px 14px;
+    padding: 10px var(--mcode-space-3);
   }
 
   .app-sidebar__nav a {
@@ -233,7 +263,7 @@
   }
 
   .kpi__value {
-    font-size: 30px;
+    font-size: 32px;
   }
 
   .kpi__foot {
@@ -246,7 +276,7 @@
   }
 
   .item {
-    padding: 16px 16px 16px 18px;
+    padding: var(--mcode-space-4) var(--mcode-space-4) var(--mcode-space-4) var(--mcode-space-4);
   }
 
   .inbox-group__head {
@@ -278,5 +308,6 @@
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

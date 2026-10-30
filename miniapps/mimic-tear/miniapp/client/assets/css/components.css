@@ -1,24 +1,37 @@
 /*
  * 跨视图复用的组件：卡片、表格、状态标签、条目、按钮与表单。
  *
- * 由原 styles.css 按章节切出，规则本身逐字未改。
+ * 一条规矩贯穿这一层：**装饰不许和状态抢颜色。**
+ * 强调色只指路，语义色只说状态，其余全是发丝线和灰阶。
  */
 
 /* ---------- panels ---------- */
 
 .panel {
+  position: relative;
   border: 1px solid var(--mcode-border);
-  border-radius: 12px;
+  border-radius: var(--mcode-radius-lg);
   background: var(--mcode-surface);
+  box-shadow: var(--mcode-elev-1);
   min-width: 0;
   overflow: hidden;
+}
+
+/* 面板顶边一道高光：光是从上方来的，所有面板同一套光源。 */
+.panel::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 1px;
+  background: var(--mcode-hairline);
+  pointer-events: none;
 }
 
 .panel__head {
   display: flex;
   flex-direction: column;
   gap: 3px;
-  padding: 16px 22px 13px;
+  padding: var(--mcode-space-4) var(--mcode-space-5) var(--mcode-space-3);
   border-bottom: 1px solid var(--mcode-border);
 }
 
@@ -30,7 +43,7 @@
 }
 
 .panel__body {
-  padding: 18px 22px;
+  padding: var(--mcode-space-5);
 }
 
 .panel__body--flush {
@@ -48,6 +61,7 @@
 .panel--paper {
   background: var(--mcode-paper);
   border-color: var(--mcode-paper-border);
+  box-shadow: var(--mcode-elev-1);
 }
 
 .panel--paper .item {
@@ -86,13 +100,13 @@ table {
 thead th {
   position: sticky;
   top: 0;
-  z-index: 1;
-  padding: 9px 20px;
+  z-index: var(--mcode-z-sticky);
+  padding: var(--mcode-space-2) var(--mcode-space-5);
   background: var(--mcode-surface-muted);
   border-bottom: 1px solid var(--mcode-border);
   color: var(--mcode-text-subtle);
   font-family: var(--mcode-console);
-  font-size: 10px;
+  font-size: var(--mcode-text-micro);
   font-weight: 500;
   letter-spacing: 0.14em;
   text-align: left;
@@ -100,7 +114,7 @@ thead th {
 }
 
 tbody td {
-  padding: 12px 20px;
+  padding: var(--mcode-space-3) var(--mcode-space-5);
   border-top: 1px solid var(--mcode-rule);
   vertical-align: middle;
 }
@@ -123,7 +137,7 @@ tbody td .item__meta {
 }
 
 tbody tr {
-  transition: background-color 120ms var(--ease-out);
+  transition: background-color var(--mcode-dur-fast) var(--mcode-ease);
 }
 
 tbody tr:hover {
@@ -151,10 +165,16 @@ th.numeric {
   font-variant-numeric: tabular-nums;
 }
 
+/* 数字列统一等宽数字：右对齐也不该看着晃。 */
+tbody td:not(.numeric) {
+  font-variant-numeric: tabular-nums;
+}
+
 .cell-project__name {
   display: inline-block;
   font-size: 13.5px;
   line-height: 20px;
+  font-weight: 500;
 }
 
 .cell-project__path {
@@ -163,13 +183,14 @@ th.numeric {
   color: var(--mcode-text-subtle);
   font-size: 10.5px;
   line-height: 16px;
+  font-family: var(--mcode-mono);
 }
 
 /* The goal cell is a count plus its proportion: two numbers and a hairline meter. */
 .goal-cell {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: var(--mcode-space-2);
 }
 
 .goal-meter {
@@ -184,6 +205,7 @@ th.numeric {
 .goal-meter__fill {
   display: block;
   height: 100%;
+  border-radius: 2px;
   background: var(--mcode-accent);
 }
 
@@ -220,36 +242,45 @@ th.numeric {
 
 .status--active .status__dot {
   background: var(--mcode-success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--mcode-success) 18%, transparent);
 }
 
 .status--blocked .status__dot {
   background: var(--mcode-warning);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--mcode-warning) 18%, transparent);
 }
 
 .status--error .status__dot {
   background: var(--mcode-danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--mcode-danger) 18%, transparent);
 }
 
 .status--idle .status__dot {
   background: var(--mcode-text-subtle);
 }
 
-/* The kind of a thing is a quiet outline; its severity is a filled square chip. */
+/*
+ * 标签。
+ *
+ * 类型标签（会话实况里的「等回答」「进行中」）是**方形刻度**，不是药丸：
+ * 药丸是营销语汇，这里是仪表。而严重度是实心浅底——它要说的是状态，不是名字。
+ */
 .tag {
   display: inline-flex;
   align-items: center;
-  padding: 1px 8px;
+  padding: 1px 7px;
   border: 1px solid var(--mcode-border);
-  border-radius: 999px;
+  border-radius: var(--mcode-radius-xs);
   color: var(--mcode-text-muted);
-  font-size: 11.5px;
+  font-size: 11px;
   line-height: 17px;
+  font-weight: 500;
   white-space: nowrap;
 }
 
 .tag--high {
   border-color: transparent;
-  border-radius: 4px;
+  border-radius: var(--mcode-radius-xs);
   background: color-mix(in srgb, var(--mcode-danger) 13%, transparent);
   color: var(--mcode-danger);
   font-weight: 600;
@@ -257,7 +288,7 @@ th.numeric {
 
 .tag--medium {
   border-color: transparent;
-  border-radius: 4px;
+  border-radius: var(--mcode-radius-xs);
   background: color-mix(in srgb, var(--mcode-warning) 16%, transparent);
   color: var(--mcode-warning);
   font-weight: 600;
@@ -265,7 +296,7 @@ th.numeric {
 
 .tag--low {
   border-color: transparent;
-  border-radius: 4px;
+  border-radius: var(--mcode-radius-xs);
   background: var(--mcode-surface-muted);
   color: var(--mcode-text-muted);
   font-weight: 600;
@@ -273,7 +304,7 @@ th.numeric {
 
 .tag--done {
   border-color: transparent;
-  border-radius: 4px;
+  border-radius: var(--mcode-radius-xs);
   background: color-mix(in srgb, var(--mcode-success) 13%, transparent);
   color: var(--mcode-success);
   font-weight: 600;
@@ -324,9 +355,9 @@ th.numeric {
 .inbox-group__head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 22px 8px 24px;
-  background: color-mix(in srgb, var(--mcode-text) 4%, var(--mcode-paper));
+  gap: var(--mcode-space-2);
+  padding: var(--mcode-space-2) var(--mcode-space-5) var(--mcode-space-2) var(--mcode-space-5);
+  background: color-mix(in srgb, var(--mcode-paper-ink) 5%, var(--mcode-paper));
   border-bottom: 1px solid var(--mcode-paper-border);
   color: var(--mcode-paper-muted);
   font-family: var(--mcode-console);
@@ -356,7 +387,7 @@ th.numeric {
   display: flex;
   flex-direction: column;
   gap: 7px;
-  padding: 18px 22px 18px 24px;
+  padding: var(--mcode-space-4) var(--mcode-space-5) var(--mcode-space-4) var(--mcode-space-5);
   border-top: 1px solid var(--mcode-rule);
 }
 
@@ -372,7 +403,7 @@ th.numeric {
 .item__head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--mcode-space-2);
   flex-wrap: wrap;
 }
 
@@ -386,21 +417,23 @@ th.numeric {
   color: var(--mcode-text-subtle);
   font-size: 11px;
   line-height: 17px;
+  font-variant-numeric: tabular-nums;
 }
 
 .item__body {
   color: var(--mcode-text-muted);
   font-size: 13px;
+  max-width: 74ch;
 }
 
 /* Prose on the board is a document, and a document is set in 宋体. */
 .doc {
   font-family: var(--mcode-document);
-  font-size: 14.5px;
+  font-size: 15px;
   line-height: 1.95;
   color: var(--mcode-paper-ink);
   letter-spacing: 0.01em;
-  max-width: 74ch;
+  max-width: 72ch;
   text-wrap: pretty;
 }
 
@@ -413,7 +446,7 @@ th.numeric {
 
 .item__actions {
   display: flex;
-  gap: 8px;
+  gap: var(--mcode-space-2);
   flex-wrap: wrap;
   margin-top: 3px;
 }
@@ -430,25 +463,30 @@ th.numeric {
   justify-content: center;
   gap: 6px;
   height: 32px;
-  padding: 0 12px;
+  padding: 0 var(--mcode-space-3);
   border: 1px solid var(--mcode-border);
-  border-radius: 8px;
+  border-radius: var(--mcode-radius-sm);
   background: var(--mcode-surface);
+  box-shadow: var(--mcode-hairline);
   color: var(--mcode-text);
   font-size: 12.5px;
   letter-spacing: 0.01em;
   cursor: pointer;
-  transition: background-color 140ms var(--ease-out), border-color 140ms var(--ease-out),
-    color 140ms var(--ease-out), transform 90ms var(--ease-out);
+  transition: background-color var(--mcode-dur-fast) var(--mcode-ease), border-color var(--mcode-dur-fast) var(--mcode-ease),
+    color var(--mcode-dur-fast) var(--mcode-ease), transform var(--mcode-dur-fast) var(--mcode-ease),
+    box-shadow var(--mcode-dur-fast) var(--mcode-ease);
 }
 
 .btn:hover {
   background: var(--mcode-surface-muted);
   border-color: var(--mcode-border-strong);
+  transform: translateY(-1px);
+  box-shadow: var(--mcode-elev-1), var(--mcode-hairline);
 }
 
 .btn:active {
-  transform: translateY(1px);
+  transform: translateY(0) scale(0.99);
+  box-shadow: none;
 }
 
 .btn:focus-visible {
@@ -458,7 +496,12 @@ th.numeric {
 
 .btn[disabled] {
   color: var(--mcode-text-subtle);
+  background: transparent;
+  border-color: color-mix(in srgb, var(--mcode-border) 60%, transparent);
+  box-shadow: none;
   cursor: not-allowed;
+  opacity: 0.62;
+  transform: none;
 }
 
 .btn--primary {
@@ -471,14 +514,20 @@ th.numeric {
 .btn--primary:hover {
   background: var(--mcode-primary-action-bg);
   border-color: var(--mcode-primary-action-bg);
-  opacity: 0.88;
+  color: var(--mcode-primary-action-text);
+  opacity: 0.9;
+}
+
+.btn--primary:active {
+  opacity: 0.78;
 }
 
 .btn--text {
   height: 28px;
-  padding: 0 8px;
+  padding: 0 var(--mcode-space-2);
   border-color: transparent;
   background: transparent;
+  box-shadow: none;
   color: var(--mcode-accent);
 }
 
@@ -490,13 +539,18 @@ th.numeric {
 
 .btn--danger {
   color: var(--mcode-danger);
-  border-color: var(--mcode-border);
+  border-color: color-mix(in srgb, var(--mcode-danger) 40%, var(--mcode-border));
   background: transparent;
+}
+
+.btn--danger:hover {
+  background: color-mix(in srgb, var(--mcode-danger) 10%, transparent);
+  border-color: var(--mcode-danger);
 }
 
 .btn--small {
   height: 28px;
-  padding: 0 10px;
+  padding: 0 var(--mcode-space-3);
   font-size: 12px;
 }
 
@@ -506,11 +560,13 @@ tbody td .btn {
   font-size: 11.5px;
   color: var(--mcode-text-muted);
   background: transparent;
+  box-shadow: none;
 }
 
 tbody td .btn:hover {
   color: var(--mcode-text);
   background: var(--mcode-surface);
+  border-color: var(--mcode-border-strong);
 }
 
 .app-header__actions .btn {
@@ -536,12 +592,14 @@ tbody td .btn:hover {
 .field input[type='text'],
 .field textarea {
   width: 100%;
-  min-height: 36px;
-  padding: 8px 11px;
+  min-height: 38px;
+  padding: var(--mcode-space-2) var(--mcode-space-3);
   border: 1px solid var(--mcode-paper-border);
-  border-radius: 8px;
+  border-radius: var(--mcode-radius-sm);
   background: var(--mcode-surface);
+  color: var(--mcode-text);
   font-size: 13px;
+  transition: border-color var(--mcode-dur-fast) var(--mcode-ease), box-shadow var(--mcode-dur-fast) var(--mcode-ease);
 }
 
 .field textarea {
@@ -550,11 +608,17 @@ tbody td .btn:hover {
   line-height: 1.75;
 }
 
+.field input:hover,
+.field textarea:hover {
+  border-color: color-mix(in srgb, var(--mcode-accent) 30%, var(--mcode-paper-border));
+}
+
 .field input:focus-visible,
 .field textarea:focus-visible {
   outline: 2px solid var(--mcode-accent);
   outline-offset: 1px;
   border-color: var(--mcode-accent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--mcode-accent) 16%, transparent);
 }
 
 .filter {
@@ -593,7 +657,7 @@ tbody td .btn:hover {
   max-width: 210px;
   padding: 0 26px 0 10px;
   border: 1px solid var(--mcode-border);
-  border-radius: 8px;
+  border-radius: var(--mcode-radius-sm);
   background: var(--mcode-surface);
   color: var(--mcode-text);
   font-size: 12px;
@@ -601,10 +665,12 @@ tbody td .btn:hover {
   appearance: none;
   -webkit-appearance: none;
   text-overflow: ellipsis;
+  transition: border-color var(--mcode-dur-fast) var(--mcode-ease), background-color var(--mcode-dur-fast) var(--mcode-ease);
 }
 
 .select:hover {
   border-color: var(--mcode-border-strong);
+  background: var(--mcode-surface-muted);
 }
 
 .select:focus-visible {
@@ -633,24 +699,24 @@ tbody td .btn:hover {
 
 .toast-host {
   position: fixed;
-  right: 20px;
-  bottom: 20px;
+  right: var(--mcode-space-5);
+  bottom: var(--mcode-space-5);
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  z-index: 20;
+  gap: var(--mcode-space-2);
+  z-index: var(--mcode-z-pop);
   max-width: min(380px, calc(100vw - 40px));
 }
 
 .toast {
-  padding: 10px 14px;
+  padding: var(--mcode-space-3) var(--mcode-space-4);
   border: 1px solid var(--mcode-border);
   border-left: 3px solid var(--mcode-border-strong);
-  border-radius: 8px;
+  border-radius: var(--mcode-radius-sm);
   background: var(--mcode-surface);
-  box-shadow: var(--mcode-shadow);
+  box-shadow: var(--mcode-elev-3);
   font-size: 12.5px;
-  animation: toast-in 220ms var(--ease-out) both;
+  animation: toast-in var(--mcode-dur) var(--mcode-spring) both;
 }
 
 .toast--error {
@@ -661,7 +727,7 @@ tbody td .btn:hover {
 @keyframes toast-in {
   from {
     opacity: 0;
-    transform: translateY(6px);
+    transform: translateY(10px) scale(0.98);
   }
 
   to {

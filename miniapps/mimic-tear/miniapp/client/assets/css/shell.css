@@ -1,7 +1,9 @@
 /*
  * 看板的外壳：侧栏、开关、顶栏与值班灯。
  *
- * 由原 styles.css 按章节切出，规则本身逐字未改。
+ * 外壳是这套设计的「仪器面板」：冷、发丝线、编号与刻度。
+ * 它和纸面（对话里的交班报告、收件箱的决策条目）是两种材质，
+ * 所以这里的每一个字都比正文更紧、更小、更像刻度。
  */
 
 /* ---------- shell ---------- */
@@ -27,10 +29,12 @@
 /* ---------- rail ---------- */
 
 .app-sidebar {
+  position: relative;
+  z-index: var(--mcode-z-sticky);
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 18px 16px 16px;
+  gap: var(--mcode-space-2);
+  padding: var(--mcode-space-5) var(--mcode-space-4) var(--mcode-space-4);
   border-right: 1px solid var(--mcode-border);
   background: var(--mcode-bg-secondary);
   min-height: 0;
@@ -40,10 +44,11 @@
 .app-sidebar__brand {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 0 4px 20px;
+  gap: var(--mcode-space-3);
+  padding: 0 var(--mcode-space-1) var(--mcode-space-5);
   color: var(--mcode-text);
   text-decoration: none;
+  border-radius: var(--mcode-radius-sm);
 }
 
 .brand__seal {
@@ -51,13 +56,15 @@
   display: grid;
   flex: none;
   place-items: center;
-  width: 40px;
-  height: 40px;
+  width: 42px;
+  height: 42px;
   border: 1px solid var(--mcode-border-strong);
-  border-radius: 10px;
+  border-radius: var(--mcode-radius-md);
   background: var(--mcode-surface);
+  box-shadow: var(--mcode-elev-1), var(--mcode-hairline);
   color: var(--mcode-lamp);
-  transition: border-color 180ms var(--ease-out), color 180ms var(--ease-out);
+  transition: border-color var(--mcode-dur) var(--mcode-ease), color var(--mcode-dur) var(--mcode-ease),
+    box-shadow var(--mcode-dur) var(--mcode-ease);
 }
 
 /* The seal is drawn twice: an outer plate and a hairline inset, like a stamped mark. */
@@ -66,12 +73,14 @@
   position: absolute;
   inset: 4px;
   border: 1px solid var(--mcode-rule);
-  border-radius: 6px;
+  border-radius: var(--mcode-radius-xs);
   pointer-events: none;
 }
 
 .app-sidebar__brand:hover .brand__seal {
-  border-color: var(--mcode-lamp);
+  border-color: color-mix(in srgb, var(--mcode-lamp) 62%, var(--mcode-border-strong));
+  box-shadow: var(--mcode-elev-2), var(--mcode-hairline);
+  color: var(--mcode-lamp);
 }
 
 .app-sidebar__names {
@@ -82,22 +91,24 @@
 
 .app-sidebar__latin {
   font-family: var(--mcode-console);
-  font-size: 8.5px;
-  line-height: 12px;
-  letter-spacing: 0.24em;
+  font-size: 9px;
+  line-height: 13px;
+  letter-spacing: 0.26em;
   color: var(--mcode-text-subtle);
 }
 
 .app-sidebar__name {
   margin: 0;
-  line-height: 23px;
+  font-size: var(--mcode-text-display);
+  line-height: 27px;
+  letter-spacing: -0.015em;
 }
 
 .app-sidebar__role {
-  margin-top: 1px;
+  margin-top: 2px;
   color: var(--mcode-text-muted);
-  font-size: 10.5px;
-  line-height: 15px;
+  font-size: 11px;
+  line-height: 16px;
   letter-spacing: 0.04em;
 }
 
@@ -110,48 +121,51 @@
 .app-sidebar__nav a {
   position: relative;
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) auto;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
   grid-template-areas:
     'index label badge'
     'index latin badge';
   align-items: center;
-  column-gap: 8px;
-  padding: 8px 10px 8px 8px;
+  column-gap: var(--mcode-space-2);
+  padding: var(--mcode-space-2) var(--mcode-space-3) var(--mcode-space-2) var(--mcode-space-2);
   border: 1px solid transparent;
-  border-radius: 9px;
+  border-radius: var(--mcode-radius-sm);
   color: var(--mcode-text-muted);
   text-decoration: none;
-  transition: background-color 150ms var(--ease-out), color 150ms var(--ease-out),
-    border-color 150ms var(--ease-out);
+  transition: background-color var(--mcode-dur) var(--mcode-ease), color var(--mcode-dur) var(--mcode-ease),
+    border-color var(--mcode-dur) var(--mcode-ease), transform var(--mcode-dur-fast) var(--mcode-ease);
 }
 
 .nav__index {
   grid-area: index;
   font-family: var(--mcode-console);
-  font-size: 9.5px;
-  line-height: 14px;
+  font-size: 10px;
+  line-height: 15px;
   letter-spacing: 0.1em;
   color: var(--mcode-text-subtle);
   font-variant-numeric: tabular-nums;
-  transition: color 150ms var(--ease-out);
+  transition: color var(--mcode-dur) var(--mcode-ease);
 }
 
 .nav__label {
   grid-area: label;
   font-size: 13.5px;
   line-height: 20px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
 }
 
 .nav__latin {
   grid-area: latin;
   font-family: var(--mcode-console);
-  font-size: 8px;
-  line-height: 11px;
+  font-size: 8.5px;
+  line-height: 12px;
   letter-spacing: 0.2em;
   color: var(--mcode-text-subtle);
+  transition: color var(--mcode-dur) var(--mcode-ease);
 }
 
-/* The active slot is marked twice: a plate and a tick on its edge. */
+/* The active slot is marked three times: a plate, a tick on its edge, and a lit index. */
 .app-sidebar__nav a::before {
   content: '';
   position: absolute;
@@ -162,22 +176,24 @@
   border-radius: 0 2px 2px 0;
   background: var(--mcode-accent);
   transform: translateY(-50%);
-  transition: height 180ms var(--ease-out);
+  transition: height var(--mcode-dur) var(--mcode-spring);
 }
 
 .app-sidebar__nav a:hover {
   background: var(--mcode-surface-muted);
   color: var(--mcode-text);
+  transform: translateX(2px);
 }
 
 .app-sidebar__nav a[aria-current='page'] {
   background: var(--mcode-surface);
   border-color: var(--mcode-border);
   color: var(--mcode-text);
+  box-shadow: var(--mcode-elev-1), var(--mcode-hairline);
 }
 
 .app-sidebar__nav a[aria-current='page']::before {
-  height: 22px;
+  height: 24px;
 }
 
 .app-sidebar__nav a[aria-current='page'] .nav__index {
@@ -190,11 +206,11 @@
 
 .app-sidebar__foot {
   margin-top: auto;
-  padding: 16px 4px 2px;
+  padding: var(--mcode-space-4) var(--mcode-space-1) 2px;
   border-top: 1px solid var(--mcode-border);
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: var(--mcode-space-3);
 }
 
 /* ---------- switch ---------- */
@@ -202,7 +218,7 @@
 .switch {
   display: inline-flex;
   align-items: center;
-  gap: 9px;
+  gap: var(--mcode-space-2);
   color: var(--mcode-text-muted);
   font-size: 12.5px;
   cursor: pointer;
@@ -220,33 +236,35 @@
 .switch__track {
   position: relative;
   flex: none;
-  width: 32px;
-  height: 18px;
+  width: 34px;
+  height: 19px;
   border: 1px solid var(--mcode-border-strong);
-  border-radius: 999px;
+  border-radius: var(--mcode-radius-pill);
   background: var(--mcode-surface-muted);
-  transition: background-color 170ms var(--ease-out), border-color 170ms var(--ease-out);
+  transition: background-color var(--mcode-dur) var(--mcode-ease), border-color var(--mcode-dur) var(--mcode-ease),
+    box-shadow var(--mcode-dur) var(--mcode-ease);
 }
 
 .switch__knob {
   position: absolute;
   top: 1px;
   left: 1px;
-  width: 14px;
-  height: 14px;
+  width: 15px;
+  height: 15px;
   border-radius: 50%;
   background: var(--mcode-surface);
-  box-shadow: 0 1px 2px rgb(0 0 0 / 22%);
-  transition: transform 170ms var(--ease-out);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 26%);
+  transition: transform var(--mcode-dur) var(--mcode-spring);
 }
 
 .switch input:checked + .switch__track {
   background: var(--mcode-accent);
   border-color: var(--mcode-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--mcode-accent) 18%, transparent);
 }
 
 .switch input:checked + .switch__track .switch__knob {
-  transform: translateX(14px);
+  transform: translateX(15px);
 }
 
 .switch input:focus-visible + .switch__track {
@@ -259,7 +277,9 @@
 .app-header {
   flex: none;
   border-bottom: 1px solid var(--mcode-border);
-  background: var(--mcode-bg);
+  background: color-mix(in srgb, var(--mcode-bg) 86%, transparent);
+  backdrop-filter: blur(12px) saturate(120%);
+  -webkit-backdrop-filter: blur(12px) saturate(120%);
 }
 
 .app-header__inner {
@@ -267,23 +287,24 @@
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 12px 24px;
+  gap: var(--mcode-space-3) var(--mcode-space-5);
   max-width: var(--shell-max);
   margin: 0 auto;
-  padding: 14px 32px;
+  padding: var(--mcode-space-4) var(--mcode-space-6);
 }
 
 .app-header__title {
   display: flex;
   align-items: baseline;
-  gap: 14px;
+  gap: var(--mcode-space-3);
   min-width: 0;
 }
 
 .app-header__name {
-  font-size: 17px;
-  line-height: 24px;
-  letter-spacing: 0.02em;
+  font-size: var(--mcode-text-title);
+  line-height: 26px;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
 }
 
 /* A tick in front of the section name: the header states the slot, not a floating label. */
@@ -291,16 +312,16 @@
   content: '';
   display: inline-block;
   width: 2px;
-  height: 13px;
-  margin-right: 11px;
+  height: 15px;
+  margin-right: var(--mcode-space-3);
   border-radius: 1px;
   background: var(--mcode-accent);
-  transform: translateY(1px);
+  transform: translateY(2px);
 }
 
 .app-header__context {
   color: var(--mcode-text-subtle);
-  font-size: 12px;
+  font-size: var(--mcode-text-caption);
   line-height: 18px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -310,7 +331,7 @@
 .app-header__actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--mcode-space-2);
   flex-wrap: wrap;
 }
 
@@ -341,7 +362,7 @@
   transform-box: fill-box;
   transform-origin: 50% 100%;
   transform: scaleY(0.3);
-  transition: transform 520ms var(--ease-out), opacity 240ms var(--ease-out);
+  transition: transform 520ms var(--mcode-ease), opacity 240ms var(--mcode-ease);
 }
 
 .drop--mark .drop__fill {
@@ -352,19 +373,22 @@
 .duty {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--mcode-space-2);
   min-width: 0;
-  padding: 4px 12px 4px 9px;
+  padding: 5px var(--mcode-space-3) 5px var(--mcode-space-2);
   border: 1px solid var(--mcode-border);
-  border-radius: 999px;
+  border-radius: var(--mcode-radius-pill);
   background: var(--mcode-surface);
-  transition: border-color 220ms var(--ease-out), background-color 220ms var(--ease-out);
+  transition: border-color var(--mcode-dur) var(--mcode-ease), background-color var(--mcode-dur) var(--mcode-ease);
 }
 
 .duty__text {
   color: var(--mcode-text-muted);
-  font-size: 12px;
+  font-size: var(--mcode-text-caption);
   line-height: 18px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 [data-duty='live'] .duty {
@@ -453,6 +477,7 @@
   font-family: var(--mcode-console);
   font-size: 10px;
   letter-spacing: 0.1em;
+  font-variant-numeric: tabular-nums;
 }
 
 .app-status::before {
@@ -470,6 +495,7 @@
 
 .app-status[data-state='live']::before {
   background: var(--mcode-success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--mcode-success) 20%, transparent);
 }
 
 .app-status[data-state='error'] {
@@ -478,20 +504,24 @@
 
 .app-status[data-state='error']::before {
   background: var(--mcode-danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--mcode-danger) 20%, transparent);
 }
 
+/* 徽标是仪表上的读数，不是药丸：方角、tabular 数字。 */
 .badge {
   grid-area: badge;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 18px;
-  height: 18px;
+  min-width: 19px;
+  height: 19px;
   padding: 0 5px;
-  border-radius: 4px;
+  border-radius: var(--mcode-radius-xs);
   background: var(--mcode-danger);
   color: #ffffff;
   font-family: var(--mcode-console);
   font-size: 10.5px;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--mcode-bg) 70%, transparent);
 }

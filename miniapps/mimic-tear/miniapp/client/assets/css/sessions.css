@@ -1,33 +1,49 @@
-/**
- * 会话实况：宿主会话表 + 语音输入 + 桌面窗口的样式。
+/*
+ * 会话实况：宿主会话清单 + 最新结果。
  *
- * 这一块的颜色全部走板子已有的变量，所以它在深浅两种主题下都跟着走；
- * 桌面窗口模式另有一套紧凑布局——窗口窄，表格必须换行而不是撑破。
+ * 这一页和板面别处不同：它读的是**宿主给的会话**，不经过大哥。
+ * 所以它的语气也更冷——它不是大哥的账本，是机器的事实。
  */
 
-/* -------------------------------------------------- 会话清单 */
+/* ---------- layout ---------- */
 
 .session-layout {
   display: grid;
-  grid-template-columns: minmax(240px, 340px) 1fr;
-  gap: 16px;
+  grid-template-columns: minmax(260px, 380px) 1fr;
+  gap: var(--mcode-space-4);
   align-items: start;
 }
 
 .session-panel {
-  background: var(--panel, rgba(255, 255, 255, 0.04));
-  border: 1px solid var(--line, rgba(255, 255, 255, 0.1));
-  border-radius: 10px;
-  padding: 12px;
+  position: relative;
+  background: var(--mcode-surface);
+  border: 1px solid var(--mcode-border);
+  border-radius: var(--mcode-radius-lg);
+  box-shadow: var(--mcode-elev-1);
+  padding: var(--mcode-space-4);
   min-width: 0;
 }
 
-.session-panel > h3 {
-  margin: 0 0 10px;
-  font-size: 13px;
-  letter-spacing: 0.08em;
-  opacity: 0.72;
+.session-panel::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 1px;
+  background: var(--mcode-hairline);
+  pointer-events: none;
 }
+
+.session-panel > h3 {
+  margin: 0 0 var(--mcode-space-3);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  color: var(--mcode-text-subtle);
+  font-family: var(--mcode-console);
+  font-weight: 500;
+  text-transform: uppercase;
+}
+
+/* ---------- the list ---------- */
 
 .session-list-live {
   list-style: none;
@@ -35,28 +51,41 @@
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 2px;
   max-height: 46vh;
   overflow-y: auto;
 }
 
 .session-row {
+  position: relative;
   display: flex;
   align-items: flex-start;
-  gap: 8px;
-  border-radius: 8px;
+  gap: var(--mcode-space-2);
+  border-radius: var(--mcode-radius-sm);
   border: 1px solid transparent;
-  padding: 6px 8px;
+  padding: 6px 8px 6px 10px;
+  transition: background-color var(--mcode-dur-fast) var(--mcode-ease), border-color var(--mcode-dur-fast) var(--mcode-ease);
+}
+
+.session-row:hover {
+  background: var(--mcode-surface-muted);
 }
 
 .session-row--selected {
-  border-color: var(--accent, #6ee7d5);
-  background: rgba(110, 231, 213, 0.08);
+  border-color: color-mix(in srgb, var(--mcode-accent) 45%, var(--mcode-border));
+  background: color-mix(in srgb, var(--mcode-accent) 8%, var(--mcode-surface));
 }
 
-/* 等回答的会话要一眼看见：它左边压一条红线。 */
-.session-row--ask {
-  border-left: 3px solid var(--danger, #f87171);
+/* 等回答的会话要一眼看见：它左边压一道实边。 */
+.session-row--ask::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--mcode-danger);
 }
 
 .session-row__main {
@@ -76,7 +105,7 @@
 
 .session-row__title {
   font-size: 13px;
-  line-height: 1.4;
+  line-height: 19px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -84,45 +113,49 @@
 
 .session-row__meta {
   display: flex;
-  gap: 8px;
+  gap: var(--mcode-space-2);
   align-items: center;
   font-size: 11px;
-  opacity: 0.66;
+  color: var(--mcode-text-subtle);
+  font-variant-numeric: tabular-nums;
 }
 
 .session-row__status--running {
-  color: var(--accent, #6ee7d5);
-  opacity: 1;
+  color: var(--mcode-accent);
+  font-weight: 600;
 }
 
 .session-row__status--error {
-  color: var(--danger, #f87171);
-  opacity: 1;
+  color: var(--mcode-danger);
+  font-weight: 600;
 }
 
 .session-row__status--aborted {
-  color: var(--warn, #fbbf24);
-  opacity: 1;
+  color: var(--mcode-warning);
+  font-weight: 600;
 }
 
 .session-row__flags {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  align-items: flex-end;
 }
 
 .tag--live {
-  color: var(--accent, #6ee7d5);
-  border-color: var(--accent, #6ee7d5);
+  color: var(--mcode-accent);
+  border-color: color-mix(in srgb, var(--mcode-accent) 45%, transparent);
+  background: color-mix(in srgb, var(--mcode-accent) 10%, transparent);
+  font-weight: 600;
 }
 
-/* -------------------------------------------------- 最新结果 */
+/* ---------- the result ---------- */
 
 .session-detail__head {
   display: flex;
-  gap: 10px;
+  gap: var(--mcode-space-3);
   align-items: baseline;
-  margin-bottom: 10px;
+  margin-bottom: var(--mcode-space-3);
 }
 
 .session-detail__title {
@@ -132,52 +165,39 @@
 
 .session-detail__status {
   font-size: 11px;
-  opacity: 0.6;
+  color: var(--mcode-text-subtle);
 }
 
+/* 回复正文是散文：宋体，和板面别处的散文一个规矩。 */
 .session-detail__reply {
   margin: 0;
-  padding: 12px;
-  border-radius: 8px;
-  background: var(--panel-quiet, rgba(0, 0, 0, 0.16));
-  font-family: var(--mono, ui-monospace, monospace);
-  font-size: 12px;
-  line-height: 1.6;
+  padding: var(--mcode-space-4);
+  border-radius: var(--mcode-radius-md);
+  background: var(--mcode-surface-muted);
+  border: 1px solid var(--mcode-rule);
+  color: var(--mcode-text);
+  font-family: var(--mcode-document);
+  font-size: 14px;
+  line-height: 1.85;
   white-space: pre-wrap;
   word-break: break-word;
   max-height: 46vh;
   overflow-y: auto;
+  text-wrap: pretty;
 }
 
 #session-connection[data-state='not_permitted'],
 #session-connection[data-state='unavailable'] {
-  color: var(--danger, #f87171);
+  color: var(--mcode-danger);
 }
 
-/* -------------------------------------------------- 语音输入 */
+/* ---------- 桌面窗口 ---------- */
 
-.chat__voice {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-}
-
-.chat__voice-msg,
-.chat__voice-partial {
-  margin: 4px 0 0;
-  font-size: 11px;
-  opacity: 0.7;
-  min-height: 1em;
-}
-
-.chat__voice-msg[data-state='recording'],
-.chat__voice-msg[data-state='transcribing'] {
-  color: var(--accent, #6ee7d5);
-  opacity: 1;
-}
-
-/* -------------------------------------------------- 桌面窗口 */
-
+/*
+ * 弹成独立窗口后侧栏收起，页头变成可拖动区。
+ * 清单里声明了 frame: false——没有系统标题栏就没有系统拖动区，
+ * 所以这里必须自己画一块，否则窗口挪不动。
+ */
 :root[data-desk-mode='window'] .app-sidebar,
 :root[data-desk-mode='window'] .app-header__context {
   display: none;
@@ -187,8 +207,6 @@
   grid-template-columns: 1fr;
 }
 
-/* 清单声明了 frame:false，窗口没有系统标题栏，也就没有系统自带的拖动区。
-   这里给页头补一块可拖动区域，否则弹出来的窗口挪不动。 */
 :root[data-desk-mode='window'] .app-header__title {
   -webkit-app-region: drag;
   padding: 4px 0;

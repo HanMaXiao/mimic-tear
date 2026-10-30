@@ -11,6 +11,7 @@ import { request } from '../shared/http.js';
 import { API } from '../shared/api.js';
 import { state } from '../shared/state.js';
 import { overviewChanged, inboxChanged } from '../shared/signatures.js';
+import { loadingState } from '../shared/loading.js';
 import { renderHeaderContext, renderDutyStatus, renderWarning, setStatus } from './frame.js';
 import { renderKpi, renderAttention, renderProjects } from '../views/overview.js';
 import { renderInbox } from '../views/inbox.js';
@@ -93,7 +94,7 @@ export async function renderRoute() {
     if (state.projectId !== route.param) {
       state.projectId = route.param;
       state.project = null;
-      el('org-tree').innerHTML = '<div class="state"><span class="spinner" aria-hidden="true"></span>正在加载项目详情…</div>';
+      el('org-tree').innerHTML = loadingState('正在加载项目详情…');
       try {
         state.project = await request(API.project(route.param));
       } catch (error) {

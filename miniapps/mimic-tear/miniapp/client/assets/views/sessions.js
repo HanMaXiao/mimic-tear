@@ -12,6 +12,7 @@
 import { el } from '../shared/dom.js';
 import { escapeHtml } from '../shared/format.js';
 import { state } from '../shared/state.js';
+import { loadingState } from '../shared/loading.js';
 
 /** 会话状态的中文说法。 */
 const STATUS_LABEL = {
@@ -73,7 +74,7 @@ function sessionRowHtml(row, selected) {
 export function sessionsHtml(snapshot) {
   const rows = snapshot?.sessions ?? [];
   if (!rows.length) {
-    if (snapshot?.availability === 'connecting') return '<div class="state"><span class="spinner" aria-hidden="true"></span>正在连接宿主…</div>';
+    if (snapshot?.availability === 'connecting') return loadingState('正在连接宿主…');
     if (snapshot?.availability === 'not_permitted') {
       return '<div class="state state--error">宿主没有放开「读取会话」权限——在插件详情里打开 session.read 开关。</div>';
     }
@@ -100,7 +101,7 @@ export function sessionsHtml(snapshot) {
  * @returns {string}
  */
 export function detailHtml(snapshot) {
-  if (snapshot?.detailLoading) return '<div class="state"><span class="spinner" aria-hidden="true"></span>正在读取…</div>';
+  if (snapshot?.detailLoading) return loadingState('正在读取…', 2);
   const detail = snapshot?.detail;
   if (!detail) {
     if (snapshot?.error) return `<div class="state state--error">${escapeHtml(snapshot.error)}</div>`;

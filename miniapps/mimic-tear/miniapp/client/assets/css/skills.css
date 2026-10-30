@@ -8,8 +8,8 @@
 
 .skills-layout {
   display: grid;
-  grid-template-columns: 236px minmax(0, 1fr);
-  gap: 20px;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: var(--mcode-space-5);
   align-items: start;
 }
 
@@ -17,10 +17,11 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 14px 12px;
+  padding: var(--mcode-space-4) var(--mcode-space-3);
   border: 1px solid var(--mcode-border);
-  border-radius: var(--radius-card);
+  border-radius: var(--mcode-radius-lg);
   background: var(--mcode-surface);
+  box-shadow: var(--mcode-elev-1);
 }
 
 .skills-index__label {
@@ -51,7 +52,7 @@
   text-align: left;
   font-size: 12.5px;
   cursor: pointer;
-  transition: background-color 140ms var(--ease-out), color 140ms var(--ease-out);
+  transition: background-color var(--mcode-dur-fast) var(--mcode-ease), color var(--mcode-dur-fast) var(--mcode-ease);
 }
 
 .domain-nav button::before {
@@ -64,7 +65,7 @@
   border-radius: 0 2px 2px 0;
   background: var(--mcode-accent);
   transform: translateY(-50%);
-  transition: height 160ms var(--ease-out);
+  transition: height var(--mcode-dur) var(--mcode-ease);
 }
 
 .domain-nav button:hover {

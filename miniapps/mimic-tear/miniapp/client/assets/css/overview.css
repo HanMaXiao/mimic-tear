@@ -1,22 +1,20 @@
 /*
  * 总览的四个数字：指标块。
  *
- * 由原 styles.css 按章节切出，规则本身逐字未改。
+ * 四个数字是**一块仪表盘**，不是四张漂浮的卡片：共用一圈边、1px 的缝、
+ * 一个钢印式的序号。状态色只花在顶边那一道。
  */
 
 /* ---------- metrics ---------- */
 
-/*
- * The four numbers are one instrument panel, not four floating cards: a shared border,
- * 1px seams, and a stamped index. The state colour is spent on a top edge only.
- */
 .kpi-row {
   display: grid;
   grid-template-columns: minmax(0, 1.45fr) repeat(3, minmax(0, 1fr));
   gap: 1px;
   border: 1px solid var(--mcode-border);
-  border-radius: var(--radius-card);
+  border-radius: var(--mcode-radius-lg);
   background: var(--mcode-border);
+  box-shadow: var(--mcode-elev-1);
   overflow: hidden;
   counter-reset: metric;
 }
@@ -30,11 +28,11 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
-  padding: 18px 20px 16px;
+  padding: var(--mcode-space-5) var(--mcode-space-5) var(--mcode-space-4);
   background: var(--mcode-surface);
   color: inherit;
   text-decoration: none;
-  transition: background-color 150ms var(--ease-out);
+  transition: background-color var(--mcode-dur) var(--mcode-ease), box-shadow var(--mcode-dur) var(--mcode-ease);
 }
 
 .kpi::before {
@@ -45,19 +43,21 @@
   top: 0;
   height: 2px;
   background: transparent;
+  transition: background-color var(--mcode-dur) var(--mcode-ease);
 }
 
+/* 钢印序号：右上角那一小格编号，像仪表上的工位号。 */
 .kpi::after {
   counter-increment: metric;
   content: '0' counter(metric);
   position: absolute;
-  right: 16px;
-  top: 15px;
+  right: var(--mcode-space-4);
+  top: var(--mcode-space-4);
   font-family: var(--mcode-console);
   font-size: 9px;
   letter-spacing: 0.16em;
   color: var(--mcode-text-subtle);
-  opacity: 0.72;
+  opacity: 0.66;
 }
 
 .kpi--warning::before {
@@ -71,6 +71,7 @@
 .kpi--link:hover,
 .kpi--link:focus-visible {
   background: var(--mcode-surface-muted);
+  box-shadow: var(--mcode-elev-2);
 }
 
 .kpi__label {
@@ -81,28 +82,29 @@
   letter-spacing: 0.02em;
 }
 
+/* 读数是大字：它是这一页唯一要抢注意力的东西。 */
 .kpi__value {
   font-family: var(--mcode-console);
-  font-size: clamp(30px, 2.6vw, 42px);
-  line-height: 1.1;
+  font-size: clamp(32px, 2.8vw, 46px);
+  line-height: 1.08;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.02em;
-  margin-top: 4px;
+  letter-spacing: -0.025em;
+  margin-top: var(--mcode-space-1);
 }
 
 .kpi__foot {
-  margin-top: 3px;
+  margin-top: 5px;
   color: var(--mcode-text-subtle);
   font-size: 11px;
-  line-height: 15px;
+  line-height: 16px;
 }
 
 /* A readout holds a state, not a count: it keeps the tile's baseline but not its scale. */
 .kpi__readout {
   display: flex;
   align-items: center;
-  min-height: 46px;
+  min-height: 50px;
   font-size: 15px;
 }
 
