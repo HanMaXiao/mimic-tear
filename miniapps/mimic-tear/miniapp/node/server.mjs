@@ -421,6 +421,32 @@ export async function start(context) {
           // 之前直接写 broadcast(...) 会被下面那个 catch 吞掉，交班汇报从来没到过页面。
           app.broadcast('duty', { rounds: await service.getDutyRounds() });
         }
+        // 直通：把这一轮的事件直接投进项目负责人的会话，**不经过大哥**。
+        //
+        // **默认关**（`patrol-config.json` 的 `directDelivery`）。打开的前提是大哥的提示词
+        // 已经改成「事件直达了，你只管没有归属的事」——否则两边各干一遍，同一份活干两次，
+        // 而收件箱已经堆了 93 条没人看的结论了。
+        //
+        // 它放在板面自己巡检的早退**之前**：板面巡检和大哥值班是两件事，不该互相绑架。
+        if (config.directDelivery) {
+          const { runRound } = await import('./direct-delivery-runner.mjs');
+          const { ManagedProjects } = await import('./managed-projects.mjs');
+          const { ThreadSubscriptions } = await import('./thread-subscriptions.mjs');
+          const direct = await runRound({
+            store,
+            patrol,
+            managed: new ManagedProjects(context.dataDir),
+            subscriptions: new ThreadSubscriptions(context.dataDir),
+            agent: context.agent ?? null,
+          });
+          context.logger.info('mimic-tear.direct.delivered', {
+            attempted: direct.outcome.attempted,
+            delivered: direct.outcome.delivered,
+            queued: direct.outcome.queued,
+            failed: direct.outcome.failed,
+          });
+        }
+
         // Cheap early-outs before the (expensive) snapshot.
         if (!config.enabled) return;
         if (!isPatrolDue(config)) return;

@@ -33,6 +33,7 @@ import { ManagedProjects } from './managed-projects.mjs';
 import { DutyIntent } from './duty-intent.mjs';
 import { selectTriggers } from './trigger.mjs';
 import { detectTriggers, TRIGGER_WHITELIST } from './trigger-source.mjs';
+import { ThreadSubscriptions } from './thread-subscriptions.mjs';
 
 const args = process.argv.slice(2);
 const command = args.find((arg) => !arg.startsWith('--')) ?? 'facts';
@@ -253,6 +254,66 @@ if (command === 'gap') {
       });
     } else {
       process.stderr.write('用法：gap | gap reset "<理由>"\n');
+      store.close();
+      process.exit(2);
+    }
+  } catch (error) {
+    process.stderr.write(`${error?.message ?? error}\n`);
+    store.close();
+    process.exit(2);
+  }
+  store.close();
+  process.exit(0);
+}
+
+if (command === 'thread') {
+  // 订阅表：哪条线有投递口、负责会话是谁。
+  //
+  // 「事件该投给谁」必须是可查的状态，不是每轮现推——现推的话那个决定一飘，事件就投错人，
+  // 而投错人比不投更糟。
+  const action = positionalArgs()[1] ?? 'list';
+  try {
+    const subscriptions = new ThreadSubscriptions(dataDir);
+    if (action === 'list') {
+      print({ threads: await subscriptions.list() });
+    } else if (action === 'add') {
+      const name = positionalArgs()[2] ?? '';
+      const ownerSessionId = positionalArgs()[3] ?? '';
+      const reason = positionalArgs().slice(4).join(' ').trim();
+      if (!reason) throw new Error('用法：thread add <项目名> <会话id> "<理由>"——开投递口是一次决定，必须有理由');
+      // 会话必须真的存在。**落空的投递口是查不出来的**：订阅表里躺着一条，
+      // 看起来一切正常，事件却投不出去——所以在这里就拒绝。
+      const sessions = store.listSessions();
+      const target = sessions.find((session) => session.id === ownerSessionId);
+      if (!target) {
+        throw new Error(`没有这个会话：${ownerSessionId}。这条订阅会落空——事件投不出去。`);
+      }
+      const project = store.listProjects().find((p) => projectName(p.workspaceDir) === name);
+      const list = await subscriptions.add(name, ownerSessionId, reason, {
+        projectId: project?.id ?? null,
+      });
+      print({
+        ok: true,
+        thread: name,
+        ownerSessionId,
+        sessionTitle: target.title ?? null,
+        threads: list,
+      });
+    } else if (action === 'remove') {
+      const name = positionalArgs()[2] ?? '';
+      const reason = positionalArgs().slice(3).join(' ').trim();
+      if (!reason) throw new Error('用法：thread remove <项目名> "<理由>"');
+      const before = await subscriptions.list();
+      const onList = before.some((entry) => entry.projectName === String(name ?? '').trim());
+      const list = await subscriptions.remove(name, reason);
+      print({
+        ok: true,
+        removed: onList,
+        threads: list,
+        warning: onList ? null : `订阅表里没有「${name}」，什么都没变——核对项目名是否逐字一致`,
+      });
+    } else {
+      process.stderr.write('用法：thread list | thread add <项目名> <会话id> "<理由>" | thread remove <项目名> "<理由>"\n');
       store.close();
       process.exit(2);
     }
@@ -493,6 +554,16 @@ if (command === 'facts') {
     // boss never widens it on its own. Anything not on this list is out of bounds, however
     // broken or long-idle it looks.
     managed: managedEntries,
+    // 订阅表：哪些线有投递口、负责会话是谁。没有投递口的事件投不出去——所以这一段
+    // 不是「可选信息」，是「哪些线还能收到东西」的答案。
+    threads: (await new ThreadSubscriptions(dataDir).list()).map((entry) => ({
+      projectName: entry.projectName,
+      projectId: entry.projectId ?? null,
+      ownerSessionId: entry.ownerSessionId ?? null,
+      active: entry.active !== false,
+      deliveredCount: (entry.delivered ?? []).length,
+      reason: entry.reason ?? '',
+    })),
     // What the boss already filed in earlier runs. Without this it would re-report the
     // same stuck project on every tick.
     alreadyReported: visibleReported.map((finding) => ({
