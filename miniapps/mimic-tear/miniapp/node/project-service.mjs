@@ -35,6 +35,8 @@ import {
 } from './duty-status.mjs';
 import { assembleInbox, buildPatrolInboxItems } from './inbox-assembly.mjs';
 import { buildInbox, buildKpi, selectAttentionItems } from './inbox-builder.mjs';
+import { buildLines } from './line-view.mjs';
+import { ThreadSubscriptions } from './thread-subscriptions.mjs';
 import { buildOrgTree } from './org-tree.mjs';
 import { buildPatrolFindings, resolvePatrolProposals } from './patrol-run.mjs';
 import { buildPatrolBrief, parsePatrolReport } from './patrol-report.mjs';
@@ -48,6 +50,13 @@ export { isInternalWorkspace };
 
 /** 技能库多久重扫一次，这样新装上的技能才能露出来。 */
 const SKILL_REFRESH_MS = 10 * 60 * 1000;
+
+/**
+ * 桌面上界的兜底值：读不到 `patrol-config.json` 时用它。
+ *
+ * 它是**兜底**，不是「收件箱就这么大」——运行时原始项（会话异常等）不受它约束。
+ */
+const DEFAULT_ATTENTION_LIMIT = 20;
 
 /**
  * Mini App 唯一的领域服务。
@@ -402,6 +411,12 @@ export class ProjectService {
     // 告警日志跟着值班状态一起走：总览上的一行就能说清楚「大哥在 03:20 不说话了」，不用
     // 用户去翻日志。
     const alerts = await this.getWatchdogAlerts({ limit: 3 });
+    const attention = selectAttentionItems(inbox);
+    // 线：管辖名单里的每个项目一条线 —— 「我的大哥在管什么、哪条线卡住了」的答案。
+    // 名单外的项目**不是**线（那是大哥管不了的活），但它们仍在板面的项目台账里（下钻层）。
+    const threads = this.dutyIntent?.dataDir
+      ? await new ThreadSubscriptions(this.dutyIntent.dataDir).list()
+      : [];
     return {
       generatedAt: Date.now(),
       kpi: buildKpi(snapshot.cards, inbox),
@@ -409,7 +424,19 @@ export class ProjectService {
       projects: withDutyCards(snapshot.cards, duty, duty.watching),
       // 已确认的条目是已知的事：在这儿显示会让计数跟 KPI 和收件箱角标对不上。
       // 判定跟 KPI 用的是同一个函数，所以这两个数永远一致。
-      attention: selectAttentionItems(inbox),
+      attention,
+      // 桌面上界的**结构性保证**：大哥自己的结论不超过这么多条（Phase 4 的 deskLimit）。
+      // 运行时原始项（会话异常等）**不受它约束** —— 那是运行时的事实，大哥管不了。
+      attentionLimit: Number(patrolConfig?.deskLimit) > 0
+        ? Number(patrolConfig.deskLimit)
+        : DEFAULT_ATTENTION_LIMIT,
+      lines: buildLines({
+        cards: snapshot.cards,
+        attention,
+        findings,
+        threads,
+        managedNames: duty.watching,
+      }),
       internalProjectCount: snapshot.internalProjectCount,
       dataWarning: snapshot.dataWarning,
       // 大哥在不在岗、上次什么时候报的、有没有不说话了。

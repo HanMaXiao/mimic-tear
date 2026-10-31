@@ -19,6 +19,8 @@ export function overviewChanged(overview) {
     overview?.kpi,
     overview?.projects,
     overview?.attention,
+    // 线视图也是总览的一部分：它不在签名里的话，线一变就不会重绘。
+    overview?.lines,
     overview?.internalProjectCount,
   ]);
   if (signature === overviewSignature) return false;
