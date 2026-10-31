@@ -106,6 +106,25 @@ test('大哥正在休息：不算漏班，也不补位', () => {
   assert.equal(gap.hole.slots, 9, '但洞还在——宿主照样没投递');
 });
 
+test('大哥在休息时：即使上岗前就断了链，也不该能补位', () => {
+  const now = ANCHOR + 300 * MINUTE;
+  // 休息从第 8 轮开始；第 1~6 轮的空槽在它之前 —— 那是它**上岗前**就断的链，
+  // 那些槽位仍然算漏班。但它现在在休息，所以一条都不该补。
+  const gap = computeDutyGap({
+    blankTail: blankTail(9),
+    anchor: ANCHOR,
+    periodMs: PERIOD,
+    now,
+    intent: { mode: 'resting', since: ANCHOR + 210 * MINUTE, requestedBy: '大老板', note: '' },
+    coveredThroughSlot: null,
+  });
+
+  assert.equal(gap.source, 'resting');
+  assert.equal(gap.gap.slots, 6, '上岗前断的链，那些槽位仍然算漏班（第 7 轮正好落在休息起点上）');
+  assert.equal(gap.uncovered.slots, 6);
+  assert.equal(gap.coverable, false, '现在在休息，一条都不该补');
+});
+
 test('已补过的槽位不再重复补；新增的空槽还会再补', () => {
   const now = ANCHOR + 90 * MINUTE + MINUTE;
   const first = computeDutyGap({
