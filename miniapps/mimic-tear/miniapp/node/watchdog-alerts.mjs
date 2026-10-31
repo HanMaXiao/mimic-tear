@@ -277,6 +277,21 @@ export function buildBoardNotice(action, duty, evidence) {
     };
   }
 
+  // 「在跑但没进展」：交班戳看不出来的那一类。它单成一个身份，
+  // 因为它和「大哥掉线」是两种病——这个进程活着，只是一直在空转。
+  if (evidence?.stuck?.stuck) {
+    return {
+      identity: `stuck:${evidence.stuck.sessionId ?? 'duty'}:${evidence.stuck.lastProgressAt ?? 0}`,
+      severity: 'high',
+      title: '仿身泪滴 · 大哥在跑但没进展',
+      body: [
+        `值班会话已经 ${evidence.stuck.minutes ?? 0} 分钟没有实质进展（进程活着、心跳新鲜，产出没长）。`,
+        '交班戳看不出这一类，所以另报一条——要止血可以在对话里给它一条指令。',
+        truth,
+      ].filter(Boolean).join('\n'),
+    };
+  }
+
   if (!stale) return null;
 
   return {

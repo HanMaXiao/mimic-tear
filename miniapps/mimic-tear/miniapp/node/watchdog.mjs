@@ -186,6 +186,38 @@ async function readEvidence(input) {
 }
 
 /**
+ * 给值班会话拍一张进展快照。
+ *
+ * 「在跑」看会话状态，「有进展」看消息数——这两个都不是模型判的，是从运行时数据里读出来的。
+ *
+ * @param {{dbPath:string, sessionId:string|null, now:number}} input
+ * @returns {Promise<{current:any|null}>}
+ */
+async function readProgress(input) {
+  const sessionId = input?.sessionId ?? null;
+  if (!sessionId) return { current: null };
+  const { snapshotProgress } = await import('./progress-rules.mjs');
+  let store = null;
+  try {
+    store = RuntimeStore.open(input.dbPath);
+    const session = store.listSessions().find((item) => item.id === sessionId) ?? null;
+    const messages = store.countSessionMessages(sessionId) ?? 0;
+    return {
+      current: snapshotProgress({
+        sessionId,
+        status: session?.status ?? 'idle',
+        messages,
+        at: input.now,
+      }),
+    };
+  } catch {
+    return { current: null };
+  } finally {
+    store?.close();
+  }
+}
+
+/**
  * Run one watchdog tick.
  *
  * @param {{dataDir?:string, now?:number, dbPath?:string, cronId?:string|null, noNotify?:boolean,
@@ -210,6 +242,28 @@ export async function runWatchdog(options = {}) {
 
   const duty = evaluateDuty(config, now, intent);
   const evidence = await readEvidence({ dbPath, cronId: options.cronId ?? null, dir, duty, now });
+
+  // 「在跑但没进展」：交班戳看不出来的那一类故障（进程活着、心跳新鲜，却一直在空转）。
+  // 判据是**确定性**的——消息数、状态、产出量，不靠模型判。
+  if (evidence) {
+    const { decideStuck, snapshotProgress } = await import('./progress-rules.mjs');
+    const progress = await readProgress({
+      dbPath,
+      sessionId: evidence.chain?.targetSessionId ?? null,
+      now,
+    });
+    const stuck = decideStuck({
+      previous: state?.progress ?? null,
+      current: progress.current,
+      now,
+    });
+    evidence.stuck = stuck;
+    // 快照随这一跳推进：下次要比的就是它。
+    evidence.progress = progress.current
+      ? { ...progress.current, lastProgressAt: stuck.lastProgressAt }
+      : (state?.progress ?? null);
+  }
+
   const action = decideAction(state, duty, evidence);
 
   // The board's notice is decided **independently of the toast's own state machine**:
