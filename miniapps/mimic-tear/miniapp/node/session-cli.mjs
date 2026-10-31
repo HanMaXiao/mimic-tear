@@ -128,7 +128,7 @@ function table(ledger, rows, filterLabel = '') {
 
 const store = RuntimeStore.open(dbPath);
 if (!store) {
-  console.error(`读不到运行时库：${dbPath}`);
+  process.stderr.write(`读不到运行时库：${dbPath}\n`);
   process.exit(1);
 }
 
@@ -170,18 +170,18 @@ try {
   if (command === 'show') {
     const id = positional[1];
     if (!id) {
-      console.error('用法：session-cli.mjs show <sessionId>');
+      process.stderr.write('用法：session-cli.mjs show <sessionId>\n');
       process.exit(1);
     }
     const row = ledger.sessions.find((entry) => entry.id === id);
     if (!row) {
-      console.error(`账本里没有这个会话：${id}`);
+      process.stderr.write(`账本里没有这个会话：${id}\n`);
       process.exit(1);
     }
     if (hasFlag('json')) {
-      console.log(JSON.stringify(row, null, 2));
+      process.stdout.write(`${JSON.stringify(row, null, 2)}\n`);
     } else {
-      console.log([
+      process.stdout.write(`${[
         `标题：${row.title}`,
         `会话：${row.id}`,
         `agent：${row.agentName ?? '—'}　项目：${row.projectName ?? '—'}`,
@@ -191,19 +191,19 @@ try {
         '',
         '最后回复：',
         row.lastReply ?? '（这个会话还没有助手回复）',
-      ].filter((part) => part !== null).join('\n'));
+      ].filter((part) => part !== null).join('\n')}\n`);
     }
     process.exit(0);
   }
 
   if (hasFlag('json')) {
-    console.log(JSON.stringify({ generatedAt: ledger.generatedAt, counts: ledger.counts, sessions: rows }, null, 2));
+    process.stdout.write(`${JSON.stringify({ generatedAt: ledger.generatedAt, counts: ledger.counts, sessions: rows }, null, 2)}\n`);
   } else {
     const labels = [];
     if (statusFilter && statusFilter !== 'all') labels.push(statusFilter);
     if (projectFilter) labels.push(`项目 ${projectFilter}`);
     if (keyword) labels.push(`关键词 ${keyword}`);
-    console.log(table(ledger, rows, labels.join(' / ')));
+    process.stdout.write(`${table(ledger, rows, labels.join(' / '))}\n`);
   }
   process.exit(0);
 } finally {
