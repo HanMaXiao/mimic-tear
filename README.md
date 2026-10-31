@@ -244,11 +244,16 @@ git push -u origin feature/xxx
 
 | 表单字段 | 值 |
 | --- | --- |
-| 仓库地址 | `https://github.com/HanMaXiao/mimic-tear` |
-| Ref | `main`（或某个 tag） |
+| 仓库地址 | `https://github.com/HanMaXiao/mimic-tear`（**仓库根地址**，不带 `/tree/...`） |
+| Ref | `main`（或某个 tag，如 `v1.1.3`） |
 | Plugin 子目录 | `miniapps/mimic-tear` |
 | 目标区域 | CN（首次上 US 需另开一份「新插件」提交） |
 | 启用端 | 桌面端 |
+
+> **提交记录**：CN 区域已于 **2026-11-01** 以「新插件」提交，Ref 钉在 **`v1.1.3`**（当时的 `main`）。
+> 再上架 CN 选「**更新插件**」；**首次上 US 另开一份「新插件」提交**——两个区域各生成独立的
+> submission_id 与发布记录。submission_id 在表单的「我的提交记录」里能查到，**记得保存**。
+>
 
 ---
 
