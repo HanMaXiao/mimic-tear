@@ -29,6 +29,10 @@ import { bindActions } from './runtime/actions.js';
 import { loadPatrolConfig } from './runtime/patrol.js';
 import { renderChat, loadChatHistory, loadDutyRounds } from './views/chat.js';
 import { restoreDispatch } from './views/dispatch.js';
+import { initLiveSessions, selectLiveSession, stopLiveSessions } from './runtime/live-sessions.js';
+import { initVoiceInput } from './runtime/voice-input.js';
+import { applyDeskMode, initDeskWindow, popOutToDesk, returnToPanel } from './runtime/desk-window.js';
+import { initRail } from './runtime/rail.js';
 
 /* ------------------------------------------------- 旧契约函数（必须留在本文件） */
 
@@ -180,3 +184,39 @@ void loadChatHistory();
 // server kept the record, and the page must not pretend the instruction never went out.
 void restoreDispatch();
 connectStream();
+
+// The live session list is the Host's own truth about this machine, so it is watched
+// from the moment the page opens — not when the user happens to click the section.
+// The observer pushes changes in; the view redraws itself.
+initLiveSessions();
+initVoiceInput();
+initDeskWindow();
+initRail();
+
+// The page goes away, the observer goes with it. A watch that outlives the page
+// keeps a timer alive and keeps a slot occupied on the Host side.
+globalThis.addEventListener?.('pagehide', () => {
+  stopLiveSessions();
+});
+
+// Clicking a session in the live list opens its final reply.
+document.addEventListener('click', (event) => {
+  const target = event.target.closest('[data-session]');
+  if (!target) return;
+  event.preventDefault();
+  selectLiveSession(target.dataset.session);
+});
+
+// The desk button is a toggle: the Host reports which mode the page is in, and the
+// label follows it. `update({mode})` has to be called from a user gesture, so the
+// call itself happens synchronously inside this handler.
+el('desk-toggle')?.addEventListener('click', () => {
+  const mode = document.documentElement.dataset.deskMode;
+  if (mode === 'window') {
+    returnToPanel();
+    applyDeskMode('inline');
+    return;
+  }
+  popOutToDesk();
+  applyDeskMode('window');
+});

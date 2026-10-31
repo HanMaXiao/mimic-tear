@@ -431,6 +431,23 @@ export class ProjectService {
     return { items: await this.collectInbox(snapshot) };
   }
 
+  /**
+   * 还在等回答的卡，按会话归拢。
+   *
+   * 这是「会话实况」页标「等回答」的**权威来源**，不是辅助信息：
+   * 宿主的事件流只覆盖订阅之后新起的提问（页面一重载就断），而运行时里的待答卡
+   * 是持久状态——订阅之前挂着的卡、页面关着时挂上的卡，都在这儿。
+   *
+   * @returns {{ asks: Array<{id:string, sessionId:string, createdAt:number}> }}
+   */
+  getPendingAsks() {
+    const asks = this.store
+      .listQuestionnaires(true)
+      .filter((entry) => typeof entry.sessionId === 'string' && entry.sessionId.length > 0)
+      .map((entry) => ({ id: entry.id, sessionId: entry.sessionId, createdAt: entry.createdAt }));
+    return { asks };
+  }
+
   /** @returns {Promise<{ projects: any[] }>} */
   async getProjects() {
     const snapshot = await this.snapshot();

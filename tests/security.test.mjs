@@ -31,6 +31,9 @@ function makeService() {
     async getSkills() {
       return { groups: [], unmapped: [], total: 0, failures: 0 };
     },
+    getPendingAsks() {
+      return { asks: [] };
+    },
     async getSkillLibrary() {
       return { entries: [], stats: { total: 0 } };
     },
@@ -250,6 +253,7 @@ const ROUTE_CASES = [
   { key: 'GET /api/projects', method: 'GET', path: '/api/projects' },
   { key: 'GET /api/skills', method: 'GET', path: '/api/skills' },
   { key: 'GET /api/skill-library', method: 'GET', path: '/api/skill-library' },
+  { key: 'GET /api/sessions/pending-asks', method: 'GET', path: '/api/sessions/pending-asks' },
   { key: 'GET /api/projects/:id', method: 'GET', path: '/api/projects/1' },
   { key: 'GET /api/dispatch/:id', method: 'GET', path: '/api/dispatch/d1' },
   { key: 'POST /api/dispatch', method: 'POST', path: '/api/dispatch', body: { instruction: '干活' } },
@@ -269,7 +273,7 @@ const ROUTE_CASES = [
 
 test('路由表', async (t) => {
   await t.test('API 路由一条都不能少', async () => {
-    assert.equal(API_ROUTES.length, 21, '板面的 API 路由是 21 条，少一条就是少了一个契约');
+    assert.equal(API_ROUTES.length, 22, '板面的 API 路由是 22 条，少一条就是少了一个契约');
     const apiKeys = API_ROUTES.map((route) => `${route.method} ${route.path}`).sort();
     const caseKeys = ROUTE_CASES
       .filter((item) => item.key.includes('/api/'))

@@ -9,6 +9,7 @@ import { escapeHtml, relativeTime } from '../shared/format.js';
 import { request } from '../shared/http.js';
 import { API } from '../shared/api.js';
 import { state } from '../shared/state.js';
+import { loadingState } from '../shared/loading.js';
 
 /**
  * The three things the watchdog's log can say.
@@ -136,7 +137,7 @@ export function renderAlerts() {
 
   if (alerts === null) {
     if (count) count.textContent = '';
-    body.innerHTML = `<tr><td colspan="${ALERT_COLUMNS}"><div class="state"><span class="spinner" aria-hidden="true"></span>正在加载告警日志…</div></td></tr>`;
+    body.innerHTML = `<tr><td colspan="${ALERT_COLUMNS}">${loadingState('正在加载告警日志…')}</td></tr>`;
     return;
   }
   if (state.alertsError) {

@@ -21,8 +21,8 @@ const PROJECT_SQL = `
 
 const SESSION_SQL = `
   SELECT session_id, agent_name, status, title, workspace_dir, purpose, purpose_kind,
-         parent_session_id, session_type, visibility, created_at_ms, updated_at_ms,
-         error_code, error_message, project_id
+         parent_session_id, session_type, session_kind, origin_cron_id, visibility,
+         created_at_ms, updated_at_ms, error_code, error_message, project_id
     FROM local_runtime_sessions
    WHERE archived = 0
 `;
@@ -195,6 +195,10 @@ export class RuntimeStore {
       purposeKind: row.purpose_kind,
       parentSessionId: row.parent_session_id,
       sessionType: row.session_type,
+      // The two fields the Host uses to decide whether a session belongs to the user's
+      // conversation list: a scheduled run and a peek are never the user's own chat.
+      sessionKind: row.session_kind,
+      originCronId: row.origin_cron_id,
       visibility: row.visibility,
       createdAt: row.created_at_ms,
       updatedAt: row.updated_at_ms,

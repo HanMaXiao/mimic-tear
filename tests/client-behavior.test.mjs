@@ -1158,6 +1158,31 @@ test('client behavior (DOM shim)', async (t) => {
     assert.match(toastText(second), /指令已投递给目标会话/, '读回来的结果要告诉大老板');
   });
 
+  await t.test('侧栏能收起，而且下次打开还记得', async () => {
+    const store = createStorage();
+
+    const first = await loadClient({ storage: store });
+    await first.settle();
+    const shell = first.element('app-shell');
+    const toggle = first.element('rail-toggle');
+    assert.equal(shell.dataset.rail, 'expanded', '默认是展开的');
+    assert.equal(toggle.getAttribute('aria-expanded'), 'true');
+
+    toggle.dispatchEvent({ type: 'click' });
+    await first.settle();
+    assert.equal(shell.dataset.rail, 'collapsed', '点一下就收起');
+    assert.equal(toggle.getAttribute('aria-expanded'), 'false', '按钮要说出自己现在是什么状态');
+
+    // 相当于刷新页面：同一个存储，折叠状态还在。
+    const second = await loadClient({ storage: store, keepStorage: true });
+    await second.settle();
+    assert.equal(
+      second.element('app-shell').dataset.rail,
+      'collapsed',
+      '折叠状态要记住——否则每次开板面都要重新收一遍',
+    );
+  });
+
   await t.test('恢复出来的派工结果，和 SSE 派工事件说同一句话', async () => {
     // 现场：SSE 派工事件。
     const live = await loadClient();

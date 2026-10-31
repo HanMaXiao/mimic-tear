@@ -180,8 +180,13 @@ test('client-contract', async (t) => {
   });
 
   await t.test('圆角与描边符合基线', () => {
-    assert.match(css, /\.panel\s*\{[^}]*border-radius:\s*12px/, '卡片应为 12px 圆角');
-    assert.match(css, /\.btn\s*\{[^}]*border-radius:\s*8px/, '控件应为 8px 圆角');
+    // 圆角按层级分档：容器更软（14px），控件更紧（7px），内嵌小件最紧（4px）。
+    // 值写在刻度变量里，组件只准引用变量——这样「统一圆角」这种毛病不会回来。
+    assert.match(css, /\.panel\s*\{[^}]*border-radius:\s*var\(--mcode-radius-lg\)/, '面板应使用容器档圆角');
+    assert.match(css, /\.btn\s*\{[^}]*border-radius:\s*var\(--mcode-radius-sm\)/, '控件应使用控件档圆角');
+    assert.match(css, /--mcode-radius-lg:\s*14px/, '容器档圆角应为 14px');
+    assert.match(css, /--mcode-radius-sm:\s*7px/, '控件档圆角应为 7px');
+    assert.match(css, /--mcode-radius-xs:\s*4px/, '内嵌小件档圆角应为 4px');
     assert.match(css, /border:\s*1px solid var\(--mcode-border\)/, '描边应为 1px');
   });
 

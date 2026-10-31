@@ -9,7 +9,7 @@
 dialog {
   padding: 0;
   border: 1px solid var(--mcode-border);
-  border-radius: var(--radius-card);
+  border-radius: var(--mcode-radius-lg);
   background: var(--mcode-surface);
   color: var(--mcode-text);
   box-shadow: var(--mcode-shadow);
@@ -24,7 +24,7 @@ dialog::backdrop {
 
 dialog .panel {
   border: 0;
-  border-radius: var(--radius-card);
+  border-radius: var(--mcode-radius-lg);
 }
 
 .dispatch__body {

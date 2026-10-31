@@ -13,6 +13,7 @@ import { savePatrolConfig, runPatrolNow } from './patrol.js';
 import { loadWatchdogAlerts } from '../views/alerts.js';
 import { openDispatchDialog, submitDispatch } from '../views/dispatch.js';
 import { selectChatOption, sendChat, submitChatAnswer } from '../views/chat.js';
+import { refreshLiveSessions } from './live-sessions.js';
 import { renderSkills } from '../views/skills.js';
 import { renderInbox } from '../views/inbox.js';
 // 「在宿主侧栏打开」的入口留在 app.js 里（旧的契约测试按字符串断言它），
@@ -184,6 +185,9 @@ export function bindActions() {
     // The alert log is a record of the past: it is a separate read, and it only matters
     // while the log is on screen.
     if (currentRoute().name === 'alerts') void loadWatchdogAlerts();
+    // The live session list is the Host's own stream, not a snapshot this board can
+    // re-read from its API, so it gets its own refresh.
+    refreshLiveSessions();
   });
 
   el('patrol-enabled').addEventListener('change', () => {

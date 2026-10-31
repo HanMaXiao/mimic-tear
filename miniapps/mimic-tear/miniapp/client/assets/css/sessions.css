@@ -1,0 +1,230 @@
+/*
+ * 会话实况：宿主会话清单 + 最新结果。
+ *
+ * 这一页和板面别处不同：它读的是**宿主给的会话**，不经过大哥。
+ * 所以它的语气也更冷——它不是大哥的账本，是机器的事实。
+ */
+
+/* ---------- layout ---------- */
+
+.session-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 380px) 1fr;
+  gap: var(--mcode-space-4);
+  align-items: start;
+}
+
+.session-panel {
+  position: relative;
+  background: var(--mcode-surface);
+  border: 1px solid var(--mcode-border);
+  border-radius: var(--mcode-radius-lg);
+  box-shadow: var(--mcode-elev-1);
+  padding: var(--mcode-space-4);
+  min-width: 0;
+}
+
+.session-panel::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 1px;
+  background: var(--mcode-hairline);
+  pointer-events: none;
+}
+
+.session-panel > h3 {
+  margin: 0 0 var(--mcode-space-3);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  color: var(--mcode-text-subtle);
+  font-family: var(--mcode-console);
+  font-weight: 500;
+  text-transform: uppercase;
+}
+
+/* ---------- the list ---------- */
+
+.session-list-live {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+
+.session-row {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--mcode-space-2);
+  border-radius: var(--mcode-radius-sm);
+  border: 1px solid transparent;
+  padding: 6px 8px 6px 10px;
+  transition: background-color var(--mcode-dur-fast) var(--mcode-ease), border-color var(--mcode-dur-fast) var(--mcode-ease);
+}
+
+.session-row:hover {
+  background: var(--mcode-surface-muted);
+}
+
+.session-row--selected {
+  border-color: color-mix(in srgb, var(--mcode-accent) 45%, var(--mcode-border));
+  background: color-mix(in srgb, var(--mcode-accent) 8%, var(--mcode-surface));
+}
+
+/* 等回答的会话要一眼看见：它左边压一道实边。 */
+.session-row--ask::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--mcode-danger);
+}
+
+.session-row__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.session-row__title {
+  font-size: 13px;
+  line-height: 19px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-row__meta {
+  display: flex;
+  gap: var(--mcode-space-2);
+  align-items: center;
+  font-size: 11px;
+  color: var(--mcode-text-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
+.session-row__status--running {
+  color: var(--mcode-accent);
+  font-weight: 600;
+}
+
+.session-row__status--error {
+  color: var(--mcode-danger);
+  font-weight: 600;
+}
+
+.session-row__status--aborted {
+  color: var(--mcode-warning);
+  font-weight: 600;
+}
+
+.session-row__flags {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-end;
+}
+
+.tag--live {
+  color: var(--mcode-accent);
+  border-color: color-mix(in srgb, var(--mcode-accent) 45%, transparent);
+  background: color-mix(in srgb, var(--mcode-accent) 10%, transparent);
+  font-weight: 600;
+}
+
+/* ---------- the result ---------- */
+
+.session-detail__head {
+  display: flex;
+  gap: var(--mcode-space-3);
+  align-items: baseline;
+  margin-bottom: var(--mcode-space-3);
+}
+
+.session-detail__title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.session-detail__status {
+  font-size: 11px;
+  color: var(--mcode-text-subtle);
+}
+
+/* 回复正文是散文：宋体，和板面别处的散文一个规矩。 */
+.session-detail__reply {
+  margin: 0;
+  padding: var(--mcode-space-4);
+  border-radius: var(--mcode-radius-md);
+  background: var(--mcode-surface-muted);
+  border: 1px solid var(--mcode-rule);
+  color: var(--mcode-text);
+  font-family: var(--mcode-document);
+  font-size: 14px;
+  line-height: 1.85;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 46vh;
+  overflow-y: auto;
+  text-wrap: pretty;
+}
+
+#session-connection[data-state='not_permitted'],
+#session-connection[data-state='unavailable'] {
+  color: var(--mcode-danger);
+}
+
+/* ---------- 桌面窗口 ---------- */
+
+/*
+ * 弹成独立窗口后侧栏收起，页头变成可拖动区。
+ * 清单里声明了 frame: false——没有系统标题栏就没有系统拖动区，
+ * 所以这里必须自己画一块，否则窗口挪不动。
+ */
+:root[data-desk-mode='window'] .app-sidebar,
+:root[data-desk-mode='window'] .app-header__context {
+  display: none;
+}
+
+:root[data-desk-mode='window'] .app-body {
+  grid-template-columns: 1fr;
+}
+
+:root[data-desk-mode='window'] .app-header__title {
+  -webkit-app-region: drag;
+  padding: 4px 0;
+}
+
+:root[data-desk-mode='window'] .app-header__actions,
+:root[data-desk-mode='window'] .app-header__title button {
+  -webkit-app-region: no-drag;
+}
+
+:root[data-desk-mode='window'] .session-layout {
+  grid-template-columns: 1fr;
+}
+
+:root[data-desk-mode='window'] .session-list-live {
+  max-height: 30vh;
+}
+
+:root[data-desk-mode='window'] .session-detail__reply {
+  max-height: 30vh;
+}
