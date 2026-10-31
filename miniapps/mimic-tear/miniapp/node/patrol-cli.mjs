@@ -34,6 +34,7 @@ import { DutyIntent } from './duty-intent.mjs';
 import { selectTriggers } from './trigger.mjs';
 import { detectTriggers, TRIGGER_WHITELIST } from './trigger-source.mjs';
 import { ThreadSubscriptions } from './thread-subscriptions.mjs';
+import { applySpill, buildFactRefGraph } from './recall.mjs';
 
 const args = process.argv.slice(2);
 const command = args.find((arg) => !arg.startsWith('--')) ?? 'facts';
@@ -326,6 +327,110 @@ if (command === 'thread') {
   process.exit(0);
 }
 
+if (command === 'recall') {
+  // 按 ID 取回完整内容 —— 被 Spill 出去的那部分的**续读入口**。
+  //
+  // 「省下来的不是内容，是位置」：摘要代替原文是允许的，**原文没了不允许**。
+  // 所以这一条必须能**原样**取回：取回来的正文要和原文逐字一致。
+  //
+  // 顺带给出**链式召回**：从��个 ID 出发，顺着引用关系一跳一跳地展开——
+  // 这就是基线规格 §3.1「连续」那条判据的机器形态：同一件事换个入口继续讨论，
+  // 大哥能接上上下文，不要求用户复述。
+  const id = positionalArgs()[1] ?? '';
+  if (!id) {
+    process.stderr.write('用法：recall <id>\n');
+    store.close();
+    process.exit(2);
+  }
+  try {
+    const { planRecall } = await import('./recall.mjs');
+    const projects = store.listProjects();
+    const visibleIds = new Set(projects.map((p) => p.id));
+    const sessions = store.listSessions().filter((s) => visibleIds.has(s.projectId));
+    const questionnaires = store.listQuestionnaires(true);
+    const goals = store.listGoals();
+    const findings = await patrol.list();
+    const managedEntries = await managedList();
+    const managedNames = new Set(
+      managedEntries.filter((entry) => entry.matched).map((entry) => entry.projectName ?? entry.name),
+    );
+    const inScope = (projectName) => !projectName || managedNames.has(projectName);
+
+    const projectById = new Map(projects.map((p) => [p.id, p]));
+    const nameOf = (projectId) => {
+      const project = projectById.get(projectId);
+      return project ? project.workspaceDir.split(/[\\/]/).pop() : null;
+    };
+
+    const graph = buildFactRefGraph({
+      findings: findings.filter((f) => inScope(f.projectName)),
+      projects: projects
+        .filter((p) => inScope(p.workspaceDir.split(/[\\/]/).pop()))
+        .map((p) => ({ name: p.workspaceDir.split(/[\\/]/).pop(), ownerSessionId: null })),
+      sessions: sessions
+        .filter((s) => ['error', 'interrupted', 'aborted'].includes(s.status))
+        .filter((s) => inScope(nameOf(s.projectId)))
+        .map((s) => ({ id: s.id, projectName: nameOf(s.projectId), title: s.title })),
+      questionnaires: questionnaires.map((q) => ({ requestId: q.id, sessionId: q.sessionId, question: null })),
+      goals: goals
+        .map((g) => {
+          const owner = sessions.find((s) => s.id === g.sessionId);
+          return {
+            goalId: g.goalId,
+            sessionId: g.sessionId,
+            objective: g.objective,
+            projectName: nameOf(owner?.projectId),
+          };
+        })
+        .filter((g) => inScope(g.projectName))
+        .map((g) => ({ goalId: g.goalId, sessionId: g.sessionId, objective: g.objective })),
+      planTasks: [],
+      triggers: [],
+    });
+
+    // 全文：按 id 找回原对象。
+    const finding = findings.find((f) => f.id === id);
+    const session = sessions.find((s) => s.id === id);
+    const project = projects.find((p) => p.workspaceDir.split(/[\\/]/).pop() === id);
+    const questionnaire = questionnaires.find((q) => q.id === id);
+    const goal = goals.find((g) => g.id === id);
+
+    let record = null;
+    if (finding) record = { kind: 'conclusion', value: finding };
+    else if (session) record = { kind: 'session', value: session };
+    else if (project) record = { kind: 'project', value: project };
+    else if (questionnaire) record = { kind: 'questionnaire', value: questionnaire };
+    else if (goal) record = { kind: 'goal', value: goal };
+    else if (id.includes(':')) {
+      // 计划任务的主键是 `<项目名>:<任务 id>`。
+      const [projectName, taskId] = [id.slice(0, id.lastIndexOf(':')), id.slice(id.lastIndexOf(':') + 1)];
+      const owner = projects.find((p) => p.workspaceDir.split(/[\\/]/).pop() === projectName);
+      if (owner) {
+        try {
+          const plan = await readPlan(owner.workspaceDir);
+          const task = (plan?.tasks ?? []).find((t) => String(t.id) === taskId);
+          if (task) record = { kind: 'plan-task', value: { projectName, ...task } };
+        } catch {
+          record = null;
+        }
+      }
+    }
+
+    print({
+      id,
+      found: record !== null,
+      record,
+      chain: planRecall(id, graph),
+    });
+  } catch (error) {
+    process.stderr.write(`${error?.message ?? error}\n`);
+    store.close();
+    process.exit(2);
+  }
+  store.close();
+  process.exit(0);
+}
+
 if (command === 'facts') {
   const projects = store.listProjects();
   const visibleIds = new Set(projects.map((p) => p.id));
@@ -538,7 +643,7 @@ if (command === 'facts') {
     allowTypes: TRIGGER_WHITELIST,
   });
 
-  print({
+  const rawPayload = {
     generatedAt: Date.now(),
     // Which view this is. `candidates` is what the model gets by default; `raw` means the
     // caller explicitly asked for everything — and the payload says so, so that whoever
@@ -650,6 +755,48 @@ if (command === 'facts') {
       cards: visibleCards,
       inbox: visibleItems,
     }),
+  };
+
+  // Spill：过长的文本换成摘要 + 续读入口。**省下来的是位置，不是内容**——
+  // 每一段被 Spill 掉的原文都能按 ID 原样取回（`patrol-cli recall <id>`）。
+  //
+  // 例外清单是必须的：`managed[].reason` 是**大老板的原话**（授权的理由，截了它授权就说不清），
+  // `scope` / `paths` 是判定口径与边界（写一半等于没说）。
+  const spilled = applySpill(rawPayload, {
+    exclude: ['managed[].reason', 'scope', 'fullScopeRequested', 'paths'],
+  });
+
+  // 引用图：每个内容项内联**下一跳的 ID**，模型可以顺着它一跳一跳地展开（链式召回）。
+  const graph = buildFactRefGraph({
+    findings: previousFindings,
+    projects: visibleCards.map((card) => ({
+      name: card.name,
+      ownerSessionId: (ownerSessionsByProject.get(card.id) ?? []).find((s) => s.isRoot)?.id ?? null,
+    })),
+    sessions: visibleRecoverable.map((r) => ({
+      id: r.sessionId, projectName: r.projectName, title: r.sessionTitle,
+    })),
+    questionnaires: visibleQuestionnaires.map((q) => ({
+      requestId: q.requestId, sessionId: q.sessionId, question: q.question,
+    })),
+    goals: visibleGoals.map((g) => ({
+      goalId: g.goalId, sessionId: g.sessionId, objective: g.objective,
+    })),
+    planTasks: visiblePlanTasks.map((t) => ({
+      projectName: t.projectName, id: t.id, title: t.title,
+    })),
+    triggers: selected.kept,
+  });
+
+  print({
+    ...spilled.value,
+    // 被 Spill 掉了什么、在哪 —— 不然「省下来的」就变成了「丢掉的」。
+    spills: spilled.spills,
+    // 这份事实表里有几个对象可以按 ID 取回（图住在系统里，不在这里）。
+    recallable: graph.size,
+    // **引用图不在这里。** 文章 §3.3 的设计是：图住在系统里，上下文里只内联**下一跳的 ID**。
+    // 把整张图塞进负载，等于把「按需召回」变成「一次性全读」——那正是 Spill 要治的病。
+    // 要走链，用 `patrol-cli recall <id>`（它按需重建这张图）。
   });
   store.close();
   process.exit(0);
