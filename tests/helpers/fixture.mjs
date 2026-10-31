@@ -204,16 +204,27 @@ CREATE TABLE local_runtime_v2_cron_definitions (
  * @returns {string} absolute path of the created database
  */
 export function makeCronDb(dir, options = {}) {
+  const dbPath = join(dir, 'cron-state.sqlite');
+  const db = new DatabaseSync(dbPath);
+  db.exec(CRON_DDL);
+  seedCronFamily(db, options);
+  db.close();
+  return dbPath;
+}
+
+/**
+ * Seed the cron family — one definition plus its run log — into an open database.
+ *
+ * @param {import('node:sqlite').DatabaseSync} db
+ * @param {{cronId?:string, sessionId?:string, definition?:object|false, runs?:Array<object>}} options
+ */
+function seedCronFamily(db, options) {
   const {
     cronId = 'cron-test',
     sessionId = 'sess-cron',
     definition = {},
     runs = [],
   } = options;
-
-  const dbPath = join(dir, 'cron-state.sqlite');
-  const db = new DatabaseSync(dbPath);
-  db.exec(CRON_DDL);
 
   // The definition has to exist: a chain that resolves by name and finds no definition
   // reads "no runs" and calls it "nothing went wrong".
@@ -246,7 +257,26 @@ export function makeCronDb(dir, options = {}) {
       run.retryAt ?? null, run.retryAttempt ?? 0,
     );
   }
+}
 
+/**
+ * Build a database carrying **both** the runtime-state tables and the cron family.
+ *
+ * The duty board's CLI reads both: the project list (runtime) to resolve the jurisdiction
+ * names, and the cron run log (duty chain) to work out how long the chain was broken.
+ * A CLI test needs one file that answers both — the two single-purpose factories above
+ * each leave half the questions unanswerable.
+ *
+ * @param {string} dir directory to create the db in
+ * @param {{cronId?:string, sessionId?:string, definition?:object|false, runs?:Array<object>}} [options]
+ * @returns {string} absolute path of the created database
+ */
+export function makeDutyBoardDb(dir, options = {}) {
+  const dbPath = join(dir, 'duty-board.sqlite');
+  const db = new DatabaseSync(dbPath);
+  db.exec(DDL);
+  db.exec(CRON_DDL);
+  seedCronFamily(db, options);
   db.close();
   return dbPath;
 }

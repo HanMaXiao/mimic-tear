@@ -9,6 +9,9 @@
  * Commands:
  *   facts            print the fact sheet (projects, decisions, questionnaires, goals, plan)
  *   report <file>    merge findings / answered questions / recovery notes into the board
+ *   gap              print the handover sheet: how long the duty chain was broken, how many
+ *                    rounds count as missed duty, how many are still owed
+ *   gap reset "<why>" clear the "already covered" marker so the next tick re-covers the gap
  *   paths            print the paths the boss writes to
  *
  * Options:
@@ -179,6 +182,75 @@ if (command === 'duty-cron') {
       });
     } else {
       process.stderr.write('用法：duty-cron | duty-cron set <cron-id>\n');
+      store.close();
+      process.exit(2);
+    }
+  } catch (error) {
+    process.stderr.write(`${error?.message ?? error}\n`);
+    store.close();
+    process.exit(2);
+  }
+  store.close();
+  process.exit(0);
+}
+
+if (command === 'gap') {
+  // 断档的账：断了多久、断了几轮、其中多少算漏班、还欠几轮。
+  //
+  // 这是「大哥上岗」的那张单子。值班链断了之后，空槽会一直堆着——堆了多少、断多久、
+  // 哪些该补，必须有一个地方能一眼看到，而不是让人去翻调度器的运行记录。
+  //
+  // `reset` 是**显式**动作：把「已经补到哪里」的标记清掉，让下一跳重新覆盖整段空档。
+  // 它必须带理由，因为「解除锁死」是一次决定，不是一个自动行为——自动解除就等于把
+  // 「自动补位会出事」那个坑重新打开。
+  const action = positionalArgs()[1] ?? 'show';
+  const reason = positionalArgs().slice(2).join(' ').trim();
+  try {
+    const { getDutyHeartbeatStatus, writeHeartbeatState, readHeartbeatState } =
+      await import('./duty-heartbeat.mjs');
+    const { buildDutyHandoverSummary } = await import('./duty-gap.mjs');
+
+    if (action === 'reset') {
+      if (!reason) {
+        throw new Error('用法：gap reset "<大老板的原话>"——解除覆盖标记是一次决定，必须有理由');
+      }
+      const before = await readHeartbeatState(dataDir);
+      const cleared = before.coveredThroughSlot ?? null;
+      await writeHeartbeatState(dataDir, {
+        ...before,
+        coveredThroughSlot: null,
+        coveredAt: null,
+        resetAt: Date.now(),
+        resetReason: reason,
+      });
+      print({
+        ok: true,
+        action: 'reset',
+        clearedThroughSlot: cleared,
+        reason,
+        note: cleared === null
+          ? '本来就没有覆盖标记——已经补过的段落会被重新补一遍'
+          : `覆盖标记已清到第 ${cleared} 槽之前；下一跳会重新覆盖整段空档`,
+      });
+    } else if (action === 'show') {
+      const now = Date.now();
+      const status = await getDutyHeartbeatStatus({ dataDir, store, now });
+      const managedEntries = await managedList();
+      const findings = await patrol.list();
+      const summary = buildDutyHandoverSummary(status.gap, {
+        now,
+        managedCount: managedEntries.filter((entry) => entry.matched).length,
+        pendingDecisions: findings.filter((finding) => !finding.acknowledged).length,
+      });
+      print({
+        gap: status.gap,
+        reason: status.reason,
+        mode: status.mode,
+        coveredThroughSlot: status.coveredThroughSlot,
+        summary,
+      });
+    } else {
+      process.stderr.write('用法：gap | gap reset "<理由>"\n');
       store.close();
       process.exit(2);
     }
@@ -539,7 +611,7 @@ if (command === 'dismiss') {
   process.exit(0);
 }
 
-process.stderr.write(`未知命令：${command}\n可用：facts / report / withdraw / dismiss / paths\n`);
+process.stderr.write(`未知命令：${command}\n可用：facts / report / withdraw / dismiss / gap / manage / duty-cron / paths\n`);
 store.close();
 process.exit(2);
 
