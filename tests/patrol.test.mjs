@@ -381,7 +381,11 @@ test('patrol', async (t) => {
     const dataDir = join(dir, 'data');
     try {
       // The fact sheet carries the raw runtime items the boss can rule out.
-      const facts = runCli(dbPath, dataDir);
+      //
+      // `--scope raw` = the complete sheet. The default view is the **candidates** view —
+      // only what the boss is granted to act on — so a runtime item from an ungranted
+      // project is not in it. This test is about the complete sheet, so it asks for it.
+      const facts = runCli(dbPath, dataDir, ['facts', '--scope', 'raw']);
       const item = facts.decisions.find((entry) => entry.id.startsWith('session-error:'));
       assert.ok(item, '事实表里应该有待排除的运行时原始项');
 
@@ -545,13 +549,24 @@ test('patrol', async (t) => {
     try {
       runCli(dbPath, dataDir, ['manage', 'add', 'alpha', '大老板指示']);
 
-      const facts = runCli(dbPath, dataDir);
+      // The complete sheet shows both projects and marks which one is in the jurisdiction.
+      // The default (candidates) view only carries the granted project — that is the point
+      // of the first filter — so this assertion reads the complete sheet.
+      const facts = runCli(dbPath, dataDir, ['facts', '--scope', 'raw']);
       const alpha = facts.projects.find((project) => project.name === 'alpha');
       const beta = facts.projects.find((project) => project.name === 'beta');
 
       assert.equal(alpha.managed, true, '在名单里的项目要标出来');
       assert.equal(beta.managed, false, '不在名单里的项目不算管辖范围');
       assert.equal(beta.ownerSessions, undefined, '名单外的项目不带会话入口——那是越权的入口');
+
+      // And the default view is the other half of the same contract: the granted project
+      // only, with the ungranted one counted rather than carried.
+      const candidates = runCli(dbPath, dataDir);
+      assert.equal(candidates.scope, 'candidates');
+      assert.equal(candidates.projects.length, 1, '候选视图只带管辖区内的项目');
+      assert.equal(candidates.projects[0].name, 'alpha');
+      assert.ok(candidates.excluded.projects >= 1, '滤掉的数量要报出来');
 
       // The boss needs the session id to send a message to; a name on a list is not a door.
       const ids = alpha.ownerSessions.map((session) => session.id);

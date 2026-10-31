@@ -31,6 +31,8 @@ import { PatrolStore } from './patrol-store.mjs';
 import { Persistence } from './persistence.mjs';
 import { ManagedProjects } from './managed-projects.mjs';
 import { DutyIntent } from './duty-intent.mjs';
+import { selectTriggers } from './trigger.mjs';
+import { detectTriggers, TRIGGER_WHITELIST } from './trigger-source.mjs';
 
 const args = process.argv.slice(2);
 const command = args.find((arg) => !arg.startsWith('--')) ?? 'facts';
@@ -44,7 +46,7 @@ const dbPath = resolve(flag('db', process.env.MIMIC_RUNTIME_DB
   ?? join(homedir(), '.minimax', 'v2', 'sqlite', 'runtime-state.sqlite')));
 
 /** Flags that take a value; the value must not be mistaken for a positional argument. */
-const VALUE_FLAGS = new Set(['--data-dir', '--db', '--file']);
+const VALUE_FLAGS = new Set(['--data-dir', '--db', '--file', '--scope']);
 
 /**
  * The positional arguments only.
@@ -411,8 +413,77 @@ if (command === 'facts') {
     watching: [...managedNames],
   };
 
+  // 事实表的两种视图。
+  //
+  // 默认给模型的是**候选**：管辖区内的、这一轮真的变了的。`raw` 是诊断用的——它要全量，
+  // 所以它必须**显式要**，而且这份负载里会写明「这次要了全量」，免得下次看到的人分不清
+  // 「这就是全部」和「这是筛过的」。
+  const scope = String(flag('scope', 'candidates')).trim().toLowerCase();
+  if (!['candidates', 'raw'].includes(scope)) {
+    process.stderr.write(`未知的 scope「${scope}」：可用 candidates（默认，给模型）/ raw（全量，诊断用）\n`);
+    store.close();
+    process.exit(2);
+  }
+  const wantRaw = scope === 'raw';
+
+  // 管辖闸：有名有姓的项目，不在名单里就不进候选视图。
+  // **没有项目归属的行一律保留**——无法证明它在管辖范围外，就不该当成范围外。
+  const withinJurisdiction = (projectName) => (
+    wantRaw || !projectName || managedNames.has(projectName)
+  );
+
+  const visibleCards = wantRaw ? cards : cards.filter((card) => managedNames.has(card.name));
+  const visibleItems = runtimeItems.filter((item) => withinJurisdiction(item.projectName));
+  const visibleQuestionnaires = openQuestionnaires.filter((q) => withinJurisdiction(q.projectName));
+  const visibleRecoverable = recoverable.filter((r) => withinJurisdiction(r.projectName));
+  const visibleGoals = goalRows.filter((g) => withinJurisdiction(g.projectName));
+  const visiblePlanTasks = planRows.filter((t) => withinJurisdiction(t.projectName));
+  // `alreadyReported` **不按管辖过滤**：这是大哥自己报过的账。忘了报过的事，就会再报一遍——
+  // 而「重复报同一件事」正是收件箱堆到 93 条的原因之一。它是账本，不是环境状态。
+  const visibleReported = previousFindings;
+
+  // 这一轮真的发生了什么。
+  //
+  // 事件从**全量**行里认——不先筛——然后交给第一道闸（`selectTriggers`）去筛。这样「筛掉
+  // 了多少」才是真的数字，而不是自己筛完自己报「一个没筛掉」。
+  //
+  // 水位线是**交班戳**：上一轮交班之后发生的事，就是这一轮的事件。没有新状态文件。
+  const dutyConfig = await patrol.getConfig();
+  const rawTriggers = detectTriggers({
+    projects: cards.map((card) => ({
+      id: card.id,
+      name: card.name,
+      latestActivityAt: card.lastActivityAt,
+    })),
+    sessions: recoverable.map((r) => ({
+      id: r.sessionId,
+      status: r.status,
+      title: r.sessionTitle,
+      updatedAt: r.updatedAt,
+      projectName: r.projectName,
+    })),
+    questionnaires: openQuestionnaires.map((q) => ({
+      id: q.requestId,
+      createdAt: q.createdAt,
+      question: q.question,
+      sessionId: q.sessionId,
+      projectName: q.projectName,
+    })),
+    watermark: dutyConfig.lastRunAt ?? 0,
+    now: Date.now(),
+  });
+  const selected = selectTriggers(rawTriggers, {
+    managedNames: managedNames,
+    allowTypes: TRIGGER_WHITELIST,
+  });
+
   print({
     generatedAt: Date.now(),
+    // Which view this is. `candidates` is what the model gets by default; `raw` means the
+    // caller explicitly asked for everything — and the payload says so, so that whoever
+    // reads it later can tell "this is all of it" from "this was filtered".
+    scope,
+    fullScopeRequested: wantRaw,
     paths: {
       report: join(dataDir, 'patrol.json'),
       answered: join(dataDir, 'patrol-answered.json'),
@@ -424,7 +495,7 @@ if (command === 'facts') {
     managed: managedEntries,
     // What the boss already filed in earlier runs. Without this it would re-report the
     // same stuck project on every tick.
-    alreadyReported: previousFindings.map((finding) => ({
+    alreadyReported: visibleReported.map((finding) => ({
       id: finding.id,
       projectId: finding.projectId,
       projectName: finding.projectName,
@@ -444,7 +515,23 @@ if (command === 'facts') {
       answeredAt: item.answeredAt,
       answer: item.answer,
     })),
-    projects: withDutyCards(cards, duty, managedNames).map((card) => {
+    // 这一轮的事件。`candidates` 是过了第一道闸的；`dropped` 说清筛掉了多少、为什么。
+    triggers: {
+      watermark: dutyConfig.lastRunAt ?? null,
+      allowedTypes: [...TRIGGER_WHITELIST],
+      candidates: selected.kept,
+      dropped: selected.dropped,
+    },
+    // 筛掉了多少。数字留着，人就知道「还有多少我没看见」——而不是以为那就是全部。
+    excluded: {
+      projects: cards.length - visibleCards.length,
+      decisions: runtimeItems.length - visibleItems.length,
+      openQuestionnaires: openQuestionnaires.length - visibleQuestionnaires.length,
+      recoverable: recoverable.length - visibleRecoverable.length,
+      goals: goalRows.length - visibleGoals.length,
+      planTasks: planRows.length - visiblePlanTasks.length,
+    },
+    projects: withDutyCards(visibleCards, duty, managedNames).map((card) => {
       const inScope = managedNames.has(card.name);
       const ownerSessions = ownerSessionsByProject.get(card.id) ?? [];
       // The default target: the most recently active root session. The boss still judges
@@ -473,7 +560,7 @@ if (command === 'facts') {
           : {}),
       };
     }),
-    decisions: runtimeItems.map((item) => ({
+    decisions: visibleItems.map((item) => ({
       id: item.id,
       kind: item.kind,
       severity: item.severity,
@@ -484,13 +571,13 @@ if (command === 'facts') {
       body: item.body,
       createdAt: item.createdAt,
     })),
-    openQuestionnaires,
-    recoverable,
-    goals: goalRows,
-    planTasks: planRows,
+    openQuestionnaires: visibleQuestionnaires,
+    recoverable: visibleRecoverable,
+    goals: visibleGoals,
+    planTasks: visiblePlanTasks,
     brief: buildPatrolBrief({
-      cards,
-      inbox: runtimeItems,
+      cards: visibleCards,
+      inbox: visibleItems,
     }),
   });
   store.close();
