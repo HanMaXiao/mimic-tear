@@ -23,9 +23,47 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { PatrolStore } from './patrol-store.mjs';
+import { CONCLUSION_WORD_LIMIT, countWords } from './patrol-rules.mjs';
 
 const ALERT_FILE = 'watchdog-alert.log';
 const NOTICE_FILE = 'watchdog-notices.json';
+
+/**
+ * 板面那份装不下时，剩下的证据去哪儿看。
+ *
+ * 告警日志里留着**完整**的那一份：日志是主渠道，板面那份是给人看的那一份。
+ */
+const BOARD_POINTER = '（其余证据见 watchdog-alert.log）';
+
+/**
+ * 把一段事实装进板面结论的预算里。
+ *
+ * 板面结论有 100 词的上限（见 `patrol-rules.mjs`），而入账那一层会直接拒绝超限的结论。
+ * 所以看门狗必须**自己**装得下：按优先级一行一行地装，装不下的就不装，并说明剩下的证据
+ * 去哪儿找——不能装不下就整条丢掉，那等于没报。
+ *
+ * @param {string} text
+ * @param {number} [limit]
+ * @returns {string}
+ */
+export function fitToBoardBudget(text, limit = CONCLUSION_WORD_LIMIT) {
+  const lines = String(text ?? '').split('\n').map((line) => line.trim()).filter(Boolean);
+  if (!lines.length) return '';
+  if (countWords(lines.join('\n')) <= limit) return lines.join('\n');
+
+  const budget = Math.max(1, limit - countWords(BOARD_POINTER));
+  const kept = [];
+  for (const line of lines) {
+    // 按优先级装：装不下的那一行往后都不装（后面的行是更细的机器细节）。
+    if (countWords([...kept, line].join('\n')) > budget) break;
+    kept.push(line);
+  }
+  if (kept.length === 0) {
+    // 连第一行都装不下：按字符截一刀。词数不会超过字数，所以一定装得下。
+    return lines[0].slice(0, limit);
+  }
+  return [...kept, BOARD_POINTER].join('\n');
+}
 
 /**
  * The alert kinds the user needs to see in their inbox, and how loud they are.
@@ -190,7 +228,8 @@ export async function appendAlert(dir, record) {
     projectName: null,
     severity: record.severity ?? severity,
     title: record.title,
-    body: record.body,
+    // 板面那份要装得进 100 词；日志里那份是完整的。
+    body: fitToBoardBudget(record.body),
   });
 
   notices[identity] = record.at ?? Date.now();
@@ -269,7 +308,8 @@ export async function publishBoardNotice(dir, notice) {
     projectName: null,
     severity: notice.severity,
     title: notice.title,
-    body: notice.body,
+    // 板面结论有 100 词的上限，入账那一层会直接拒绝超限的——所以这里先装得下。
+    body: fitToBoardBudget(notice.body),
   });
 
   notices[notice.identity] = Date.now();

@@ -3,6 +3,14 @@ import { join, resolve } from 'node:path';
 
 import { normalizeConclusionSource } from './view-model.mjs';
 import { readJsonArray, updateJsonArray, writeJsonAtomic } from './json-ledger.mjs';
+import {
+  assertConclusionBandwidth,
+  assignDesk,
+  DEFAULT_DESK_LIMIT,
+  deskLimitFrom,
+  mergeConclusion,
+  mergeKey,
+} from './patrol-rules.mjs';
 
 /**
  * One write queue per data directory.
@@ -30,11 +38,14 @@ const writeQueues = new Map();
  * @typedef {{ id:string, createdAt:number, projectId:number|null, projectName:string|null,
  *             severity:'high'|'medium'|'low', title:string, body:string,
  *             source:'duty'|'board',
- *             acknowledged:boolean, acknowledgedBy:'user'|'boss'|null, note:string }} PatrolFinding
+ *             acknowledged:boolean, acknowledgedBy:'user'|'boss'|null, note:string,
+ *             onDesk?:boolean, updatedAt?:number }} PatrolFinding
  * @typedef {{ enabled:boolean, intervalMinutes:number,
- *             dutyIntervalMinutes:number,
+ *             dutyIntervalMinutes:number, deskLimit:number,
  *             lastRunAt:number|null, lastBoardPatrolAt:number|null,
  *             lastSignature:string|null }} PatrolConfig
+ * @typedef {{ archivedAt:number, archivedBy:string, reason:string, count:number,
+ *             findings:PatrolFinding[] }} PatrolArchiveBatch
  * @typedef {{ id:string, idempotencyKey:string|null, source:'duty'|'board',
  *             projectId:number|null, projectName:string|null, targetSessionId:string|null,
  *             instruction:string, status:'queued'|'running'|'done'|'error',
@@ -49,6 +60,9 @@ const DEFAULT_CONFIG = {
   // period (currently 30), NOT the board's patrol loop. The board's "the boss went quiet"
   // warning is derived from it, so the two must be changed together.
   dutyIntervalMinutes: 30,
+  // 桌面上「需要你拍板」的结论条数上界。超出的结论**仍然记账**，只是先不上桌面——
+  // 收件箱是给人看的，不是账本。
+  deskLimit: DEFAULT_DESK_LIMIT,
   // Which cron definition is the duty cron. The node side only reads it: when the
   // scheduler is re-pointed, this field has to follow, or the node side keeps reading a
   // chain that no longer exists — and "no runs" reads exactly like "nothing went wrong".
@@ -68,6 +82,8 @@ export class PatrolStore {
     this.findingsPath = join(this.dataDir, 'patrol.json');
     this.configPath = join(this.dataDir, 'patrol-config.json');
     this.answeredPath = join(this.dataDir, 'patrol-answered.json');
+    // 归档账：退场的结论搬到这里。**一条都不删**——归档是搬家，不是销毁。
+    this.archivePath = join(this.dataDir, 'patrol-archive.json');
     // The dispatch ledger is the BOARD's file (the board path writes it), but the duty
     // path writes into it too — that is the whole point of the ledger: both bosses'
     // deliveries end up in one place instead of two private histories.
@@ -99,21 +115,37 @@ export class PatrolStore {
    * It is not dropped: it reads as `board` — the origin that produces conclusions with
    * no duty handover behind them.
    *
+   * 每条结论还带一个 `onDesk` 标记：它是不是占着桌面上「需要你拍板」的那几个名额。
+   * 超上界的结论**照样在账上**（`alreadyReported` 靠它去重），只是标记成「不在桌面」。
+   *
    * @returns {Promise<PatrolFinding[]>}
    */
   async list() {
-    const value = await readJson(this.findingsPath, []);
-    const list = Array.isArray(value) ? value : [];
-    return list.map((finding) => ({
+    const raw = await this.#readFindings();
+    const findings = raw.map((finding) => ({
       ...finding,
       source: normalizeConclusionSource(finding?.source, 'board'),
     }));
+    return assignDesk(findings, deskLimitFrom(await this.getConfig()));
   }
 
   /** @param {PatrolFinding[]} findings */
   async save(findings) {
-    await writeJson(this.findingsPath, findings);
-    return findings;
+    const assigned = assignDesk(findings ?? [], deskLimitFrom(await this.getConfig()));
+    await writeJson(this.findingsPath, assigned);
+    return assigned;
+  }
+
+  /**
+   * 账上的原始结论（不做桌面分配）。
+   *
+   * 写路径用它读、写；`list()` 在它上面再叠一层桌面名额。
+   *
+   * @returns {Promise<PatrolFinding[]>}
+   */
+  async #readFindings() {
+    const value = await readJson(this.findingsPath, []);
+    return Array.isArray(value) ? value : [];
   }
 
   /**
@@ -124,12 +156,22 @@ export class PatrolStore {
    * explicitly (`source: 'board'`), and the watchdog's notices are duty-side news
    * about the duty chain, so they read as `duty` too.
    *
+   * 两道纪律在这一层生效，因为这一层是**两条写路径共同的入口**（CLI 的 report 与看板的
+   * 巡检都走它）：
+   *
+   * - **带宽**：超过 100 词的结论直接被拒绝。截断会把大哥的话改掉，而大哥需要知道自己
+   *   写超了。
+   * - **同类合并**：同一个项目、同一个严重度、还没被确认过的那条，就是同一件事——新报
+   *   的并进去，而不是在收件箱里再占一个位置。
+   *
    * @param {Omit<PatrolFinding, 'id'|'createdAt'|'acknowledged'|'source'> & {source?:'duty'|'board'}} input
    * @returns {Promise<PatrolFinding>}
    */
   async add(input) {
+    // 带宽纪律：超限的结论进不来账。抛错，不是静默丢弃——被拒绝的理由必须说得清。
+    assertConclusionBandwidth(input);
     return this.enqueue(async () => {
-      const findings = await this.list();
+      const findings = await this.#readFindings();
       const finding = {
         id: `patrol_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
         createdAt: Date.now(),
@@ -139,11 +181,101 @@ export class PatrolStore {
         ...input,
         source: normalizeConclusionSource(input?.source, 'duty'),
       };
-      findings.unshift(finding);
+
+      // 同类合并。账是新的在前，所以第一个命中的就是**最近**的那条同键未确认结论。
+      // 已确认的不参与合并：确认过的问题又冒出来，那是新的一件事。
+      const key = mergeKey(finding);
+      const target = findings.find((item) => !item?.acknowledged && mergeKey(item) === key);
+      let stored;
+      if (target) {
+        stored = mergeConclusion(target, finding);
+        findings[findings.indexOf(target)] = stored;
+      } else {
+        findings.unshift(finding);
+        stored = finding;
+      }
+
       // Keep the history bounded; the board only ever shows the recent tail.
       await this.save(findings.slice(0, 100));
-      return finding;
+      return stored;
     });
+  }
+
+  /**
+   * 把账上的结论搬进归档账，然后清空账本。
+   *
+   * **一条都不删**：退场的结论连同原文搬进 `patrol-archive.json`，并附上这次归档的元数据
+   * （什么时候、谁、为什么、多少条）。先写归档，再清账本——归档写不进去时账本原封不动。
+   *
+   * @param {{ reason?:string, by?:string }} [options]
+   * @returns {Promise<{ archived:number, reason:string, archivedBy:string, archivedAt:number }>}
+   */
+  async archive(options = {}) {
+    const reason = String(options?.reason ?? '').trim();
+    if (!reason) {
+      throw new Error('归档必须带理由——退场的原因是后来人判断「这事还该不该管」的唯一依据');
+    }
+    const archivedBy = String(options?.by ?? 'boss');
+    return this.enqueue(async () => {
+      const findings = await this.#readFindings();
+      const archivedAt = Date.now();
+      const batch = { archivedAt, archivedBy, reason, count: findings.length, findings };
+
+      const archive = await this.#readArchive();
+      await writeJson(this.archivePath, {
+        version: 1,
+        updatedAt: archivedAt,
+        total: (archive.total ?? 0) + findings.length,
+        batches: [batch, ...(archive.batches ?? [])],
+      });
+
+      // 账本清空——桌面腾干净了，但内容全在归档账里。
+      await writeJson(this.findingsPath, []);
+      return { archived: findings.length, reason, archivedBy, archivedAt };
+    });
+  }
+
+  /**
+   * 归档账：每一批退场的结论与它的元数据。
+   *
+   * @returns {Promise<{ version:number, updatedAt:number, total:number, batches:PatrolArchiveBatch[] }>}
+   */
+  async listArchive() {
+    const archive = await this.#readArchive();
+    const batches = Array.isArray(archive.batches) ? archive.batches : [];
+    return {
+      version: archive.version ?? 1,
+      updatedAt: archive.updatedAt ?? 0,
+      total: batches.reduce((sum, batch) => sum + (batch?.findings?.length ?? 0), 0),
+      batches,
+    };
+  }
+
+  /**
+   * 归档过的结论（平的列表）。
+   *
+   * 它们不在账上了，但**仍然是大哥报过的事**——去重账要能看见它们，否则同一个问题会被
+   * 反复报出来。
+   *
+   * @returns {Promise<PatrolFinding[]>}
+   */
+  async listArchivedFindings() {
+    const archive = await this.listArchive();
+    return archive.batches.flatMap((batch) => batch?.findings ?? []);
+  }
+
+  /** @returns {Promise<any>} */
+  async #readArchive() {
+    const value = await readJson(this.archivePath, null);
+    if (!value || typeof value !== 'object') {
+      return { version: 1, updatedAt: 0, total: 0, batches: [] };
+    }
+    return {
+      version: Number(value.version) || 1,
+      updatedAt: Number(value.updatedAt) || 0,
+      total: Number(value.total) || 0,
+      batches: Array.isArray(value.batches) ? value.batches : [],
+    };
   }
 
   /**
@@ -311,6 +443,8 @@ export class PatrolStore {
     for (const key of Object.keys(DEFAULT_CONFIG)) {
       if (stored[key] !== undefined) config[key] = stored[key];
     }
+    // 桌面上界归一：配置文件里手改的字符串或越界的数，读出来就是一个合法的数。
+    config.deskLimit = deskLimitFrom(config);
     return config;
   }
 
@@ -322,16 +456,22 @@ export class PatrolStore {
    * so a whole-file overwrite that re-stamps the other writer's fields would drop them.
    * The file is therefore re-read immediately before writing, and only the patch rides on top.
    *
+   * **没传的字段不动。** 调用方只说「把桌面上界改成 30」，不该顺手把巡检开关关掉——
+   * `undefined` 会被 `Boolean(undefined)` 变成 `false`，那是一次没人要求的改动。
+   *
    * @param {Partial<PatrolConfig>} patch
    * @returns {Promise<PatrolConfig>}
    */
   async setConfig(patch) {
     const changes = {};
     for (const [key, value] of Object.entries(patch ?? {})) {
+      if (value === undefined) continue;
       if (key === 'intervalMinutes') {
         changes[key] = Math.min(240, Math.max(5, Number(value) || 15));
       } else if (key === 'dutyIntervalMinutes') {
         changes[key] = Math.min(240, Math.max(5, Number(value) || 30));
+      } else if (key === 'deskLimit') {
+        changes[key] = Math.min(500, Math.max(1, Number(value) || DEFAULT_DESK_LIMIT));
       } else if (key === 'enabled') {
         changes[key] = Boolean(value);
       } else {

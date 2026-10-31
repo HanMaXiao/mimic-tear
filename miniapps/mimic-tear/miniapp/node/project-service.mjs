@@ -39,6 +39,7 @@ import { buildOrgTree } from './org-tree.mjs';
 import { buildPatrolFindings, resolvePatrolProposals } from './patrol-run.mjs';
 import { buildPatrolBrief, parsePatrolReport } from './patrol-report.mjs';
 import { buildProjectCards } from './project-cards.mjs';
+import { DEFAULT_DESK_LIMIT } from './patrol-rules.mjs';
 import { isInternalWorkspace, splitVisibleProjects } from './project-scope.mjs';
 import { normalizeConclusionSource } from './conclusion-source.mjs';
 
@@ -174,6 +175,7 @@ export class ProjectService {
         enabled: false,
         intervalMinutes: intervals.intervalMinutes,
         dutyIntervalMinutes: intervals.dutyIntervalMinutes,
+        deskLimit: DEFAULT_DESK_LIMIT,
         lastRunAt: null,
         lastBoardPatrolAt: null,
         lastSignature: null,
@@ -280,10 +282,22 @@ export class ProjectService {
     );
 
     const created = [];
+    // 入账被拒的结论（例如正文超了带宽上限）要**单独报出来**，不能悄悄少记一条——
+    // 大哥得知道自己写的东西没进来。
+    const rejected = [];
     for (const finding of findings) {
       // 看板自己的巡检循环。结论的来源在这里写下来，所以收件箱能把看板的产出和值班大哥的
       // 结论分开。
-      created.push(await this.patrol.add({ ...finding, source: 'board' }));
+      try {
+        created.push(await this.patrol.add({ ...finding, source: 'board' }));
+      } catch (error) {
+        rejected.push({
+          projectName: finding?.projectName ?? null,
+          severity: finding?.severity ?? null,
+          title: finding?.title ?? null,
+          error: error?.message ?? String(error),
+        });
+      }
     }
 
     // 大哥提建议，看板负责派工。要不要提建议是大哥自己的判断——没有一个开关能决定派不
@@ -324,6 +338,7 @@ export class ProjectService {
       proposals: report.proposals,
       executed,
       findings: created,
+      rejected,
       error: outcome.error,
     };
   }
@@ -637,6 +652,13 @@ export class ProjectService {
       ? snapshot.sessions.find((s) => s.id === record.targetSessionId)
       : null;
 
+    // 这次派工命中了哪个已登记的技能。匹配是**确定性**的：同样的派工内容命中同样的
+    // 技能（见 `skill-library.mjs` 里的稳定排序），不靠模型判断。
+    const matched = await this.matchDispatchSkill(record);
+    record.skillMatch = matched
+      ? { id: matched.id, skillName: matched.skillName, score: matched.score }
+      : null;
+
     record.status = 'running';
     record.updatedAt = Date.now();
     await this.persistence.saveDispatch(record);
@@ -649,6 +671,7 @@ export class ProjectService {
       record.error = error?.message ?? String(error);
       record.updatedAt = Date.now();
       await this.persistence.saveDispatch(record);
+      await this.#recordSkillUse(matched, false);
       return dispatchResult(record);
     }
 
@@ -658,8 +681,45 @@ export class ProjectService {
     record.error = outcome?.error ?? null;
     record.updatedAt = Date.now();
     await this.persistence.saveDispatch(record);
+    await this.#recordSkillUse(matched, record.status === 'done');
 
     return dispatchResult(record);
+  }
+
+  /**
+   * 派工内容命中哪个已登记的技能。
+   *
+   * 关键词命中就是全部依据：触发词、名字、标题、领域，谁在派工内容里出现谁就算数。
+   * 命中多个时取分数最高的那个；分数一样时按技能名排（`match()` 里的排序是稳定的），
+   * 所以同样的输入永远命中同样的技能。
+   *
+   * @param {any} record
+   * @returns {Promise<any|null>}
+   */
+  async matchDispatchSkill(record) {
+    if (!this.skillLibrary) return null;
+    const text = [record?.projectName, record?.instruction].filter(Boolean).join('\n');
+    if (!text.trim()) return null;
+    const matches = await this.skillLibrary.match(text, { limit: 1 });
+    return matches[0] ?? null;
+  }
+
+  /**
+   * 记一次技能使用。
+   *
+   * 计数记不上**不该让派工失败**：派工本身已经完成了，技能登记表只是它的账。
+   *
+   * @param {any} matched
+   * @param {boolean} success
+   * @returns {Promise<any|null>}
+   */
+  async #recordSkillUse(matched, success) {
+    if (!matched?.id || !this.skillLibrary) return null;
+    try {
+      return await this.skillLibrary.recordUse(matched.id, { success });
+    } catch {
+      return null;
+    }
   }
 
   /**

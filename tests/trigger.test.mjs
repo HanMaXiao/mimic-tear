@@ -211,6 +211,12 @@ test('CLI facts：默认给的是候选视图，并说清筛掉了多少', () =>
     );
     assert.ok(result.excluded.decisions >= 1, '筛掉的决策项数量要报出来');
     assert.ok(Array.isArray(result.triggers.candidates));
+    // 每条候选都要带 `delivered`：它表示「程序已经把它直投给了那条线的负责人会话」。
+    // 大哥的提示词靠这个标记决定哪件事不归它管——**字段必须一直在**，哪怕现在全是 false。
+    assert.ok(
+      result.triggers.candidates.every((trigger) => typeof trigger.delivered === 'boolean'),
+      '每条候选都必须带 delivered 布尔标记',
+    );
     assert.ok(result.triggers.dropped.total >= 0);
   } finally {
     cleanupDir(dir);

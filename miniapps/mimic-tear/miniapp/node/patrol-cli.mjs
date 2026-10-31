@@ -9,6 +9,8 @@
  * Commands:
  *   facts            print the fact sheet (projects, decisions, questionnaires, goals, plan)
  *   report <file>    merge findings / answered questions / recovery notes into the board
+ *   archive "<why>"  move the ledger's conclusions into the archive file (nothing is deleted)
+ *   archive          print the archive's metadata (when / who / why / how many)
  *   gap              print the handover sheet: how long the duty chain was broken, how many
  *                    rounds count as missed duty, how many are still owed
  *   gap reset "<why>" clear the "already covered" marker so the next tick re-covers the gap
@@ -349,7 +351,8 @@ if (command === 'recall') {
     const sessions = store.listSessions().filter((s) => visibleIds.has(s.projectId));
     const questionnaires = store.listQuestionnaires(true);
     const goals = store.listGoals();
-    const findings = await patrol.list();
+    // 归档过的结论照样能取回：归档是搬家，不是销毁。
+    const findings = [...await patrol.list(), ...await patrol.listArchivedFindings()];
     const managedEntries = await managedList();
     const managedNames = new Set(
       managedEntries.filter((entry) => entry.matched).map((entry) => entry.projectName ?? entry.name),
@@ -453,6 +456,10 @@ if (command === 'facts') {
   const answered = await patrol.listAnswered();
   const answeredIds = new Set(answered.map((item) => item.requestId));
   const previousFindings = await patrol.list();
+  // 归档过的结论：不在账本上了，但**仍然是大哥报过的事**。去重账要看得见它们，
+  // 否则同一件事会被再报一遍。
+  const archivedFindings = await patrol.listArchivedFindings();
+  const archive = await patrol.listArchive();
 
   // The jurisdiction list, each entry resolved against the live project set. A grant whose
   // name no longer points at a project is shown as `matched: false` — the boss has to be
@@ -606,7 +613,8 @@ if (command === 'facts') {
   const visiblePlanTasks = planRows.filter((t) => withinJurisdiction(t.projectName));
   // `alreadyReported` **不按管辖过滤**：这是大哥自己报过的账。忘了报过的事，就会再报一遍——
   // 而「重复报同一件事」正是收件箱堆到 93 条的原因之一。它是账本，不是环境状态。
-  const visibleReported = previousFindings;
+  // 归档过的结论也算数：它们退场了，但「报过了」这件事没变。
+  const visibleReported = [...previousFindings, ...archivedFindings];
 
   // 这一轮真的发生了什么。
   //
@@ -643,6 +651,18 @@ if (command === 'facts') {
     allowTypes: TRIGGER_WHITELIST,
   });
 
+  // `delivered` 标记：这条事件**已经由程序直投给了那条线的负责人会话**（订阅表里的
+  // 「已投出」账）。带这个标记的不归大哥管——**别再派一次工、别再报一次**。
+  //
+  // 它记的是「已投出」，**不是「已执行」**：目标会话在跑 goal 链时消息会排队，
+  // 排队中的那一轮还没跑。
+  const subscriptions = await new ThreadSubscriptions(dataDir).list();
+  const deliveredIds = new Set(subscriptions.flatMap((entry) => entry.delivered ?? []));
+  const markedCandidates = selected.kept.map((trigger) => ({
+    ...trigger,
+    delivered: deliveredIds.has(trigger.id),
+  }));
+
   const rawPayload = {
     generatedAt: Date.now(),
     // Which view this is. `candidates` is what the model gets by default; `raw` means the
@@ -653,6 +673,7 @@ if (command === 'facts') {
     paths: {
       report: join(dataDir, 'patrol.json'),
       answered: join(dataDir, 'patrol-answered.json'),
+      archive: join(dataDir, 'patrol-archive.json'),
       db: dbPath,
     },
     // Which projects the boss is allowed to manage. The user grants this explicitly; the
@@ -685,6 +706,14 @@ if (command === 'facts') {
     })),
     // The boss's own duty state — see above.
     duty,
+    // 归档账的元数据：退场了多少条、为什么、什么时候、谁退的。
+    archive: {
+      total: archive.total,
+      batches: archive.batches.length,
+      reason: archive.batches[0]?.reason ?? null,
+      archivedAt: archive.batches[0]?.archivedAt ?? null,
+      archivedBy: archive.batches[0]?.archivedBy ?? null,
+    },
     alreadyAnswered: answered.map((item) => ({
       requestId: item.requestId,
       sessionId: item.sessionId,
@@ -695,7 +724,7 @@ if (command === 'facts') {
     triggers: {
       watermark: dutyConfig.lastRunAt ?? null,
       allowedTypes: [...TRIGGER_WHITELIST],
-      candidates: selected.kept,
+      candidates: markedCandidates,
       dropped: selected.dropped,
     },
     // 筛掉了多少。数字留着，人就知道「还有多少我没看见」——而不是以为那就是全部。
@@ -768,7 +797,7 @@ if (command === 'facts') {
 
   // 引用图：每个内容项内联**下一跳的 ID**，模型可以顺着它一跳一跳地展开（链式召回）。
   const graph = buildFactRefGraph({
-    findings: previousFindings,
+    findings: [...previousFindings, ...archivedFindings],
     projects: visibleCards.map((card) => ({
       name: card.name,
       ownerSessionId: (ownerSessionsByProject.get(card.id) ?? []).find((s) => s.isRoot)?.id ?? null,
@@ -814,14 +843,26 @@ if (command === 'report') {
   const payload = JSON.parse(await readFile(resolve(file), 'utf8'));
 
   const written = [];
+  // 入账被拒的结论（正文超了带宽上限）要单独报出来：大哥得知道自己写的东西没进来，
+  // 而不是以为已经报上去了。
+  const rejected = [];
   for (const finding of payload.findings ?? []) {
-    written.push(await patrol.add({
-      projectId: finding.projectId ?? null,
-      projectName: finding.projectName ?? null,
-      severity: finding.severity ?? 'medium',
-      title: String(finding.title ?? '大哥巡检结论').slice(0, 120),
-      body: String(finding.body ?? ''),
-    }));
+    try {
+      written.push(await patrol.add({
+        projectId: finding.projectId ?? null,
+        projectName: finding.projectName ?? null,
+        severity: finding.severity ?? 'medium',
+        title: String(finding.title ?? '大哥巡检结论').slice(0, 120),
+        body: String(finding.body ?? ''),
+      }));
+    } catch (error) {
+      rejected.push({
+        projectName: finding.projectName ?? null,
+        severity: finding.severity ?? 'medium',
+        title: String(finding.title ?? '大哥巡检结论').slice(0, 120),
+        error: error?.message ?? String(error),
+      });
+    }
   }
 
   for (const entry of payload.answered ?? []) {
@@ -869,6 +910,7 @@ if (command === 'report') {
   print({
     ok: true,
     findings: written.length,
+    rejected,
     answered: (payload.answered ?? []).length,
     dutyStamp,
     // Whether the watchdog was woken up. It is reported, not enforced: the handover
@@ -916,7 +958,48 @@ if (command === 'dismiss') {
   process.exit(0);
 }
 
-process.stderr.write(`未知命令：${command}\n可用：facts / report / withdraw / dismiss / gap / manage / duty-cron / paths\n`);
+if (command === 'archive') {
+  // 归档：把账上的结论搬进归档账，然后清空账本。
+  //
+  // **一条都不删**——退场的结论连同原文搬进 `patrol-archive.json`，附上这次归档的元数据
+  // （什么时候、谁、为什么、多少条）。理由是必填的：以后有人问「这条为什么退场了」，
+  // 答案只能在那儿。
+  //
+  // 不带理由时是**只读**：把归档账打出来。
+  const reason = positionalArgs().slice(1).join(' ').trim();
+  try {
+    if (!reason) {
+      const archive = await patrol.listArchive();
+      print({
+        ok: true,
+        archived: archive.total,
+        batches: archive.batches.map((batch) => ({
+          archivedAt: batch.archivedAt,
+          archivedBy: batch.archivedBy,
+          reason: batch.reason,
+          count: batch.count,
+        })),
+      });
+    } else {
+      const result = await patrol.archive({ reason, by: 'boss' });
+      print({
+        ok: true,
+        archived: result.archived,
+        reason: result.reason,
+        archivedBy: result.archivedBy,
+        archivedAt: result.archivedAt,
+      });
+    }
+  } catch (error) {
+    process.stderr.write(`${error?.message ?? error}\n`);
+    store.close();
+    process.exit(2);
+  }
+  store.close();
+  process.exit(0);
+}
+
+process.stderr.write(`未知命令：${command}\n可用：facts / report / withdraw / dismiss / archive / gap / manage / duty-cron / paths\n`);
 store.close();
 process.exit(2);
 

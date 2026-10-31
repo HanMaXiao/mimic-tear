@@ -15,30 +15,37 @@ import { questionnaireShape } from './questionnaire-rules.mjs';
 /**
  * 把大哥的巡检结论变成收件箱条目。
  *
+ * **只收占着桌面的那些。** 桌面上「需要你拍板」的结论条数有上界，超出的结论仍然记在
+ * 账上（`patrol.json`），但先不上桌面——收件箱是给人看的，不是账本。运行时产生的项
+ * （问卷 / goal-paused / session-error / plan-blocked）不受这个上界约束：那不是大哥能
+ * 控制的。
+ *
  * @param {any[]} findings
  * @returns {any[]}
  */
 export function buildPatrolInboxItems(findings) {
-  return (findings ?? []).map((finding) => ({
-    id: `patrol:${finding.id}`,
-    kind: 'patrol',
-    severity: finding.severity,
-    projectId: finding.projectId ?? 0,
-    projectName: finding.projectName ?? '全局',
-    sessionId: null,
-    sessionTitle: null,
-    title: finding.title,
-    body: finding.body,
-    createdAt: finding.createdAt,
-    ageMinutes: ageMinutes(finding.createdAt),
-    acknowledged: finding.acknowledged,
-    // Where the conclusion came from: the duty boss's own round, or the board's
-    // patrol loop. A conclusion written before the field existed reads as 'board'.
-    source: normalizeConclusionSource(finding.source),
-    // 'user' = 大老板点过「标记已知」；'boss' = 大哥撤回了自己的结论（已不适用）。
-    handledBy: finding.acknowledgedBy ?? null,
-    handledReason: finding.note ?? '',
-  }));
+  return (findings ?? [])
+    .filter((finding) => finding?.onDesk !== false)
+    .map((finding) => ({
+      id: `patrol:${finding.id}`,
+      kind: 'patrol',
+      severity: finding.severity,
+      projectId: finding.projectId ?? 0,
+      projectName: finding.projectName ?? '全局',
+      sessionId: null,
+      sessionTitle: null,
+      title: finding.title,
+      body: finding.body,
+      createdAt: finding.createdAt,
+      ageMinutes: ageMinutes(finding.createdAt),
+      acknowledged: finding.acknowledged,
+      // Where the conclusion came from: the duty boss's own round, or the board's
+      // patrol loop. A conclusion written before the field existed reads as 'board'.
+      source: normalizeConclusionSource(finding.source),
+      // 'user' = 大老板点过「标记已知」；'boss' = 大哥撤回了自己的结论（已不适用）。
+      handledBy: finding.acknowledgedBy ?? null,
+      handledReason: finding.note ?? '',
+    }));
 }
 
 /**

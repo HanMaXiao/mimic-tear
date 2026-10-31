@@ -68,9 +68,18 @@ test('同一状态只转一次，状态变了才再转', async () => {
     assert.equal((await patrol.list()).length, 1, '同一次掉线不刷屏');
 
     // A new outage (a new handover stamp) is a new state → published again.
-    await appendAlert(dir, record({ identity: 'stale:222', at: NOW + 3 * MINUTE }));
+    //
+    // 它**并进**板面上那一条（4.2 的同类合并：全局结论同键就是同一格），所以条数还是 1，
+    // 但板面看到的是**新状态**的内容——这才是「状态变了才再转」的可观察结果。
+    await appendAlert(dir, record({
+      identity: 'stale:222',
+      at: NOW + 3 * MINUTE,
+      body: '已 576 分钟没有交班',
+    }));
     patrol = new PatrolStore(dir);
-    assert.equal((await patrol.list()).length, 2, '状态变了才再转');
+    const findings = await patrol.list();
+    assert.equal(findings.length, 1, '同一条全局结论只占一格');
+    assert.match(findings[0].body, /576/, '板面看到的是新状态');
   } finally {
     cleanupDir(dir);
   }

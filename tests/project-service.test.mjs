@@ -330,10 +330,14 @@ test('project-service', async (t) => {
       await service.runPatrol();
 
       // The duty path writes one.
+      //
+      // 它的严重度必须是 `low`：同项目同严重度的结论会被**合并**（4.2 的同类合并），
+      // 而看板那条巡检结论正是 alpha/high。这个测试要验的是**来源标注**，所以给值班
+      // 结论换一个严重度，让三条结论各占一格。
       await new PatrolStore(dataDir).add({
         projectId: 1,
         projectName: 'alpha',
-        severity: 'high',
+        severity: 'low',
         title: '值班结论',
         body: '值班这一轮发现的问题',
         source: 'duty',

@@ -306,10 +306,15 @@ const API_ROUTES = [
     broadcast: [],
     async handler(ctx) {
       const body = await ctx.readBody(ctx.request);
-      const config = await ctx.service.setPatrolConfig({
+      const patch = {
         enabled: body?.enabled,
         intervalMinutes: body?.intervalMinutes,
-      });
+      };
+      // 桌面上界是可选的：没传就别动它。传一个 `undefined` 进去等于「把它设成默认值」。
+      if (body?.deskLimit !== undefined && body?.deskLimit !== null) {
+        patch.deskLimit = body.deskLimit;
+      }
+      const config = await ctx.service.setPatrolConfig(patch);
       ctx.sendJson(200, config);
     },
   },
