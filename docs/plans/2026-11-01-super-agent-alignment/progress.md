@@ -51,6 +51,8 @@ git worktree add -b feature/super-agent-alignment <仓库外目录> main
 5. **技能库 3 条 `active`、`usageCount` 全为 0**——匹配路径没有任何使用痕迹（→ G-11）。
 6. **Mini App node 侧没有 goal 创建入口**（全目录 `createGoal|threadGoal|tokenBudget` 零命中）——这是主规格 §26 已记录的独立议题，**不混进本计划**。
 7. 近 72 小时 `local_runtime_message_rows` 里 **`cron` 来源 0 条**——这段时间唯一在驱动整个系统的是**人**（`api = 873`）。
+8. **大哥自己在 2026-10-30 11:47 就报过这个 bug**（板面交班汇报里）：「大老板 10-27 那句『休息不是故障』修好了一半：看门狗认 intent 了，**心跳还不认**——它会把休息当链断，还自己补跑一轮 Mimic Tear」。**Phase 1 修的就是它**——不是推测出来的需求，是大哥自己挂在那儿的一条结论。
+9. **2026-10-27 13:37 的补位失败锁死了整条链**：告警日志里 `heartbeat_run`（13:37:45）后面紧跟一条 `heartbeat_failed`（"Mini App Agent is busy"）。失败那轮被记成「已补」→ 下一跳判成「已触发」→ **此后 5 天一次都没补过**。Phase 1 的「失败不推进覆盖标记」修的就是这个具体事故。
 
 ---
 
@@ -67,7 +69,7 @@ git worktree add -b feature/super-agent-alignment <仓库外目录> main
   - 改 `miniapps/mimic-tear/miniapp/node/patrol-cli.mjs`（新增 `gap` / `gap reset "<理由>"`）
   - 新增 `tests/duty-gap.test.mjs`（12 条）；改 `tests/duty-heartbeat.test.mjs`（+5 条）；改 `tests/helpers/fixture.mjs`（+`makeDutyBoardDb`）
 - **测试增量：** 602 → **619** 全绿（+17：空档模型 9、心跳层 5、CLI 3）
-- **四道守卫：** `verify-agent-notes` / `check-style` / `check-package` 全绿；`check-published` **红**（发布副本还没同步 —— 见下方「待办」）
+- **四道守卫：** `verify-agent-notes` / `check-style` / `check-package` / `check-published` **全绿**（最后一个是在发布之后复跑才绿的）
 
 ### Phase 1 收尾块
 
@@ -100,9 +102,50 @@ git worktree add -b feature/super-agent-alignment <仓库外目录> main
 
 **待办（不在本阶段内）：**
 
-1. **发布副本未同步** —— `check-published` 红。源码改了、跑的还是旧代码；见本文末尾「发布」一节。
-2. **大哥仍未上岗** —— 那是大老板的决定（D1）。本阶段只保证「上岗时有一条能说清断档的恢复路径」。
-3. **Gate 5 未验收** —— 验收需要一个真实的上岗场景：切到 `on-duty` → 看 `patrol-cli gap` 的摘要 → 看心跳是否补了一趟并把覆盖标记往前推。**这一步要在真实环境做，测试绿不算。**
+1. **大哥仍未上岗** —— 那是大老板的决定（D1）。本阶段只保证「上岗时有一条能说清断档的恢复路径」。
+2. **Gate 5 未验收** —— 验收需要一个真实的上岗场景：切到 `on-duty` → 看 `patrol-cli gap` 的摘要 → 看心跳是否补了一趟并把覆盖标记往前推。**这一步要在真实环境做，测试绿不算。**
+3. **运行中进程的新分支没有直接观测到** —— 见下「四层验收」的第 4 层。
+
+### 发布与四层验收（2026-11-01 03:36–03:47）
+
+**三层路径**
+
+| 层 | 路径 |
+| --- | --- |
+| 仓库（source of truth） | `D:\Project\AppProject\Mimic Tear\miniapps\mimic-tear` |
+| 发布副本（宿主加载的那份） | `C:\Users\12391\.minimax\plugins\mimic-tear` |
+| 运行中的进程 | Mini App 运行时（`miniapp inspect` 的 `runId` = `fa6a5cd5-b1cb-407a-aadf-1c4357510a9a`） |
+
+| 层 | 结论 | 证据 |
+| --- | --- | --- |
+| ① 仓库 ↔ 发布副本 | **一致** | `check-published.mjs`：文件数 仓库 103 / 发布 103，**无漂移**；`duty-gap.mjs` 已在发布副本（11192 字节） |
+| ② 运行时确实被替换 | **是** | 发布前 `runId` = `e36a6164…`；发布后 = `fa6a5cd5…`，日志 `runtime.start_requested` → `runtime.ready`（03:43:34，**在发布之后**） |
+| ③ 运行时加载的是发布副本 | **是** | `miniapp inspect` 的 `source: "local"`；且发布副本与仓库逐字节相同 |
+| ④ 新代码真的在跑 | **间接但可靠** | 运行中进程的心跳 `updatedAt` **每 60 秒推进一次**（1793475535940 → 1793475595956，间隔 6016 ms）。新的 `duty-heartbeat.mjs` 会 `import './duty-gap.mjs'` —— 若这个 import 失败，`server.mjs` 里 `await import('./duty-heartbeat.mjs')` 会抛，**定时器根本不会建起来**。所以「心跳在推进」就等于「新模块图加载成功并在跑」 |
+
+**产物级验证（真机 + 真数据 + 真调用）**
+
+用**发布副本那份** CLI，读**真实的运行时库**与**真实的板面数据目录**：
+
+```
+node "%USERPROFILE%\.minimax\plugins\mimic-tear\miniapp\node\patrol-cli.mjs" gap
+```
+
+真实输出（截取）：
+
+```
+hole: { slots: 221, minutes: 6630, firstSlot: 330, lastSlot: 550 }
+gap:  { slots: 1, rounds: 1 }        ← 只有 1 轮算漏班
+source: "resting"  coverable: false
+断档：4 天 14 小时 30 分（从 2026-10-27T05:07:00.136Z 起，宿主一共没触发 221 轮）
+大哥在休息——休息不是故障，这段不算漏班，也不补位。
+现在：管着 1 条线，有 93 件等你拍板
+边界：板面关着时补不了 —— 那是宿主侧的事。
+```
+
+**这个数字本身就是对账据**：221 轮里只有 **1 轮**算漏班（第 330 槽，落在休息开始之前的那一轮）；其余 220 轮是大老板让它休息期间攒的。**旧实现分不出这个区别**——它只会说「221 轮空槽」。
+
+**没验到的一层（如实记下）**：运行中进程的**新分支本身**没有直接观测到——板面接口 401（宿主网关鉴权，Mini App 自己的 server 里没有鉴权代码），而客户端没渲染 `gap` 字段（这轮没改客户端）。**但可以确定它不是旧代码**：旧实现的心跳在同一个状态下也不会触发补位（锁死），所以「没有新的补位告警」区分不出新旧；能区分的是上面第 ④ 层（模块图加载成功）。
 
 ## Phase 2 — 事实层：Trigger 与两级过滤
 
