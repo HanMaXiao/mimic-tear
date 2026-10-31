@@ -199,6 +199,17 @@ test('CLI facts：默认给的是候选视图，并说清筛掉了多少', () =>
     assert.equal(result.projects.length, 1, '只留名单内的项目');
     assert.equal(result.projects[0].name, 'alpha');
     assert.ok(result.excluded.projects >= 1, '筛掉的数量要报出来');
+    // 每一类都要单独钉住：只靠「总体积变小」抓不住「少滤了一个过滤器」——
+    // 体积断言太粗，去掉一个过滤器它照样能过。
+    assert.ok(
+      result.decisions.every((d) => d.projectName !== 'beta'),
+      '管辖区外的决策项不该进候选视图',
+    );
+    assert.ok(
+      result.goals.every((g) => g.projectName !== 'beta'),
+      '管辖区外的目标不该进候选视图',
+    );
+    assert.ok(result.excluded.decisions >= 1, '筛掉的决策项数量要报出来');
     assert.ok(Array.isArray(result.triggers.candidates));
     assert.ok(result.triggers.dropped.total >= 0);
   } finally {
