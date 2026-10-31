@@ -277,6 +277,41 @@ export function makeDutyBoardDb(dir, options = {}) {
   db.exec(DDL);
   db.exec(CRON_DDL);
   seedCronFamily(db, options);
+
+  // 可选的会话与消息行 —— 「进程活着但无实质进展」的场景要靠它们造出来。
+  const sessions = options.sessions ?? [];
+  if (sessions.length) {
+    const insert = db.prepare(
+      `INSERT INTO local_runtime_sessions
+         (session_id, agent_name, status, archived, visibility, session_type, purpose,
+          origin_cron_id, parent_session_id, workspace_dir, title, created_at_ms, updated_at_ms,
+          error_code, error_message, project_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    for (const s of sessions) {
+      insert.run(
+        s.id, s.agentName ?? 'boss', s.status ?? 'idle', 0, 'visible', 'root', null,
+        null, null, s.workspaceDir ?? 'D:/projects/alpha', s.title ?? '值班会话',
+        s.createdAt ?? 1000, s.updatedAt ?? 1000, null, null, s.projectId ?? 1,
+      );
+    }
+  }
+
+  const messages = options.messages ?? [];
+  if (messages.length) {
+    const insert = db.prepare(
+      `INSERT INTO local_runtime_message_rows
+         (id, session_id, msg_id, role, turn_id, created_at_ms, data_json, source)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    messages.forEach((m, index) => {
+      insert.run(
+        index + 1, m.sessionId, `m-${index + 1}`, m.role ?? 'user', 'turn-1',
+        m.createdAt ?? 1000, JSON.stringify({ msg_content: m.text ?? 'hi' }), 'cron',
+      );
+    });
+  }
+
   db.close();
   return dbPath;
 }
