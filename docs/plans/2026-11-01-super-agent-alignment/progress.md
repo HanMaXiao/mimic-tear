@@ -3,9 +3,10 @@
 > 本计划的执行日志。每个任务追加一行（commit 引用 + 测试增量）；每个阶段收尾追加一个 `**Phase N closeout**` 块。
 > **测试增量是这里最重要的一行**——大老板靠它判断计划是否健康。
 
-**Status:** **4/7 个阶段已落地**（Phase 1 恢复路径 / Phase 2 事实层 / Phase 3 直通**能力** / Phase 3b 上下文组织）。
-基线 commit `ba7f6ec`。基线测试：**602 项全绿**；当前测试：**657 项全绿**（2026-11-01 实测）。
+**Status:** **5/7 个阶段已落地**（Phase 1 恢复路径 / Phase 2 事实层 / Phase 3 直通**能力** / Phase 3b 上下文组织 / Phase 4 产出收敛）。
+基线 commit `ba7f6ec`。基线测试：**602 项全绿**；当前测试：**681 项全绿**（2026-11-01 实测）。
 **G-05 从 Phase 3 拆到 Phase 3b**（上下文组织 ≠ 路由）→ 计划从六阶段变成**七阶段**。
+**线上实况**：大哥的结论账已归档 100 条（账本 0 条、归档 100 条、一条不丢）；大哥仍在 `resting`。
 
 **分支：** `feature/super-agent-alignment`（从 `main` 的 `ba7f6ec` 切出）。
 > **与 [`findings.md`](findings.md) F0.1 的一处偏差**：F0.1 写的是「Phase 1 开工时开一个独立 worktree」。实际做的是**在主工作树上切分支**——因为这一轮只有我一个写入者，独立 worktree 只会多出第二份仓库副本要同步，而计划文档本来就在主工作树里。**纪律本身（路径限定提交、共享 checkout 不扫全树）没有放松**：本计划至今每个提交都是 `git commit -F <msg> -- <paths>`。
@@ -306,9 +307,54 @@ triggers: 候选=2  筛掉=1（越权=1）  水位线=1793332029242
 
 ## Phase 4 — 产出收敛与低打扰
 
-- **状态：** pending
+- **状态：** **complete**（闸门 Gate 1.5 **待验收**——要等大老板让大哥上岗后真跑一轮）
 - **对应缺口：** G-11 ｜ **对应闸门：** Gate 1.5
-- **关键决策：** F4.1（语义上界）/ F4.2（归档不删）/ F4.3（≤100 词断言）
+- **关键决策：** F4.1（语义上界）/ F4.2（归档不删）/ F4.3（≤100 词断言）/ F4.4（提示词是同一个决定的两个副本）
+- **提交：** `92c508e` `feat(inbox): 收件箱四条纪律 —— 上界、同类合并、带宽、归档`（仓库侧 4.1~4.5）
+  + `159dfcd` `test(prompt): 把「两份文本要同步」变成机器可查的守卫`（4.6/4.7 + 守卫）
+- **文件：** 新增 `patrol-rules.mjs` / `tests/patrol-rules.test.mjs` / `tests/skill-dispatch.test.mjs` /
+  `.agents/notes/implemented/architecture/2026-11-01-inbox-discipline-four-rules.md`；
+  改 `patrol-store.mjs` / `patrol-cli.mjs` / `inbox-assembly.mjs` / `project-service.mjs` /
+  `skill-library.mjs` / `watchdog-alerts.mjs` / `api-routes.mjs` + 3 条既有测试
+- **测试增量：** 662 → **681** 全绿（+19）；守卫四道全绿
+- **仓库外改动：** `~/.minimax/agents/boss/state/cron-prompt-duty-canonical.txt` 与
+  `~/.minimax/agents/boss/skills/mimic-tear-boss/SKILL.md`（**不在 PR 里，CI 也测不到**）
+
+### Phase 4 收尾块
+
+**退出证据四条，逐条对上：**
+
+1. **收件箱有结构性上界** ✓ —— 桌面上的「需要你拍板」的结论数有可配置上界（`patrol-config.json`
+   的 `deskLimit`，默认 20，钳制在 1..500）。超界结论**仍进账本**、标 `onDesk: false`——
+   **结论必须留在 `patrol.json` 里**，因为大哥用 `alreadyReported` 去重，移出去它就会重复报同一件事。
+   运行时产生的收件箱项（问卷 / goal-paused / session-error / plan-blocked）**不受此约束**。
+2. **历史 93 条被归档且可查** ✓ —— **真实数据实测**：归档前账本 100 条（93 未确认），内容
+   sha256 `ebf118bc…`；`patrol-cli archive` 后账本 **0 条**、归档账 1 批 **100 条**，
+   **id 集合差集 0、内容 sha256 完全一致** → 100 = 0 + 100，**一条不丢**。
+   归档批次元数据可查（`facts.archive.total / reason / archivedBy`），已归档结论**仍进
+   `alreadyReported`**（大哥不会重复报同一件事）。
+3. **两份文本都改了且内容一致** ✓ —— **机器可查**：`scripts/check-boss-prompt.mjs` 断言两份都提到
+   `triggers.candidates` / `recall` / `delivered` / `threads`；少改一份就变红并点名缺哪条。
+   已接进 CI 作第五道守卫（CI 上没那两份文件 → SKIPPED + 退出 0，不制造假红）。
+4. **技能匹配被真实触发过至少一次** ✓ —— 走**真的** `ProjectService.dispatch`，指令命中
+   `mimic-tear-watchdog-heartbeat-verify`（score 8），`usageCount` **0 → 1**，派工记录带 `skillMatch`。
+   匹配次序也确定化了（去掉「最近用过」，否则同样输入会漂移）。
+
+**变异验证**：5 处逐个改坏 → 红 → 还原 → 绿（每轮用 SHA256 校验还原成功）。
+**测试增量**：662 → 681。
+
+**这一阶段的特殊风险，落到具体数字上（worker 的勘查，如实记下）：**
+
+- 线上旧结论里 **97 条正文超过 100 词**。新规则只作用**新入账**；大哥的提示词已改成简洁口径，
+  但**下一轮报告若仍超 100 词会被拒绝入账**——CLI 的 `rejected` 段会如实报出来，**不会静默丢**。
+  **所以「提示词已改」这件事必须在下一轮值班前真的生效。**
+- **合并键偏粗**：`项目:严重度`。同项目同严重度的不同结论会并成一条——值班结论与看板结论
+  同项目同严重度会互相覆盖内容。这是「一格一件事」的代价。
+- **线上账本现在是空的**（归档是 4.4 的验收动作），板面收件箱要等新结论才不空。
+- 看门狗板面正文可能被装短到 100 词内（完整原文仍在 `watchdog-alert.log`）。
+
+**这一阶段有一半产物在仓库外**（cron 提示词 + boss 技能），PR 里看不到、CI 测不到，
+验收只能靠真机。
 
 ## Phase 5 — 线视角的板面
 
@@ -333,12 +379,17 @@ triggers: 候选=2  筛掉=1（越权=1）  水位线=1793332029242
 ## 重启检查（下一个 session 的 5 个问题）
 
 1. **本计划落到几个阶段了？**
-   **4/7**（Phase 1、2、3、3b 均已落地；Phase 4 未开工）
+   **5/7**（Phase 1、2、3、3b、4 均已落地；Phase 5 未开工）
 2. **当前测试条数？**
-   **657/657 全绿**（基线 602；Phase 1 +17、Phase 2 +15、Phase 3 +12、Phase 3b +11）
+   **681/681 全绿**（基线 602；Phase 1 +17、Phase 2 +15、Phase 3 +12、Phase 3b +11、Phase 4 +19）
 3. **哪个阶段在进行？**
-   **无**（下一个是 **Phase 4 · 产出收敛与低打扰** —— 对应 G-11 + 改仓库外的两份提示词；再往后是 Phase 5 板面按线、Phase 6 韧性）
+   **无**（下一个是 **Phase 5 · 线视角的板面** —— 对应 G-01；再往后是 Phase 6 韧性）
 4. **分支与工作树状态？**
-   分支 `feature/super-agent-alignment`（主工作树上，未开独立 worktree）。提交：`bca89e9`（Phase 1）、`309dcd4`（Phase 2）、`5f711e7`（Phase 3）、`97fc7bc`（Phase 3b）。发布副本已同步（check-published 绿）。
+   分支 `feature/super-agent-alignment`（主工作树上，未开独立 worktree）。Phase 4 提交：`92c508e`（仓库侧）
+   + `159dfcd`（提示词契约守卫）。发布副本已同步（check-published 绿）。
 5. **基线规格 §4 的缺口台账与本文档还一致吗？**
-   一致。**G-10 / G-02 / G-03 / G-04 / G-05 已落地**；Gate 1、Gate 1.7、Gate 2、Gate 5 **都待验收**（都要等大老板让大哥上岗后的真实验证）。台账条目的状态更新与本文件同一次改动一起做。
+   一致。**G-10 / G-02 / G-03 / G-04 / G-05 / G-11 已落地**；Gate 1、Gate 1.7、Gate 2、Gate 5、Gate 1.5 **都待验收**（都要等大老板让大哥上岗后的真实验证）。台账条目的状态更新与本文件同一次改动一起做。
+6. **有一个必须盯着的风险（Phase 4 勘查出来的）**
+   线上旧结论里 **97 条正文超过 100 词**。新带宽规则只作用**新入账**；大哥的提示词已改成简洁口径，
+   但**下一轮值班报告若仍超 100 词会被拒绝入账**（CLI 的 `rejected` 段会如实报出来，不会静默丢）。
+   **「提示词已改」必须在大哥下一次上岗前真的生效。**
