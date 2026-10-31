@@ -32,7 +32,7 @@ jobs:
       - name: Run the test suite
         run: node --test
 
-      # 下面三步是「发布漂移 / 打包 / 风格」守卫，全部零第三方依赖，只用 Node 标准库。
+      # 下面四步是「发布漂移 / 打包 / 风格 / 决策记录」守卫，全部零第三方依赖，只用 Node 标准库。
       # 任何一步非零退出都会把 CI 标红——这是有意的：这些正是测试盖不到的缺口。
       - name: Check the published copy for drift
         # runner 上没有安装插件，这里会打印 SKIPPED 并以 0 退出，不会把 CI 变红。
@@ -43,3 +43,6 @@ jobs:
 
       - name: Check the shipped source for style violations
         run: node scripts/check-style.mjs
+
+      - name: Check the Agent Note tree for structure and format
+        run: node scripts/verify-agent-notes.mjs
