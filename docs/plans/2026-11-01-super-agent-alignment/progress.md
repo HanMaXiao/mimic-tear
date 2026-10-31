@@ -3,7 +3,9 @@
 > 本计划的执行日志。每个任务追加一行（commit 引用 + 测试增量）；每个阶段收尾追加一个 `**Phase N closeout**` 块。
 > **测试增量是这里最重要的一行**——大老板靠它判断计划是否健康。
 
-**Status:** **2/6 个阶段已落地**（Phase 1 · 让大哥能安全上岗；Phase 2 · 事实层）。基线 commit `ba7f6ec`（`chore: 作者署名统一为 HanMaXiao (#19)`）。基线测试：**602 项全绿**；当前测试：**634 项全绿**（2026-11-01 实测）。
+**Status:** **3/6 个阶段已落地**（Phase 1 恢复路径 / Phase 2 事实层 / Phase 3 直通**能力**）。
+基线 commit `ba7f6ec`。基线测试：**602 项全绿**；当前测试：**646 项全绿**（2026-11-01 实测）。
+**G-05 从 Phase 3 拆到 Phase 3b**（上下文组织 ≠ 路由）。
 
 **分支：** `feature/super-agent-alignment`（从 `main` 的 `ba7f6ec` 切出）。
 > **与 [`findings.md`](findings.md) F0.1 的一处偏差**：F0.1 写的是「Phase 1 开工时开一个独立 worktree」。实际做的是**在主工作树上切分支**——因为这一轮只有我一个写入者，独立 worktree 只会多出第二份仓库副本要同步，而计划文档本来就在主工作树里。**纪律本身（路径限定提交、共享 checkout 不扫全树）没有放松**：本计划至今每个提交都是 `git commit -F <msg> -- <paths>`。
@@ -217,9 +219,54 @@ triggers: 候选=2  筛掉=1（越权=1）  水位线=1793332029242
 
 ## Phase 3 — 直通：Thread 与订阅
 
-- **状态：** pending
-- **对应缺口：** G-04、G-05 ｜ **对应闸门：** Gate 2
-- **关键决策：** F3.1（线 = 项目）/ F3.2（复用 `session send`）/ F3.3（名单是结构性闸）
+- **状态：** **能力已落地，闸门 Gate 2 待验收**（还差一次真实的成功投递）
+- **对应缺口：** G-04（**G-05 拆到 Phase 3b**）｜ **对应闸门：** Gate 2
+- **关键决策：** F3.1（投递口 = `context.agent.run({sessionId})`）/ F3.2（归属落成订阅表）/ F3.3（已投出 ≠ 已执行）/ F3.4（默认关）/ F3.5（降级免费长出来）/ F3.6（字段名的自我修正）
+- **提交：** `5f711e7` `feat(direct): 直通投递 —— 事件直接进项目会话，不经过大哥`
+- **文件：** 新增 `thread.mjs` / `thread-subscriptions.mjs` / `direct-delivery.mjs` / `direct-delivery-runner.mjs` / `tests/thread.test.mjs`；改 `patrol-cli.mjs`（`thread` 命令 + 事实表带 `threads`）、`server.mjs`（板面定时器接上直通）
+- **测试增量：** 634 → **646** 全绿（+12）
+
+### Phase 3 收尾块
+
+**开工前先查清的一件事：node 侧能不能直接投递？** 这是整个阶段的地基，查错了后面全白做。三条候选路，逐一核实：
+
+| 候选 | 结论 | 依据 |
+| --- | --- | --- |
+| spawn `mavis session send` CLI | **不可用** | 实测 `mavis.cmd` 指向已删除的 `daemon/cli.js`，报 `Cannot find module` |
+| `context.agent.answer()` | **不可用** | 只能答**本 Mini App 拥有**的会话（主规格 §15.6） |
+| `context.agent.run({ sessionId, text })` | **可用** | 宿主官方文档（`app.asar` 里的 `miniapp-creator/references/client-api.md`）：「**Continuing a session keeps its Agent**」，示例传任意 `sessionId` |
+
+> 这条是**从宿主源码查出来的，不是猜的**。而且有个坑：文档里 `session_not_found` 那条限制是写给
+> **读侧**（`observe`/`sessions`/`session`）的——按读侧的结论去推写侧，会把唯一的路也一起否掉。
+
+**变异验证：6 个新检查逐个改坏，全部变红**（M1 越权闸 / M2 没有投递口也投 / M3 重复投递 / M4 失败也记账 / M5 投错会话 / M6 落空的投递口不拒绝）。
+
+> **这一轮踩了个自己的坑**：第一次跑变异时用 `git checkout --` 还原，而**新文件还没被 git 跟踪**——
+> 还原静默失败，M3 之后的失败数是累积的（2/3/3/4），**结果被污染**。而且 `git checkout` 对**已跟踪**的
+> `patrol-cli.mjs` 生效，把 Phase 3 的 CLI 改动整个抹掉了（`thread` 命令消失），是测试报「未知命令」
+> 才发现的。**教训：变异验证的还原手段必须先验证它能还原；先提交，再变异。**
+
+**一次自我修正（F3.6）**：写轮次模块时照着记忆把问卷主键字段从 `id` 改成 `requestId`——**改错了**。
+运行时存储层返回的就是 `id`（`id: row.request_id`），**CLI 那层才改名成 `requestId`**。结果是主体变成
+`undefined`。补了一条测试钉住它（「待答的问卷要成为候选事件，主键要接对」）。**这类错不会报错，只会静默产出错误的事件。**
+
+**闸门为什么还没过**：直通的投递口从宿主文档确认了，但**还没有一次真实的成功投递**。开关
+`directDelivery` 默认关，就是为了让这件事在真实验证之前**不产生任何行为**。验收需要：开一条订阅 →
+造一个事件 → 看到它出现在项目会话里（而不是大哥的上下文里）。
+
+**待办：**
+
+1. **Gate 2 待验收** —— 需要一次真实投递（见上）。
+2. **Phase 3b（G-05：上下文组织）**：Inline & Spill + 链式召回短程版。从 Phase 3 里拆出来，因为它是**上下文**的事，不是**路由**的事。
+3. **Phase 4 要改仓库外的两份文本** —— 大哥的 `cron-prompt-duty-canonical.txt` 与 `mimic-tear-boss` 技能。直通打开的前提就在这里（F3.4）。
+
+### 本轮发现的一个既有抖动（不在本次改动范围内）
+
+`tests/persistence.test.mjs` 的「并发写不同记录」在**全量**跑时偶发失败（5 次全量里 1 次），单跑该文件
+连续 3 次全绿。查过：`saveDispatch` 走的是带锁 + 自愈的 `updateJsonArray`（`LOCK_TIMEOUT_MS = 15_000`），
+**不是本次改动碰过的路径**。**判断：Windows 文件锁在并行负载下的既有抖动**，本次新增的测试文件让
+`node --test` 的并行负载变重，可能让它更容易露头。**没有掩盖，也没有顺手改**——它值得单独查一次，
+但不该混在这个阶段的提交里。
 
 ## Phase 4 — 产出收敛与低打扰
 
@@ -250,12 +297,12 @@ triggers: 候选=2  筛掉=1（越权=1）  水位线=1793332029242
 ## 重启检查（下一个 session 的 5 个问题）
 
 1. **本计划落到几个阶段了？**
-   **2/6**（Phase 1、Phase 2 均已收尾；Phase 3 未开工）
+   **3/6**（Phase 1、2、3 均已落地；Phase 3b 未开工）
 2. **当前测试条数？**
-   **634/634 全绿**（基线 602，Phase 1 +17、Phase 2 +15）
+   **646/646 全绿**（基线 602；Phase 1 +17、Phase 2 +15、Phase 3 +12）
 3. **哪个阶段在进行？**
-   **无**（下一个是 Phase 3 · 直通：Thread 与订阅 —— 对应 G-04、G-05；闸门 Gate 2）
+   **无**（下一个是 **Phase 3b · 上下文组织**：Inline & Spill + 链式召回短程版 —— 对应 G-05；再往后是 Phase 4 产出收敛）
 4. **分支与工作树状态？**
-   分支 `feature/super-agent-alignment`（主工作树上，未开独立 worktree）。提交：`bca89e9`（Phase 1 实现）、`309dcd4`（Phase 2 实现）。
+   分支 `feature/super-agent-alignment`（主工作树上，未开独立 worktree）。提交：`bca89e9`（Phase 1）、`309dcd4`（Phase 2）、`5f711e7`（Phase 3）。发布副本已同步（check-published 绿）。
 5. **基线规格 §4 的缺口台账与本文档还一致吗？**
-   一致。**G-10 已落地**（Phase 1，Gate 5 待验收）；**G-02 / G-03 已落地**（Phase 2，Gate 1 待验收）。台账条目的状态更新与本文件同一次改动一起做。
+   一致。**G-10 / G-02 / G-03 / G-04 已落地**；Gate 5、Gate 1、Gate 2 **都待验收**（都要等大老板让大哥上岗后的真实验证）。台账条目的状态更新与本文件同一次改动一起做。
