@@ -20,6 +20,7 @@
 :root {
   /* 版面 */
   --shell-rail: 264px;
+  --shell-rail-collapsed: 96px;
   --shell-max: 1440px;
 
   /* 间距刻度 */
@@ -102,10 +103,10 @@
   --mcode-hairline: inset 0 1px 0 rgb(255 255 255 / 70%);
 
   /* 纸面：暖的，夜里也不变 */
-  --mcode-paper: #f7f2e6;
-  --mcode-paper-border: #e1d9c5;
-  --mcode-paper-ink: #1f2429;
-  --mcode-paper-muted: #6c6555;
+  --mcode-paper: #f1e9d5;
+  --mcode-paper-border: #d9cdb0;
+  --mcode-paper-ink: #1a1f24;
+  --mcode-paper-muted: #5d5646;
   --mcode-rule: #e5e1d8;
   --mcode-skeleton: rgb(20 24 29 / 7%);
   --mcode-skeleton-sheen: rgb(20 24 29 / 13%);
@@ -138,10 +139,10 @@
   --mcode-shadow: var(--mcode-elev-3);
   --mcode-hairline: inset 0 1px 0 rgb(255 255 255 / 4%);
 
-  --mcode-paper: #17130c;
-  --mcode-paper-border: #2d2719;
-  --mcode-paper-ink: #ece5d4;
-  --mcode-paper-muted: #9b9280;
+  --mcode-paper: #120e07;
+  --mcode-paper-border: #262014;
+  --mcode-paper-ink: #f0e9d8;
+  --mcode-paper-muted: #8b826d;
   --mcode-rule: #1c232c;
   --mcode-skeleton: rgb(231 236 241 / 7%);
   --mcode-skeleton-sheen: rgb(231 236 241 / 13%);
@@ -175,10 +176,10 @@
     --mcode-shadow: var(--mcode-elev-3);
     --mcode-hairline: inset 0 1px 0 rgb(255 255 255 / 4%);
 
-    --mcode-paper: #17130c;
-    --mcode-paper-border: #2d2719;
-    --mcode-paper-ink: #ece5d4;
-    --mcode-paper-muted: #9b9280;
+    --mcode-paper: #120e07;
+    --mcode-paper-border: #262014;
+    --mcode-paper-ink: #f0e9d8;
+    --mcode-paper-muted: #8b826d;
     --mcode-rule: #1c232c;
     --mcode-skeleton: rgb(231 236 241 / 7%);
     --mcode-skeleton-sheen: rgb(231 236 241 / 13%);
@@ -365,28 +366,33 @@ main {
   gap: var(--mcode-space-6);
   min-width: 0;
   counter-reset: section;
-  animation: view-rise var(--mcode-dur-slow) var(--mcode-ease) both;
+  animation: view-rise var(--mcode-dur-slow) var(--mcode-ease) backwards;
 }
 
 .view[hidden] {
   display: none;
 }
 
+/*
+ * 入场只动 transform，不动 opacity。
+ *
+ * 这不是审美选择，是被坑出来的：**后台标签页里的 CSS 动画会被浏览器暂停**，
+ * 而 `opacity: 0` 的起手态一旦被暂停，内容就永远停在第一帧——面板没被聚焦时
+ * 整页是空的。位移被暂停最多差十来个像素，看得见；透明被暂停就什么都看不见了。
+ */
 @keyframes view-rise {
   from {
-    opacity: 0;
     transform: translateY(8px);
   }
 
   to {
-    opacity: 1;
     transform: none;
   }
 }
 
 /* 区块不是整块一起出现的：子项依次错开，像仪表逐格点亮。 */
 .view > * {
-  animation: section-rise var(--mcode-dur-slow) var(--mcode-ease) both;
+  animation: section-rise var(--mcode-dur-slow) var(--mcode-ease) backwards;
 }
 
 .view > *:nth-child(1) { animation-delay: 0ms; }
@@ -398,12 +404,10 @@ main {
 
 @keyframes section-rise {
   from {
-    opacity: 0;
     transform: translateY(10px);
   }
 
   to {
-    opacity: 1;
     transform: none;
   }
 }

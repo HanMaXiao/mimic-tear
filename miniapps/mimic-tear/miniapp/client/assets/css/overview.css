@@ -85,16 +85,16 @@
 /* 读数是大字：它是这一页唯一要抢注意力的东西。 */
 .kpi__value {
   font-family: var(--mcode-console);
-  font-size: clamp(32px, 2.8vw, 46px);
-  line-height: 1.08;
+  font-size: clamp(38px, 3.4vw, 58px);
+  line-height: 1.04;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
-  letter-spacing: -0.025em;
+  letter-spacing: -0.03em;
   margin-top: var(--mcode-space-1);
 }
 
 .kpi__foot {
-  margin-top: 5px;
+  margin-top: 6px;
   color: var(--mcode-text-subtle);
   font-size: 11px;
   line-height: 16px;
@@ -104,7 +104,7 @@
 .kpi__readout {
   display: flex;
   align-items: center;
-  min-height: 50px;
+  min-height: 58px;
   font-size: 15px;
 }
 

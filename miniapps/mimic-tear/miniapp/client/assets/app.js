@@ -32,6 +32,7 @@ import { restoreDispatch } from './views/dispatch.js';
 import { initLiveSessions, selectLiveSession, stopLiveSessions } from './runtime/live-sessions.js';
 import { initVoiceInput } from './runtime/voice-input.js';
 import { applyDeskMode, initDeskWindow, popOutToDesk, returnToPanel } from './runtime/desk-window.js';
+import { initRail } from './runtime/rail.js';
 
 /* ------------------------------------------------- 旧契约函数（必须留在本文件） */
 
@@ -190,6 +191,7 @@ connectStream();
 initLiveSessions();
 initVoiceInput();
 initDeskWindow();
+initRail();
 
 // The page goes away, the observer goes with it. A watch that outlives the page
 // keeps a timer alive and keeps a slot occupied on the Host side.

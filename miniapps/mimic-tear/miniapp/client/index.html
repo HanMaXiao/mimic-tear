@@ -19,9 +19,10 @@
   </head>
   <body>
     <a class="skip-link" href="#app-main">跳到主内容</a>
-    <div class="app-shell">
+    <div class="app-shell" id="app-shell">
       <aside class="app-sidebar">
-        <a class="app-sidebar__brand" href="#/chat">
+        <div class="app-sidebar__top">
+          <a class="app-sidebar__brand" href="#/chat">
           <span class="brand__seal">
             <svg
               class="drop drop--mark"
@@ -44,7 +45,18 @@
             <h1 class="app-sidebar__name">仿身泪滴</h1>
             <span class="app-sidebar__role">多智能体指挥部</span>
           </span>
-        </a>
+          </a>
+          <button
+            type="button"
+            class="rail-toggle"
+            id="rail-toggle"
+            aria-expanded="true"
+            aria-label="收起侧栏"
+            title="收起侧栏"
+          >
+            <span class="rail-toggle__icon" aria-hidden="true"></span>
+          </button>
+        </div>
 
         <nav class="app-sidebar__nav" aria-label="主导航">
           <a href="#/chat" data-nav="chat" aria-current="page">

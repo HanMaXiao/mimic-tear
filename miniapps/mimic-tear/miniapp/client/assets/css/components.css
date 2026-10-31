@@ -716,7 +716,7 @@ tbody td .btn:hover {
   background: var(--mcode-surface);
   box-shadow: var(--mcode-elev-3);
   font-size: 12.5px;
-  animation: toast-in var(--mcode-dur) var(--mcode-spring) both;
+  animation: toast-in var(--mcode-dur) var(--mcode-spring) backwards;
 }
 
 .toast--error {
@@ -724,14 +724,13 @@ tbody td .btn:hover {
   color: var(--mcode-danger);
 }
 
+/* 同理：入场只动位移，不动透明度——后台标签页的动画会被暂停。 */
 @keyframes toast-in {
   from {
-    opacity: 0;
     transform: translateY(10px) scale(0.98);
   }
 
   to {
-    opacity: 1;
     transform: none;
   }
 }

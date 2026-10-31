@@ -88,6 +88,16 @@
     gap: 10px;
   }
 
+  /* 窄屏上侧栏本来就是一条横条，没有「收起」可言——折叠开关在这里没有意义。 */
+  .rail-toggle {
+    display: none;
+  }
+
+  .app-sidebar__top {
+    margin-bottom: 0;
+    flex: none;
+  }
+
   .app-sidebar__nav {
     flex-direction: row;
     gap: 2px;
