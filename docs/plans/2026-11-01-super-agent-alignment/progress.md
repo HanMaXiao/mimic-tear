@@ -187,6 +187,28 @@ source: "resting"  coverable: false
 
 **变异验证里的一次失手（第二次了）**：M7（去掉决策项过滤）第一次**没被抓住**——因为体积断言太粗，去掉一个过滤器它照样能过。补了「管辖区外的项目名一个都不许出现」的精确断言后抓住。**粗断言抓不住细粒度的过滤**——这条已经记在项目的验证纪律里。
 
+### 发布与四层验收（2026-11-01 03:54）
+
+| 层 | 结论 | 证据 |
+| --- | --- | --- |
+| ① 仓库 ↔ 发布副本 | **一致** | `check-published.mjs`：无漂移；`trigger.mjs` 与 `trigger-source.mjs` 都在发布副本里 |
+| ② 运行时被替换 | **是** | `runId` `fa6a5cd5…` → `7d14c469…`，日志 `runtime.start_requested` → `runtime.ready` |
+| ③ 运行时加载发布副本 | **是** | `miniapp inspect` 的 `source: "local"`；发布副本与仓库逐字节相同 |
+| ④ 新代码真的在跑 | **是（且这一层比 Phase 1 更直接）** | Phase 2 改的是**大哥 cron 调用的 CLI**，不是板面运行时。所以「跑的是新代码」由**发布副本的 CLI 在真实数据上跑出新行为**直接证明（下面） |
+
+**产物级验证（真机 + 真数据 + 真调用，用发布副本那份 CLI）：**
+
+```
+scope=candidates  fullScopeRequested=False
+projects=1  decisions=5  recoverable=2
+excluded: projects=14 decisions=17 recoverable=4 goals=7 planTasks=9
+triggers: 候选=2  筛掉=1（越权=1）  水位线=1793332029242
+  - duty-wake / duty / 值班轮次醒来
+  - project-activity / Mimic Tear / 最近一次活动在 2026-10-31T19:43:51.629Z
+```
+
+**注意这一层与 Phase 1 的差别**：Phase 1 改的是**运行时**的模块图，所以要用「心跳在推进」间接证明；Phase 2 改的是**大哥 cron 调用的 CLI**，而 CLI 不进运行时——所以**直接跑发布副本那份 CLI 就能证明**，不需要间接推断。
+
 **待办：**
 
 1. **Gate 1 未验收** —— 验收要在大老板让大哥上岗后，真跑一轮，看 `triggers.candidates` 里的事件是不是「这一轮真的该管的事」。
