@@ -10,9 +10,12 @@
  * - **Worker** = 项目负责人会话（项目的根会话）
  * - **程序** = Mini App 的 Node 运行时（唯一持有 `context.agent` 的地方）
  *
- * 直通的投递口是 `context.agent.run({ sessionId, text })`——宿主自己的文档写着
- * 「Continuing a session keeps its Agent」，示例里传的就是任意 `sessionId`。所以**投递本身
- * 不需要经过大哥**：程序把事件写进项目会话，那个会话自己的 agent 接着干。
+ * 直通的投递口是 `context.agent.run({ sessionId, text })`。**但有一个硬约束**：
+ * 宿主的所有权闸规定 **Mini App 只能续自己拥有的会话**（`gateway.js` 的 `requireOwned`，
+ * `owner !== caller.pluginId` → `SESSION_NOT_FOUND`）。所以「负责会话」必须是 Mini App
+ * 自己建出来的那一个（`purpose = miniapp:<pluginId>`）——桌面端用户会话投不进去。
+ * 这条约束是 2026-11-01 上岗验收时真机撞出来的：原实现照着「示例里传的就是任意
+ * `sessionId`」那句话写，而那个前提是错的，直通路**从落地起就没跑通过**。
  *
  * ## 为什么归属要落成状态
  *
@@ -23,7 +26,8 @@
  *
  * ## 三条硬规则
  *
- * 1. **没有负责会话 = 没有投递口。** 订阅项必须带 `ownerSessionId`；没有就不投。
+ * 1. **没有订阅项 = 没有投递口。** 订阅项要么带一个**Mini App 拥有的**负责会话，
+ *    要么带 `ownerAgent`（让 Mini App 在第一次投递时建一个）；两样都没有就不投。
  * 2. **一条事件只投一次。** 投递过的 trigger id 记在订阅表里，不重复投。
  * 3. **越权闸。** 订阅只在**管辖名单内**的项目上成立；名单外的项目即使有订阅项也不投。
  */
@@ -35,6 +39,8 @@ import { TRIGGER_LABELS } from './trigger.mjs';
  *   projectId:number|string|null,
  *   projectName:string,
  *   ownerSessionId:string|null,
+ *   ownerAgent?:string|null,
+ *   projectPath?:string|null,
  *   since:number|null,
  *   reason:string,
  *   active:boolean,
@@ -45,6 +51,7 @@ import { TRIGGER_LABELS } from './trigger.mjs';
  * 造一条线。
  *
  * @param {{projectId?:number|string|null, projectName:string, ownerSessionId?:string|null,
+ *          ownerAgent?:string|null, projectPath?:string|null,
  *          since?:number|null, reason?:string, active?:boolean}} input
  * @returns {Thread}
  */
@@ -55,6 +62,10 @@ export function makeThread(input) {
     projectId: input?.projectId ?? null,
     projectName,
     ownerSessionId: input?.ownerSessionId ? String(input.ownerSessionId) : null,
+    // 没有会话就靠它：第一次投递时由 Mini App 建一个（方案 A）。
+    ownerAgent: input?.ownerAgent ? String(input.ownerAgent) : null,
+    // 负责 agent 要知道去哪儿干活——Mini App 建的会话不在项目目录里。
+    projectPath: input?.projectPath ? String(input.projectPath) : null,
     since: Number.isFinite(Number(input?.since)) ? Number(input.since) : null,
     reason: String(input?.reason ?? ''),
     active: input?.active !== false,
@@ -103,7 +114,9 @@ export function planDeliveries(input = {}) {
   const threadByProject = new Map();
   for (const thread of threads) {
     if (!thread || thread.active === false) continue;
-    if (!thread.ownerSessionId) continue;
+    // **两种投递口都算数**：现成的负责会话（必须是 Mini App 拥有的），
+    // 或者只记了 ownerAgent——第一次投递时由 Mini App 建出来。
+    if (!thread.ownerSessionId && !thread.ownerAgent) continue;
     threadByProject.set(thread.projectName, thread);
   }
 
@@ -143,6 +156,9 @@ export function renderDelivery(trigger, thread) {
   const lines = [
     `【${thread?.projectName ?? '未知项目'}】${label}（${at}）`,
   ];
+  // **项目绝对路径**必须写在消息里：Mini App 建的会话工作目录是 plugin 目录，
+  // 不是项目目录——负责 agent 不知道去哪儿干活（方案 A 的第三条）。
+  if (thread?.projectPath) lines.push(`项目目录：${thread.projectPath}`);
   if (trigger?.summary) lines.push(trigger.summary);
   if (trigger?.refs?.length) lines.push(`关联：${trigger.refs.join(' / ')}`);
   return lines.join('\n');

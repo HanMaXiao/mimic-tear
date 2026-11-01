@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { DatabaseSync } from 'node:sqlite';
 
 import { makeThread, planDeliveries, renderDelivery } from '../miniapps/mimic-tear/miniapp/node/thread.mjs';
 import { ThreadSubscriptions } from '../miniapps/mimic-tear/miniapp/node/thread-subscriptions.mjs';
@@ -226,9 +227,21 @@ test('CLI thread：开投递口要看得到，理由必填，会话必须真的�
     const dbPath = makeRuntimeDb(dir);
     const dataDir = join(dir, 'data');
 
+    // 仿身泪滴自己拥有的会话（`purpose = miniapp:mimic-tear`）——宿主只让 Mini App 续这种会话。
+    const owned = new DatabaseSync(dbPath);
+    owned.prepare(
+      `INSERT INTO local_runtime_sessions
+         (session_id, agent_name, status, archived, visibility, session_type, purpose,
+          parent_session_id, workspace_dir, title, created_at_ms, updated_at_ms,
+          error_code, error_message, project_id)
+       VALUES ('mvs-owned-alpha', 'mavis', 'idle', 0, 'visible', 'root', 'miniapp:mimic-tear',
+               NULL, 'D:/projects/alpha', '仿身泪滴自有会话', 100, 5000, NULL, NULL, 1)`,
+    ).run();
+    owned.close();
+
     // 没有理由 → 拒绝。
     assert.throws(
-      () => runCli(dbPath, dataDir, ['thread', 'add', 'alpha', 'sess-alpha-lead']),
+      () => runCli(dbPath, dataDir, ['thread', 'add', 'alpha', 'mvs-owned-alpha']),
       (error) => {
         assert.equal(error.status, 2);
         assert.match(String(error.stderr), /理由/);
@@ -246,11 +259,23 @@ test('CLI thread：开投递口要看得到，理由必填，会话必须真的�
       },
     );
 
+    // **桌面端用户会话 → 拒绝**（2026-11-01 上岗验收时真机撞出来的）：
+    // 宿主的所有权闸只放 Mini App 自己拥有的会话，订一条桌面端会话的投递口，
+    // 事件会一条都投不出去，而表上看着一切正常。
+    assert.throws(
+      () => runCli(dbPath, dataDir, ['thread', 'add', 'alpha', 'sess-alpha-lead', '大老板让大哥盯 alpha']),
+      (error) => {
+        assert.equal(error.status, 2);
+        assert.match(String(error.stderr), /自己拥有/);
+        return true;
+      },
+    );
+
     // 正常开。
-    const added = runCli(dbPath, dataDir, ['thread', 'add', 'alpha', 'sess-alpha-lead', '大老板让大哥盯 alpha']);
+    const added = runCli(dbPath, dataDir, ['thread', 'add', 'alpha', 'mvs-owned-alpha', '大老板让大哥盯 alpha']);
     assert.equal(added.ok, true);
     assert.equal(added.threads.length, 1);
-    assert.equal(added.threads[0].ownerSessionId, 'sess-alpha-lead');
+    assert.equal(added.threads[0].ownerSessionId, 'mvs-owned-alpha');
 
     // 事实表里要看得见这条线。
     const facts = runCli(dbPath, dataDir);

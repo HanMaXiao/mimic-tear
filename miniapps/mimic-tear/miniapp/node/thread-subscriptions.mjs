@@ -28,6 +28,7 @@ import { join } from 'node:path';
  *   projectName:string,
  *   projectId?:number|string|null,
  *   ownerSessionId:string|null,
+ *   ownerAgent?:string|null,
  *   reason:string,
  *   since:number,
  *   addedAt:number,
@@ -64,24 +65,37 @@ export class ThreadSubscriptions {
   /**
    * 给一条线开投递口。
    *
+   * **负责会话有两种取得方式**（宿主的所有权闸决定的）：
+   *
+   * 1. **现成的会话**（`ownerSessionId`）——但它必须是 **Mini App 自己拥有的**会话
+   *    （`purpose = miniapp:<pluginId>`）。桌面端用户会话不是，宿主会拒写。
+   * 2. **让 Mini App 建一个**（给 `ownerAgent`，会话留空）——第一次投递时建出来，
+   *    建完写回订阅表。这是方案 A 的落法。
+   *
+   * 两种都没有 = 没有投递口。
+   *
    * @param {string} projectName
-   * @param {string} ownerSessionId 负责会话；没有它就没有投递口
+   * @param {string|null} ownerSessionId 负责会话；`null` 表示「让 Mini App 建一个」
    * @param {string} reason 为什么
-   * @param {{projectId?:number|string|null}} [options]
+   * @param {{projectId?:number|string|null, ownerAgent?:string|null}} [options]
    * @returns {Promise<Subscription[]>}
    */
   async add(projectName, ownerSessionId, reason, options = {}) {
     const name = String(projectName ?? '').trim();
     const sessionId = String(ownerSessionId ?? '').trim();
+    const ownerAgent = String(options.ownerAgent ?? '').trim() || null;
     const why = String(reason ?? '').trim();
     if (!name) throw new Error('必须写明项目名');
-    if (!sessionId) throw new Error('必须写明负责会话——没有会话就没有投递口');
+    if (!sessionId && !ownerAgent) {
+      throw new Error('必须写明负责会话（或让 Mini App 自建：给 ownerAgent）——没有投递口就没有归属');
+    }
     if (!why) throw new Error(REASON_REQUIRED);
 
     const all = await this.list();
     const existing = all.find((entry) => entry.projectName === name);
     if (existing) {
-      existing.ownerSessionId = sessionId;
+      existing.ownerSessionId = sessionId || null;
+      if (ownerAgent) existing.ownerAgent = ownerAgent;
       existing.reason = why;
       existing.addedAt = Date.now();
       existing.active = true;
@@ -90,7 +104,8 @@ export class ThreadSubscriptions {
       all.push({
         projectName: name,
         projectId: options.projectId ?? null,
-        ownerSessionId: sessionId,
+        ownerSessionId: sessionId || null,
+        ownerAgent,
         reason: why,
         since: Date.now(),
         addedAt: Date.now(),
@@ -98,6 +113,29 @@ export class ThreadSubscriptions {
         delivered: [],
       });
     }
+    await this.#write(all);
+    return all;
+  }
+
+  /**
+   * 记下这条线的负责会话是哪一个。
+   *
+   * **只有真正建出来的那一次才写。** 投递失败不写——写一个查不到的 sessionId 进去，
+   * 下一轮就会拿着它去续一个不存在的会话。
+   *
+   * @param {string} projectName
+   * @param {string} sessionId Mini App 自己拥有的那个会话
+   * @returns {Promise<Subscription[]>}
+   */
+  async setOwnerSession(projectName, sessionId) {
+    const name = String(projectName ?? '').trim();
+    const id = String(sessionId ?? '').trim();
+    if (!name || !id) return this.list();
+    const all = await this.list();
+    const entry = all.find((item) => item.projectName === name);
+    if (!entry) return all;
+    entry.ownerSessionId = id;
+    entry.updatedAt = Date.now();
     await this.#write(all);
     return all;
   }

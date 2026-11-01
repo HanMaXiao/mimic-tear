@@ -36,6 +36,7 @@ import { DutyIntent } from './duty-intent.mjs';
 import { selectTriggers } from './trigger.mjs';
 import { detectTriggers, TRIGGER_WHITELIST } from './trigger-source.mjs';
 import { ThreadSubscriptions } from './thread-subscriptions.mjs';
+import { isMiniAppOwnedSession } from './direct-delivery.mjs';
 import { DUTY_CRON_SEED, readDutyChain } from './duty-chain.mjs';
 import { applySpill, buildFactRefGraph } from './recall.mjs';
 import { resolveCardState } from './questionnaire-rules.mjs';
@@ -67,7 +68,7 @@ const dbPath = resolve(flag('db', process.env.MIMIC_RUNTIME_DB
 /** Flags that take a value; the value must not be mistaken for a positional argument. */
 const VALUE_FLAGS = new Set([
   '--data-dir', '--db', '--file', '--scope',
-  '--answer', '--rationale', '--session-id', '--option-id',
+  '--answer', '--rationale', '--session-id', '--option-id', '--agent',
 ]);
 
 /**
@@ -308,6 +309,15 @@ if (command === 'thread') {
       if (!target) {
         throw new Error(`没有这个会话：${ownerSessionId}。这条订阅会落空——事件投不出去。`);
       }
+      // **而且它必须是 Mini App 自己的会话**：宿主的所有权闸只放 Mini App 自己拥有的会话
+      // （`purpose = miniapp:mimic-tear`）。桌面端用户会话投不进去——订上一条这样的记录，
+      // 事件会一条都投不出去，而表上看着一切正常（2026-11-01 上岗验收时真机撞出来的）。
+      if (!isMiniAppOwnedSession(target)) {
+        throw new Error(
+          `会话 ${ownerSessionId} 不是仿身泪滴自己拥有的（purpose=${target.purpose ?? 'null'}）——`
+          + '宿主不会让 Mini App 续它，事件投不出去。改用 `thread own <项目名> "<理由>"` 让它自己建一个。',
+        );
+      }
       const project = store.listProjects().find((p) => projectName(p.workspaceDir) === name);
       const list = await subscriptions.add(name, ownerSessionId, reason, {
         projectId: project?.id ?? null,
@@ -317,6 +327,34 @@ if (command === 'thread') {
         thread: name,
         ownerSessionId,
         sessionTitle: target.title ?? null,
+        threads: list,
+      });
+    } else if (action === 'own') {
+      // 让这条线改由 **Mini App 自己建的负责会话** 承接（方案 A）。
+      //
+      // 为什么需要它：宿主的所有权闸只放 Mini App 自己拥有的会话，而原来那条线的负责会话
+      // 是桌面端用户会话 → 事件一条都投不出去。订阅项记下 `ownerAgent`，**第一次投递时**
+      // 由 Mini App 建出会话（第一次就把事件投进去），建完写回订阅表。
+      const name = positionalArgs()[2] ?? '';
+      const reason = positionalArgs().slice(3).join(' ').trim();
+      const ownerAgent = String(flag('agent', 'mavis')).trim() || 'mavis';
+      if (!reason) throw new Error('用法：thread own <项目名> "<理由>" [--agent <负责agent名>]');
+      const project = store.listProjects().find((p) => projectName(p.workspaceDir) === name);
+      if (!project) {
+        const known = [...new Set(store.listProjects().map((p) => projectName(p.workspaceDir)))];
+        throw new Error(`没有叫「${name}」的项目。现有项目：${known.join(' / ')}`);
+      }
+      const list = await subscriptions.add(name, null, reason, {
+        projectId: project.id,
+        ownerAgent,
+      });
+      print({
+        ok: true,
+        thread: name,
+        ownerSessionId: null,
+        ownerAgent,
+        projectId: project.id,
+        note: '第一次投递时由仿身泪滴建出负责会话，建完写回订阅表——事件不再经过大哥，也不经过桌面端会话。',
         threads: list,
       });
     } else if (action === 'remove') {
@@ -333,7 +371,7 @@ if (command === 'thread') {
         warning: onList ? null : `订阅表里没有「${name}」，什么都没变——核对项目名是否逐字一致`,
       });
     } else {
-      process.stderr.write('用法：thread list | thread add <项目名> <会话id> "<理由>" | thread remove <项目名> "<理由>"\n');
+      process.stderr.write('用法：thread list | thread add <项目名> <会话id> "<理由>" | thread own <项目名> "<理由>" [--agent <名字>] | thread remove <项目名> "<理由>"\n');
       store.close();
       process.exit(2);
     }
@@ -784,6 +822,13 @@ if (command === 'facts') {
       projectName: entry.projectName,
       projectId: entry.projectId ?? null,
       ownerSessionId: entry.ownerSessionId ?? null,
+      // 没有会话就靠 ownerAgent：第一次投递时由仿身泪滴建一个。
+      ownerAgent: entry.ownerAgent ?? null,
+      // **负责会话是不是仿身泪滴自己拥有的**：不是的话宿主不让我们续它，
+      // 事件一条都投不出去（方案 A）。`null` = 还没建出来。
+      owned: entry.ownerSessionId
+        ? isMiniAppOwnedSession(sessionById.get(entry.ownerSessionId))
+        : null,
       active: entry.active !== false,
       deliveredCount: (entry.delivered ?? []).length,
       reason: entry.reason ?? '',

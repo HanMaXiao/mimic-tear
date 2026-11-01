@@ -98,6 +98,10 @@ export async function planRound(input) {
     projectId: entry.projectId ?? null,
     projectName: entry.projectName,
     ownerSessionId: entry.ownerSessionId ?? null,
+    // 没有会话就靠它：第一次投递时由 Mini App 建一个（方案 A）。
+    ownerAgent: entry.ownerAgent ?? null,
+    // 消息里要带项目绝对路径——Mini App 建的会话不在项目目录里。
+    projectPath: projectById.get(entry.projectId ?? -1)?.workspaceDir ?? null,
     since: entry.since ?? null,
     reason: entry.reason ?? '',
     active: entry.active !== false,
