@@ -10,6 +10,7 @@ import { PatrolStore } from '../miniapps/mimic-tear/miniapp/node/patrol-store.mj
 import { RuntimeStore } from '../miniapps/mimic-tear/miniapp/node/runtime-store.mjs';
 import { ThreadSubscriptions } from '../miniapps/mimic-tear/miniapp/node/thread-subscriptions.mjs';
 import { planRound, runRound } from '../miniapps/mimic-tear/miniapp/node/direct-delivery-runner.mjs';
+import { createSingleFlight } from '../miniapps/mimic-tear/miniapp/node/single-flight.mjs';
 import { makeRuntimeDb, tmpDir, cleanupDir } from './helpers/fixture.mjs';
 
 const CLI = fileURLToPath(new URL('../miniapps/mimic-tear/miniapp/node/patrol-cli.mjs', import.meta.url));
@@ -32,15 +33,20 @@ const CLI = fileURLToPath(new URL('../miniapps/mimic-tear/miniapp/node/patrol-cl
 /**
  * 一个记录调用的假宿主 agent。
  *
- * @param {{sessionId?:string, status?:string, fail?:boolean}} [options]
- * @returns {{run:Function, calls:any[]}}
+ * @param {{sessionId?:string, status?:string, fail?:boolean, failCreate?:boolean}} [options]
+ * @returns {{run:Function, create:Function, calls:any[]}}
  */
 function fakeAgent(options = {}) {
   const calls = [];
   return {
     calls,
+    async create(input) {
+      calls.push({ op: 'create', ...input });
+      if (options.failCreate) throw new Error('create failed');
+      return { sessionId: options.sessionId ?? 'mvs-owned-created' };
+    },
     async run(input) {
-      calls.push(input);
+      calls.push({ op: 'run', ...input });
       if (options.fail) throw new Error('SESSION_NOT_FOUND');
       return {
         sessionId: options.sessionId ?? 'mvs-owned-created',
@@ -214,11 +220,13 @@ test('第一次投递就把事件投进去，并建出会话写回订阅表', as
     store = RuntimeStore.open(makeRuntimeDb(dir));
     const { outcome } = await runRound({ store, patrol, managed, subscriptions, agent });
 
-    assert.ok(agent.calls.length >= 1, '应该调过宿主');
-    const call = agent.calls[0];
-    assert.equal(call.sessionId, undefined, '没有负责会话时不能传 sessionId——那是桌面端会话，宿主会拒');
-    assert.equal(call.agent, 'mavis', '建会话要指名负责 agent');
-    assert.ok(String(call.text).length > 0, '第一次就把事件投进去，不建空会话');
+    assert.ok(agent.calls.length >= 2, '应该先建会话、再投递');
+    assert.equal(agent.calls[0].op, 'create', '第一步是建会话——`create` 不跑轮次，立刻就拿到 id');
+    assert.equal(agent.calls[0].agent, 'mavis', '建会话要指名负责 agent');
+    assert.equal(agent.calls[1].op, 'run');
+    assert.equal(agent.calls[1].sessionId, 'mvs-owned-created', '投递要续刚建出来的那个会话');
+    assert.equal(agent.calls[1].agent, undefined, '续会话不传 agent——宿主会判 INVALID_ARGUMENTS');
+    assert.ok(String(agent.calls[1].text).length > 0, '第一次就把事件投进去，不建空会话');
 
     assert.equal(outcome.delivered >= 1, true, '这些事件算投出去了');
     const entry = (await subscriptions.list()).find((item) => item.projectName === 'alpha');
@@ -250,6 +258,7 @@ test('已有负责会话时续它，不新建', async () => {
     await runRound({ store, patrol, managed, subscriptions, agent });
 
     assert.ok(agent.calls.length >= 1);
+    assert.equal(agent.calls[0].op, 'run', '有会话就续它，不建新的');
     assert.equal(agent.calls[0].sessionId, 'mvs-alpha-owner', '有会话就续它');
     assert.equal(agent.calls[0].agent, undefined, '有会话时不传 agent——续跑保持原 agent');
   } finally {
@@ -277,7 +286,7 @@ test('投递文本要带项目绝对路径 —— Mini App 建的会话不在项
     store = RuntimeStore.open(makeRuntimeDb(dir));
     await runRound({ store, patrol, managed, subscriptions, agent });
 
-    const text = String(agent.calls[0].text);
+    const text = String(agent.calls.find((call) => call.op === 'run').text);
     assert.ok(
       text.includes('D:/projects/alpha') || text.includes('D:\\projects\\alpha'),
       `消息里必须有项目的绝对路径（实际：${text}）——负责 agent 不知道去哪儿干活`,
@@ -311,11 +320,71 @@ test('投递失败不记账：事件下一轮还会被计划到', async () => {
     assert.ok(outcome.failed >= 1, '失败的要算失败');
     const entry = (await subscriptions.list()).find((item) => item.projectName === 'alpha');
     assert.equal(entry.delivered.length, 0, '失败的不记账——事件还在，下一轮还会被计划到');
-    assert.equal(entry.ownerSessionId, null, '建会话失败也不写回一个假的 sessionId');
+    assert.equal(
+      entry.ownerSessionId,
+      'mvs-owned-created',
+      '会话建出来了就续它——重试不该再建一个（那才是「一个项目两个负责人」）',
+    );
   } finally {
     store?.close();
     cleanupDir(dir);
   }
+});
+
+test('建会话失败：既不写会话也不记账', async () => {
+  const dir = tmpDir();
+  let store = null;
+  try {
+    const dataDir = join(dir, 'data');
+    const managed = new ManagedProjects(dataDir);
+    const subscriptions = new ThreadSubscriptions(dataDir);
+    const patrol = new PatrolStore(dataDir);
+
+    await managed.add('alpha', '大老板点名要盯这个');
+    await subscriptions.add('alpha', null, '大老板拍板：这条线改由 Mini App 自建负责会话', {
+      projectId: 1,
+      ownerAgent: 'mavis',
+    });
+
+    const agent = fakeAgent({ failCreate: true });
+    store = RuntimeStore.open(makeRuntimeDb(dir));
+    const { outcome } = await runRound({ store, patrol, managed, subscriptions, agent });
+
+    assert.equal(outcome.delivered, 0);
+    assert.equal(agent.calls.filter((call) => call.op === 'run').length, 0, '会话没建出来就不该投递');
+    const entry = (await subscriptions.list()).find((item) => item.projectName === 'alpha');
+    assert.equal(entry.ownerSessionId, null, '没建出话就不能写回一个假的 sessionId');
+    assert.equal(entry.delivered.length, 0);
+  } finally {
+    store?.close();
+    cleanupDir(dir);
+  }
+});
+
+test('投递轮次不许重叠：上一轮没跑完，下一轮被跳过', async () => {
+  // 投递要等负责 agent 那一轮跑完（可能好几分钟），而循环每 30 秒跳一次。
+  // 重叠起来：同一个事件被投两次、还建出两个负责会话（2026-11-01 真机撞出来的）。
+  const flight = createSingleFlight();
+  let release = () => {};
+  const gate = new Promise((resolve) => { release = resolve; });
+
+  const first = flight.run(async () => {
+    await gate;
+    return '第一轮';
+  });
+  assert.equal(flight.busy, true, '第一轮在跑');
+
+  const second = await flight.run(async () => '第二轮');
+  assert.equal(second.skipped, true, '上一轮没跑完，这一轮必须跳过');
+  assert.equal(second.value, null);
+
+  release();
+  assert.equal((await first).value, '第一轮');
+  assert.equal(flight.busy, false, '跑完之后要能再跑下一轮');
+
+  const third = await flight.run(async () => '第三轮');
+  assert.equal(third.skipped, false, '空闲时照常跑');
+  assert.equal(third.value, '第三轮');
 });
 
 test('越权闸仍然有效：名单外的项目一条都投不出去', async () => {

@@ -6,6 +6,7 @@ import { dutyAnnouncementNeeded } from './duty-announce.mjs';
 import { chatHistoryChanged } from './chat-history.mjs';
 import { ROUTES, matchRoute } from './api-routes.mjs';
 import { withSecurityHeaders } from './security.mjs';
+import { createSingleFlight } from './single-flight.mjs';
 
 /**
  * The Mini App's HTTP surface: a small REST API plus one SSE stream, and the static Client.
@@ -417,6 +418,8 @@ export async function start(context) {
   // process, so a duty round is invisible to the runtime revision this loop watches; without
   // this the conversation would only show the rounds that happened before it was opened.
   let lastDutyRunAt = null;
+  // 直通的投递轮次：**一次只跑一个**（见 `single-flight.mjs` 的理由）。
+  const directDelivery = createSingleFlight();
   const patrolTimer = setInterval(() => {
     void (async () => {
       try {
@@ -435,22 +438,30 @@ export async function start(context) {
         //
         // 它放在板面自己巡检的早退**之前**：板面巡检和大哥值班是两件事，不该互相绑架。
         if (config.directDelivery) {
-          const { runRound } = await import('./direct-delivery-runner.mjs');
-          const { ManagedProjects } = await import('./managed-projects.mjs');
-          const { ThreadSubscriptions } = await import('./thread-subscriptions.mjs');
-          const direct = await runRound({
-            store,
-            patrol,
-            managed: new ManagedProjects(context.dataDir),
-            subscriptions: new ThreadSubscriptions(context.dataDir),
-            agent: context.agent ?? null,
+          // **轮次不许重叠**：投递要等负责 agent 那一轮跑完（可能好几分钟），
+          // 而这个循环每 30 秒跳一次——重叠起来同一个事件会被投两次、还会建出两个
+          // 负责会话（2026-11-01 方案 A 真机验收时真机撞出来的）。
+          const direct = await directDelivery.run(async () => {
+            const { runRound } = await import('./direct-delivery-runner.mjs');
+            const { ManagedProjects } = await import('./managed-projects.mjs');
+            const { ThreadSubscriptions } = await import('./thread-subscriptions.mjs');
+            return runRound({
+              store,
+              patrol,
+              managed: new ManagedProjects(context.dataDir),
+              subscriptions: new ThreadSubscriptions(context.dataDir),
+              agent: context.agent ?? null,
+            });
           });
-          context.logger.info('mimic-tear.direct.delivered', {
-            attempted: direct.outcome.attempted,
-            delivered: direct.outcome.delivered,
-            queued: direct.outcome.queued,
-            failed: direct.outcome.failed,
-          });
+          if (!direct.skipped) {
+            const outcome = direct.value?.outcome ?? {};
+            context.logger.info('mimic-tear.direct.delivered', {
+              attempted: outcome.attempted,
+              delivered: outcome.delivered,
+              queued: outcome.queued,
+              failed: outcome.failed,
+            });
+          }
         }
 
         // Cheap early-outs before the (expensive) snapshot.

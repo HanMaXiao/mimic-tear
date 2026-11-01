@@ -50,18 +50,26 @@ export function isMiniAppOwnedSession(session, pluginId = 'mimic-tear') {
 /**
  * 把一条消息投进一个会话。
  *
- * **没有负责会话时，Mini App 建一个**（方案 A）：`agent.run({ text, agent })` 建出来的
- * 会话是 Mini App **自己拥有**的，宿主才肯续它——桌面端用户会话会被所有权闸拒掉
- * （`SESSION_NOT_FOUND`）。**第一次就把事件投进去**，不建空会话。
+ * **没有负责会话时，先建一个，再投递**（方案 A）：
+ *
+ * - `agent.create({ agent })` **不跑轮次**，立刻返回 `{ sessionId }`。建出来的会话是 Mini App
+ *   **自己拥有**的，宿主才肯续它——桌面端用户会话会被所有权闸拒掉（`SESSION_NOT_FOUND`）。
+ * - 会话 id **立刻**写回订阅表：下一轮、以及任何一次重试，都续**这一个**会话，不再建新的。
+ * - 然后 `agent.run({ sessionId, text })` 把事件投进去（**第一次就把事件投进去**，不建空会话）。
+ *
+ * **为什么不能「一次 run 建会话 + 投递」**：那一轮要等负责 agent 跑完（可能好几分钟），
+ * 而投递循环每 30 秒一跳——重叠起来，同一个事件会被投两次、建出两个会话
+ * （2026-11-01 方案 A 真机验收时真机撞出来的）。
  *
  * @param {{agent:any, sessionId?:string, ownerAgent?:string, text:string,
- *          whenBusy?:'queue'|'steer', onEvent?:Function}} input
+ *          whenBusy?:'queue'|'steer', onEvent?:Function,
+ *          onSessionCreated?:(sessionId:string)=>Promise<void>|void}} input
  * @returns {Promise<{delivered:boolean, accepted:boolean, reason:string, error:string|null,
  *                    status:string|null, sessionId:string}>}
  */
 export async function deliverToSession(input) {
   const agent = input?.agent;
-  const sessionId = String(input?.sessionId ?? '').trim();
+  let sessionId = String(input?.sessionId ?? '').trim();
   const ownerAgent = String(input?.ownerAgent ?? '').trim();
   const text = String(input?.text ?? '').trim();
   const none = (reason, error = null, status = null) => ({
@@ -72,32 +80,33 @@ export async function deliverToSession(input) {
   if (!agent || typeof agent.run !== 'function') return none('no_agent');
 
   try {
-    const result = sessionId
-      ? await agent.run(
-        { sessionId, text, whenBusy: input?.whenBusy ?? 'queue' },
-        { onEvent: input?.onEvent },
-      )
-      // 建一个新会话：**不传 sessionId**，传 agent 名。宿主建出来的会话归这个 Mini App 所有。
-      : await agent.run(
-        { text, agent: ownerAgent },
-        { onEvent: input?.onEvent },
-      );
+    if (!sessionId) {
+      // 建一个负责会话。**没有它，投递无处可去。**
+      if (typeof agent.create !== 'function') return none('no_create');
+      const created = await agent.create({ agent: ownerAgent });
+      sessionId = String(created?.sessionId ?? '').trim();
+      if (!sessionId) return none('no_session');
+      // 写回订阅表——重试也续它，不再建新的。
+      await input?.onSessionCreated?.(sessionId);
+    }
+    const result = await agent.run(
+      { sessionId, text, whenBusy: input?.whenBusy ?? 'queue' },
+      { onEvent: input?.onEvent },
+    );
     const status = result?.status ?? 'unknown';
-    // 建出来的那一个要告诉调用方——下一轮才知道往哪儿续。
-    const created = sessionId ? '' : String(result?.sessionId ?? '').trim();
     if (status === 'finished') {
-      return { delivered: true, accepted: true, reason: 'finished', error: null, status, sessionId: created };
+      return { delivered: true, accepted: true, reason: 'finished', error: null, status, sessionId };
     }
     if (status === 'queued') {
       // 已排队，会执行。**已投出**，但这一轮还没跑。
-      return { delivered: false, accepted: true, reason: 'queued', error: null, status, sessionId: created };
+      return { delivered: false, accepted: true, reason: 'queued', error: null, status, sessionId };
     }
     if (status === 'steered') {
       // 被正在跑的轮次读进去了——它执行了。
-      return { delivered: true, accepted: true, reason: 'steered', error: null, status, sessionId: created };
+      return { delivered: true, accepted: true, reason: 'steered', error: null, status, sessionId };
     }
     if (status === 'aborted') {
-      return { delivered: false, accepted: false, reason: 'aborted', error: null, status, sessionId: '' };
+      return { delivered: false, accepted: false, reason: 'aborted', error: null, status, sessionId };
     }
     return {
       delivered: false,
@@ -105,7 +114,7 @@ export async function deliverToSession(input) {
       reason: 'unexpected_status',
       error: result?.error?.message ?? null,
       status,
-      sessionId: '',
+      sessionId,
     };
   } catch (error) {
     return {
@@ -145,22 +154,18 @@ export async function deliverToThreads(input) {
       text: delivery?.text ?? '',
       whenBusy: input?.whenBusy,
       onEvent: input?.onEvent,
+      // 建出来的负责会话**立刻**写回订阅表：下一轮、以及任何一次重试，都续它。
+      // 写回失败不能当成投递失败（事件可能已经进去了），但要如实记下来。
+      onSessionCreated: async (sessionId) => {
+        if (typeof input?.subscriptions?.setOwnerSession !== 'function') return;
+        await input.subscriptions.setOwnerSession(delivery?.thread?.projectName ?? '', sessionId);
+      },
     });
-    // 建出来的负责会话要**写回订阅表**——下一轮才知道往哪儿续。
-    // 写回失败不能当成投递失败（事件已经进去了），但要如实记下来。
-    let writeBackError = null;
-    if (outcome.sessionId && typeof input?.subscriptions?.setOwnerSession === 'function') {
-      try {
-        await input.subscriptions.setOwnerSession(delivery?.thread?.projectName ?? '', outcome.sessionId);
-      } catch (error) {
-        writeBackError = error?.message ?? String(error);
-      }
-    }
     results.push({
       triggerId: delivery?.trigger?.id ?? '',
       projectName: delivery?.thread?.projectName ?? '',
       reason: outcome.reason,
-      error: outcome.error ?? writeBackError,
+      error: outcome.error,
       sessionId: outcome.sessionId,
     });
     // 只有「投出去了」才记账。失败的不记 —— 事件还在，下一轮还会被计划到。
