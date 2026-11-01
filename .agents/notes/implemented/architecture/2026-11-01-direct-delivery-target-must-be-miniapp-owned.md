@@ -109,6 +109,13 @@ Mini App 的会话挂到某个 chat 下的。但 Node 侧的 `caller.hostSession
 
 ## 验证
 
+**判据**（2026-11-01 15:00 由那个被投递事件叫起来的平行负责会话提出，实测口径更硬）：
+
+1. **连续窗口内新建的仿身泪滴自有会话数 = 0**（复用优先，不是每次新建）。
+2. **订阅表 `ownerSessionId` 非 null**，且那个会话归属 `mimic-tear`（`purpose=miniapp:mimic-tear`）。
+3. **`delivered > 0`，且被投过的事件不再出现在下一轮的待投列表里**。
+4. **大哥会话那一轮的 turn 数不变**（不经 Router）。
+
 - **真机端到端**（2026-11-01 14:47–14:50）：一条真实事件（`project-activity`）被投进仿身泪滴
   自己拥有的会话 `mvs_52ff916e…`（`purpose=miniapp:mimic-tear`、agent `mavis`、工作目录是
   plugin 目录）；**运行时库出现该会话的新消息行**（`source='miniapp'`）；**大哥那一轮的消息数
