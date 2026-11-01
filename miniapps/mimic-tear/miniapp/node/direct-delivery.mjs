@@ -145,32 +145,40 @@ export async function deliverToThreads(input) {
   const results = [];
   /** @type {Map<string,string[]>} */
   const handedOff = new Map();
+  /** @type {Map<string,string>} 这一轮建出来的负责会话——同一线的第二条事件要续第一个。 */
+  const sessionByProject = new Map();
 
   for (const delivery of deliveries) {
+    const projectName = delivery?.thread?.projectName ?? '';
+    // 计划是在写回之前算的：这一轮的第二条事件看到的还是「没有负责会话」。
+    // 不接住它，它就会**再建一个会话**——同一个项目两个负责人（2026-11-01 真机实测）。
+    const known = sessionByProject.get(projectName);
+    const sessionId = delivery?.thread?.ownerSessionId || known || '';
     const outcome = await deliverToSession({
       agent: input?.agent,
-      sessionId: delivery?.thread?.ownerSessionId ?? '',
+      sessionId,
       ownerAgent: delivery?.thread?.ownerAgent ?? '',
       text: delivery?.text ?? '',
       whenBusy: input?.whenBusy,
       onEvent: input?.onEvent,
       // 建出来的负责会话**立刻**写回订阅表：下一轮、以及任何一次重试，都续它。
       // 写回失败不能当成投递失败（事件可能已经进去了），但要如实记下来。
-      onSessionCreated: async (sessionId) => {
-        if (typeof input?.subscriptions?.setOwnerSession !== 'function') return;
-        await input.subscriptions.setOwnerSession(delivery?.thread?.projectName ?? '', sessionId);
+      onSessionCreated: async (created) => {
+        sessionByProject.set(projectName, created);
+        if (typeof input?.subscriptions?.setOwnerSession === 'function') {
+          await input.subscriptions.setOwnerSession(projectName, created);
+        }
       },
     });
     results.push({
       triggerId: delivery?.trigger?.id ?? '',
-      projectName: delivery?.thread?.projectName ?? '',
+      projectName,
       reason: outcome.reason,
       error: outcome.error,
       sessionId: outcome.sessionId,
     });
     // 只有「投出去了」才记账。失败的不记 —— 事件还在，下一轮还会被计划到。
     if (outcome.accepted) {
-      const projectName = delivery?.thread?.projectName ?? '';
       handedOff.set(projectName, [...(handedOff.get(projectName) ?? []), delivery?.trigger?.id ?? '']);
     }
   }
