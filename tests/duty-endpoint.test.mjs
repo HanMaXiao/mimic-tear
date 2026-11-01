@@ -97,7 +97,12 @@ test('值班意图的写入通道', async (t) => {
       const payload = await back.json();
       assert.equal(payload.intent.mode, 'on-duty');
       assert.equal(payload.duty.resting, false);
-      assert.equal(payload.duty.alertable, payload.duty.stale, '在岗时告警口径回到事实');
+      // 告警口径：不是 resting 压住的了，但**刚切回在岗、第一轮还没跑**——那是上岗宽限期，
+      // 不是掉线（2026-11-01 上岗实测：12:12 上岗、12:13 就报了「大哥掉线」）。
+      // 事实照亮：交班戳确实还是旧的。
+      assert.equal(payload.duty.inDutyGrace, true, '刚切回在岗，处于宽限期');
+      assert.equal(payload.duty.alertable, false, '宽限期内不报掉线');
+      assert.equal(payload.duty.stale, true, '但事实照亮——交班戳确实旧');
     } finally {
       await server.close();
       cleanupDir(dir);

@@ -36,12 +36,26 @@ test('watchdog 认歇着', async (t) => {
     );
     const state = applySuccess(emptyWatchdogState(), 'none', resting, NOW);
 
+    // 上岗**超过一个周期**仍然没交班 → 报。刚切回的那一刻不报（那是宽限期，见下一条）。
+    const awake = evaluateDuty(
+      { dutyIntervalMinutes: 30, lastRunAt: NOW - 60 * MINUTE },
+      NOW,
+      { mode: 'on-duty', since: NOW - 31 * MINUTE },
+    );
+    assert.equal(decideAction(state, awake), 'stale', '上岗了还交不上班，这才是问题');
+  });
+
+  await t.test('刚恢复上岗的那一刻不报：那是宽限期，不是掉线', () => {
+    // 2026-11-01 上岗实测：12:12:22 上岗 → 12:13:21 看门狗就报了「大哥掉线」——
+    // 交班戳还是上岗前留下的旧戳，而大哥的第一轮还没跑完。
     const awake = evaluateDuty(
       { dutyIntervalMinutes: 30, lastRunAt: NOW - 60 * MINUTE },
       NOW,
       { mode: 'on-duty', since: NOW },
     );
-    assert.equal(decideAction(state, awake), 'stale', '上岗了还交不上班，这才是问题');
+    assert.equal(awake.stale, true, '事实照亮');
+    assert.equal(awake.inDutyGrace, true, '刚上岗，处于宽限期');
+    assert.equal(awake.alertable, false, '不报掉线');
   });
 
   await t.test('跑真实的一轮：歇着不通知，上岗后通知', async () => {
@@ -68,10 +82,10 @@ test('watchdog 认歇着', async (t) => {
       assert.equal(resting.action, 'none', '明确歇着不报掉线');
       assert.equal(delivered.length, 0);
 
-      // 同一份事实，只把意图改成在岗。
+      // 同一份事实，只把意图改成在岗。**上岗超过一个周期**（31 分钟）仍然没交班 → 报。
       writeFileSync(
         join(dir, 'duty-intent.json'),
-        JSON.stringify({ mode: 'on-duty', since: NOW, requestedBy: '大老板', note: '' }),
+        JSON.stringify({ mode: 'on-duty', since: NOW - 31 * MINUTE, requestedBy: '大老板', note: '' }),
         'utf8',
       );
       const awake = await runWatchdog({ dataDir: dir, now: NOW + MINUTE, deliver });

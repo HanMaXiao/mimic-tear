@@ -21,6 +21,7 @@ import { normalizeConclusionSource } from './conclusion-source.mjs';
  *             dismissed:number, staleAfterMinutes:number, stale:boolean, neverRan:boolean,
  *             ageMinutes:number|null, missedRounds:number|null,
  *             missedRoundsByAge:number|null, missedRoundsSource:'evidence'|'age-arithmetic',
+ *             inDutyGrace:boolean,
  *             mode:'on-duty'|'resting', resting:boolean, modeSince:number|null,
  *             requestedBy:string|null, intentNote:string,
  *             alertable:boolean, nextDueAt:number|null, overdueMinutes:number|null }} DutyStatus
@@ -111,6 +112,18 @@ export function buildDutyStatus(input) {
   // 「没有证据」会被误当成「证据说漏了 0 轮」。
   const evidenceMissed = input?.evidence?.missedRounds;
   const hasEvidence = typeof evidenceMissed === 'number' && Number.isFinite(evidenceMissed);
+  // 上岗宽限期：从「意图切到 on-duty」那一刻起，给大哥跑完第一轮的时间。
+  //
+  // 宽度取**一个值班周期**（`dutyIntervalMinutes`）——值班 cron 每 `7,37 * * * *` 触发，
+  // 上岗后第一轮最多等这么久。这段时间里交班戳还是**上岗前**留下的旧戳，用它判断
+  // 「大哥掉线」是把上岗前的历史算到刚上岗的人头上。
+  //
+  // 宽限期只压**告警**，不压 `stale`——灯照亮事实，告警只报真故障。
+  const graceMs = periodMs;
+  const inDutyGrace = intent.mode !== 'resting'
+    && typeof intent.since === 'number'
+    && Number.isFinite(intent.since)
+    && now - intent.since < graceMs;
 
   return {
     lastRunAt,
@@ -166,7 +179,16 @@ export function buildDutyStatus(input) {
     // Whether an alarm should fire. A boss that was explicitly told to rest is not an
     // outage, so the watchdog stays quiet — but `stale` above is untouched by this: the
     // duty lamp follows the facts, never the switch.
-    alertable: stale && intent.mode !== 'resting',
+    //
+    // **上岗宽限期**：意图刚切到 on-duty 时，交班戳还是上一次上岗前留下的旧戳——
+    // `stale` 立刻成立，而大哥的第一轮还没跑完。那不是掉线，是**刚上岗**。
+    // 2026-11-01 上岗实测：12:12:22 上岗，12:13:21 看门狗就报了「大哥掉线」。
+    //
+    // 宽限期只压住**告警**，不碰 `stale`——灯照亮事实，告警只报真故障。
+    alertable: stale && intent.mode !== 'resting' && !inDutyGrace,
+    // 宽限期这件事本身是个**事实**（大哥刚上岗多久），所以它进状态里，不只用来压告警。
+    // 板面能说清「不是掉线，是刚上岗 N 分钟」。
+    inDutyGrace,
     // When the next handover is expected, counted from now, and how many minutes past its
     // own deadline we already are.
     nextDueAt: now + periodMs,
