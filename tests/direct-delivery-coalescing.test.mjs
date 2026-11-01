@@ -178,31 +178,44 @@ test('尾巴投递：在途期间并进来的活动，等那一轮结束后按�
     const first = deliverToThreads({
       agent,
       subscriptions,
-      deliveries: [deliveryOf('alpha', Date.now() - 5000)],
+      deliveries: [deliveryOf('alpha', Date.now() - 9000)],
     });
     await waitFor(async () => Boolean(await subscriptions.getInFlight('alpha', 'project-activity')));
 
-    // 在途期间来了新活动 → 并进来。
+    // 在途期间来了两次新活动 → 都并进来（note 的判据：连续 3 次活动）。
+    const middleAt = Date.now() - 5000;
+    await deliverToThreads({
+      agent,
+      subscriptions,
+      deliveries: [deliveryOf('alpha', middleAt)],
+    });
     const latestAt = Date.now() - 500;
     await deliverToThreads({
       agent,
       subscriptions,
       deliveries: [deliveryOf('alpha', latestAt)],
     });
-    assert.equal(calls.length, 1, '并进来的那笔本轮不投');
+    assert.equal(calls.length, 1, '并进来的那两笔本轮都不投');
 
-    // 第一轮结束 → 尾巴投递：按合并后的最新活动时点再投一次。
+    const record = await subscriptions.getInFlight('alpha', 'project-activity');
+    assert.equal(record.merged.length, 2, '两次活动都并进来了——事件不丢');
+
+    // 第一轮结束 → 尾巴投递：按合并后的**最新**活动时点再投一次。
     release();
     await first;
 
-    assert.equal(calls.length, 2, '那一轮结束后要按合并后的最新值再投一次（唤醒 2 次而不是 3 次）');
+    assert.equal(calls.length, 2, '一串活动只多唤一次（第一发 + 尾巴），而不是每条各唤一次');
     const tailText = String(calls[1].text);
     assert.ok(
       tailText.includes(new Date(latestAt).toISOString()),
       `尾巴投递要带合并后的最新活动时点（实际：${tailText}）`,
     );
+    assert.ok(
+      !tailText.includes(new Date(middleAt).toISOString()),
+      '中间那次活动被折叠了——负责人看到的是「现在怎么样」，不是一串历史',
+    );
     const entry = (await subscriptions.list())[0];
-    assert.equal(entry.delivered.length, 2, '两条事件都要记账（事件不丢）');
+    assert.equal(entry.delivered.length, 3, '三条事件都要记账（事件不丢）');
     assert.deepEqual(entry.inFlight ?? {}, {}, '在途标记不能悬挂');
   } finally {
     cleanupDir(dir);
