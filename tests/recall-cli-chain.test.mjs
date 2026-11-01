@@ -37,13 +37,17 @@ test('recall 的链要能走到「项目 → 负责会话 → 同项目的其它
       title: '结论甲',
       body: '甲的正文。',
     });
+    // **两条必须不同类**：同类合并的键是「项目:严重度」，同项目同严重度会被并成一条，
+    // id 保持第一条的 —— 那时 `second.id === first.id`，断言「链里有另一条结论」恒真，
+    // 测试会一直绿着而什么也没测到（2026-11-01 变异验证时抓到的假覆盖）。
     const second = await patrol.add({
       projectId: 1,
       projectName: 'alpha',
-      severity: 'low',
+      severity: 'high',
       title: '结论乙',
       body: '乙的正文。',
     });
+    assert.notEqual(second.id, first.id, '两条结论必须各自成条——不然下面那条断言是恒真的');
 
     const output = execFileSync(NODE, [
       CLI,
