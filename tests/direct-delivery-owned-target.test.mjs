@@ -392,6 +392,39 @@ test('建出来的会话没有 id：这一轮不算数，也不写回', async ()
   }
 });
 
+test('轮次被中止：事件不记账，但会话续用同一个（不再建新的）', async () => {
+  // 平行负责会话 2026-11-01 14:50 的实测结论：被中止的轮次**不记账** → 同一事件下一跳
+  // 还会被计划到。老路径下那会**再建一个会话**（风暴）；现在会话已经写回订阅表，
+  // 重投的是**同一个**会话——但事件本身仍要重投（中止 ≠ 已处理）。
+  const dir = tmpDir();
+  let store = null;
+  try {
+    const dataDir = join(dir, 'data');
+    const managed = new ManagedProjects(dataDir);
+    const subscriptions = new ThreadSubscriptions(dataDir);
+    const patrol = new PatrolStore(dataDir);
+
+    await managed.add('alpha', '大老板点名要盯这个');
+    await subscriptions.add('alpha', null, '大老板拍板：方案 A，这条线改由仿身泪滴自建负责会话', {
+      projectId: 1,
+      ownerAgent: 'mavis',
+    });
+
+    const agent = fakeAgent({ status: 'aborted' });
+    store = RuntimeStore.open(makeRuntimeDb(dir));
+    const { outcome } = await runRound({ store, patrol, managed, subscriptions, agent });
+
+    assert.equal(outcome.delivered, 0, '中止的轮次不算投出去了');
+    assert.equal(agent.calls.filter((call) => call.op === 'create').length, 1, '只建了一个会话');
+    const entry = (await subscriptions.list()).find((item) => item.projectName === 'alpha');
+    assert.equal(entry.ownerSessionId, 'mvs-owned-created', '会话写回了——重投续它，不再建新的');
+    assert.equal(entry.delivered.length, 0, '中止的不记账——事件下一跳还会被计划到');
+  } finally {
+    store?.close();
+    cleanupDir(dir);
+  }
+});
+
 test('投递轮次不许重叠：上一轮没跑完，下一轮被跳过', async () => {
   // 投递要等负责 agent 那一轮跑完（可能好几分钟），而循环每 30 秒跳一次。
   // 重叠起来：同一个事件被投两次、还建出两个负责会话（2026-11-01 真机撞出来的）。
