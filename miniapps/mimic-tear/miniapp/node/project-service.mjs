@@ -406,6 +406,11 @@ export class ProjectService {
     const inbox = await this.collectInbox(snapshot);
     const patrolConfig = await this.getPatrolConfig();
     const findings = this.patrol ? await this.patrol.list() : [];
+    // 归档账里的结论**也是大哥报过的事**。线卡的「最近动作」只看当前账本的话，归档过
+    // 的那 100 条就凭空消失了——线会显得比实际更闲。
+    const archived = this.patrol?.listArchivedFindings
+      ? await this.patrol.listArchivedFindings()
+      : [];
     const dismissed = await this.persistence.listDismissed();
     const duty = await this.dutyBlock({ config: patrolConfig, findings, dismissed });
     // 告警日志跟着值班状态一起走：总览上的一行就能说清楚「大哥在 03:20 不说话了」，不用
@@ -433,7 +438,8 @@ export class ProjectService {
       lines: buildLines({
         cards: snapshot.cards,
         attention,
-        findings,
+        // 当前账本 + 归档账，一起算「最近动作」。
+        findings: [...findings, ...archived],
         threads,
         managedNames: duty.watching,
       }),
