@@ -59,6 +59,10 @@ Mini App 的会话挂到某个 chat 下的。但 Node 侧的 `caller.hostSession
 5. **写入口守门**：`patrol-cli thread add` **拒掉不是仿身泪滴自己拥有的会话**（落空的投递口
    是查不出来的）；`patrol-cli thread own <项目名> "<理由>"` 让一条线改由仿身泪滴自建负责会话。
    事实表的 `threads` 段标出 `ownerAgent` 与 `owned`。
+6. **在途是独立的第三个状态**（在途 / 已投出 / 没投过）：投递**发出即写**在途标记，不等回合结束。
+   `delivered`（已投出）是投递成功之后才落盘的，而成功信号要等负责会话那一轮结束才回来——
+   **实测滞后 11 分钟**，那段时间里盯盘只看得见「已投出 = 旧的」，很容易误读成「没投出去」。
+   这一条也是「唤醒收敛」的前置：判定在途**不能读 `delivered`**。
 
 **消息里带项目绝对路径**：Mini App 建的会话工作目录是 plugin 目录（`agents/<agent>/miniapps/
 <pluginId>`），不是项目目录——负责 agent 要知道去哪儿干活。
