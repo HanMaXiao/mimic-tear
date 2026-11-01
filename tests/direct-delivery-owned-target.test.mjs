@@ -425,6 +425,103 @@ test('轮次被中止：事件不记账，但会话续用同一个（不再建�
   }
 });
 
+/**
+ * 等一个条件成立（最多等若干毫秒）。
+ *
+ * @param {() => Promise<boolean>|boolean} check
+ * @param {number} [timeoutMs]
+ * @returns {Promise<boolean>}
+ */
+async function waitFor(check, timeoutMs = 3000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    // eslint-disable-next-line no-await-in-loop
+    if (await check()) return true;
+    // eslint-disable-next-line no-await-in-loop
+    await new Promise((resolve) => { setTimeout(resolve, 50); });
+  }
+  return false;
+}
+
+test('投递在途：订阅表与事实表都要看得见「在途」，而不只是旧的「已投出」', async () => {
+  // 平行负责会话 2026-11-01 15:09 的实测：`delivered` 要等负责会话那一轮结束才落盘，
+  // 实测滞后 11 分钟——那段时间里板面只看得见「已投出 = 旧的」，盯盘很容易误读成没投出去。
+  // 所以在途是**独立的第三个状态**。
+  const dir = tmpDir();
+  let store = null;
+  try {
+    const dataDir = join(dir, 'data');
+    const dbPath = makeRuntimeDb(dir);
+    const managed = new ManagedProjects(dataDir);
+    const subscriptions = new ThreadSubscriptions(dataDir);
+    const patrol = new PatrolStore(dataDir);
+
+    await managed.add('alpha', '大老板点名要盯这个');
+    await subscriptions.add('alpha', null, '大老板拍板：方案 A，这条线改由仿身泪滴自建负责会话', {
+      projectId: 1,
+      ownerAgent: 'mavis',
+    });
+
+    // 投递口一直不返回（= 负责会话那一轮还在跑）。
+    const agent = {
+      async create() { return { sessionId: 'mvs-owned-created' }; },
+      async run() { return new Promise(() => {}); },
+    };
+    store = RuntimeStore.open(dbPath);
+    void runRound({ store, patrol, managed, subscriptions, agent });
+
+    const marked = await waitFor(async () => {
+      const entry = (await subscriptions.list())[0];
+      return Object.keys(entry?.inFlight ?? {}).length > 0;
+    });
+    assert.ok(marked, '在途标记要写进订阅表（投递发出即写，不等回合结束）');
+
+    const entry = (await subscriptions.list())[0];
+    assert.equal((entry.delivered ?? []).length, 0, '在途 ≠ 已投出：那一轮还没结束');
+    const inflightTypes = Object.keys(entry.inFlight ?? {});
+    assert.ok(
+      ['project-activity', 'session-broken', 'questionnaire-opened'].includes(inflightTypes[0]),
+      `在途的类型要说清是哪种事件（实际：${inflightTypes[0]}）`,
+    );
+
+    const facts = runCli(['facts', '--data-dir', dataDir, '--db', dbPath]);
+    const thread = facts.threads.find((item) => item.projectName === 'alpha');
+    assert.equal(thread.inFlight.length, inflightTypes.length, '事实表也要看得见在途——不然盯盘会误读成没投出去');
+    assert.equal(thread.inFlight[0].type, inflightTypes[0]);
+  } finally {
+    store?.close();
+    cleanupDir(dir);
+  }
+});
+
+test('投递失败：在途标记要撤掉，事件下一轮还会被计划到', async () => {
+  const dir = tmpDir();
+  let store = null;
+  try {
+    const dataDir = join(dir, 'data');
+    const managed = new ManagedProjects(dataDir);
+    const subscriptions = new ThreadSubscriptions(dataDir);
+    const patrol = new PatrolStore(dataDir);
+
+    await managed.add('alpha', '大老板点名要盯这个');
+    await subscriptions.add('alpha', null, '大老板拍板：方案 A，这条线改由仿身泪滴自建负责会话', {
+      projectId: 1,
+      ownerAgent: 'mavis',
+    });
+
+    const agent = fakeAgent({ fail: true });
+    store = RuntimeStore.open(makeRuntimeDb(dir));
+    await runRound({ store, patrol, managed, subscriptions, agent });
+
+    const entry = (await subscriptions.list())[0];
+    assert.deepEqual(entry.inFlight ?? {}, {}, '失败的在途标记要撤掉——挂着会让事件永远不被重投');
+    assert.equal((entry.delivered ?? []).length, 0, '失败的不记账');
+  } finally {
+    store?.close();
+    cleanupDir(dir);
+  }
+});
+
 test('投递轮次不许重叠：上一轮没跑完，下一轮被跳过', async () => {
   // 投递要等负责 agent 那一轮跑完（可能好几分钟），而循环每 30 秒跳一次。
   // 重叠起来：同一个事件被投两次、还建出两个负责会话（2026-11-01 真机撞出来的）。

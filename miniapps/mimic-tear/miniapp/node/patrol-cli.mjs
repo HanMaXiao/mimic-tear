@@ -824,11 +824,20 @@ if (command === 'facts') {
       ownerSessionId: entry.ownerSessionId ?? null,
       // 没有会话就靠 ownerAgent：第一次投递时由仿身泪滴建一个。
       ownerAgent: entry.ownerAgent ?? null,
-      // **负责会话是不是仿身泪滴自己拥有的**：不是的话宿主不让我们续它，
+      // 那条负责会话是不是仿身泪滴自己建的：不是的话宿主不让我们续它，
       // 事件一条都投不出去（方案 A）。`null` = 还没建出来。
       owned: entry.ownerSessionId
         ? isMiniAppOwnedSession(sessionById.get(entry.ownerSessionId))
         : null,
+      // **在途**：有一笔投递正在飞。`delivered`（已投出）要等负责会话那一轮结束才落盘
+      // （实测滞后 11 分钟），那段时间里只看得见「已投出 = 旧的」——容易误读成没投出去。
+      inFlight: Object.entries(entry.inFlight ?? {}).map(([type, record]) => ({
+        type,
+        triggerId: record?.triggerId ?? '',
+        activityAt: record?.activityAt ?? null,
+        sentAt: record?.sentAt ?? null,
+        minutes: record?.sentAt ? Math.round((Date.now() - record.sentAt) / 60000) : null,
+      })),
       active: entry.active !== false,
       deliveredCount: (entry.delivered ?? []).length,
       reason: entry.reason ?? '',

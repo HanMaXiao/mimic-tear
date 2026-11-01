@@ -34,6 +34,7 @@ import { join } from 'node:path';
  *   addedAt:number,
  *   active:boolean,
  *   delivered:string[],
+ *   inFlight?:Record<string,{triggerId:string, activityAt:number, sentAt:number}>,
  * }} Subscription
  */
 
@@ -178,6 +179,62 @@ export class ThreadSubscriptions {
     for (const id of ids) seen.add(id);
     entry.delivered = [...seen].slice(-DELIVERED_MEMORY);
     await this.#write(all);
+    return all;
+  }
+
+  /**
+   * 记下「这条线有一笔投递在途」。
+   *
+   * **为什么要有独立的在途标记**：`delivered`（已投出）是**投递成功之后**才落盘的，
+   * 而「投递成功」的信号要等**负责会话那一轮结束**才回来——实测滞后 11 分钟。
+   * 拿 `delivered` 判「这个会话是不是正在处理同类事件」，**窗口永远是空的**，
+   * 判定永远落在「不在处理中」——合并逻辑一行都命中不了。
+   *
+   * 所以在途是**第三个状态**：在途 / 已投出 / 没投过。三个词各管各的。
+   *
+   * @param {string} projectName
+   * @param {{ type:string, triggerId:string, activityAt:number, sentAt:number }} record
+   * @returns {Promise<Subscription[]>}
+   */
+  async markInFlight(projectName, record) {
+    const name = String(projectName ?? '').trim();
+    if (!name || !record?.type) return this.list();
+    const all = await this.list();
+    const entry = all.find((item) => item.projectName === name);
+    if (!entry) return all;
+    const inflight = { ...(entry.inFlight ?? {}) };
+    inflight[record.type] = {
+      triggerId: record.triggerId ?? '',
+      activityAt: Number(record.activityAt ?? 0) || 0,
+      sentAt: Number(record.sentAt ?? 0) || 0,
+    };
+    entry.inFlight = inflight;
+    await this.#write(all);
+    return all;
+  }
+
+  /**
+   * 清掉在途标记。
+   *
+   * 成功投递 → 转成 `delivered`（调用方负责记账）；失败 → 从在途里撤掉，
+   * 事件下一轮还会被计划到（**失败不记账**的语义不变）。
+   *
+   * @param {string} projectName
+   * @param {string} type 事件类型
+   * @returns {Promise<Subscription[]>}
+   */
+  async clearInFlight(projectName, type) {
+    const name = String(projectName ?? '').trim();
+    if (!name || !type) return this.list();
+    const all = await this.list();
+    const entry = all.find((item) => item.projectName === name);
+    if (!entry) return all;
+    const inflight = { ...(entry.inFlight ?? {}) };
+    if (inflight[type]) {
+      delete inflight[type];
+      entry.inFlight = inflight;
+      await this.#write(all);
+    }
     return all;
   }
 

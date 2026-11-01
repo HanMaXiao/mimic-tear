@@ -154,6 +154,16 @@ export async function deliverToThreads(input) {
     // 不接住它，它就会**再建一个会话**——同一个项目两个负责人（2026-11-01 真机实测）。
     const known = sessionByProject.get(projectName);
     const sessionId = delivery?.thread?.ownerSessionId || known || '';
+    const triggerType = delivery?.trigger?.type ?? '';
+    // **在途标记先写，再投。** `delivered`（已投出）要等负责会话那一轮结束才落盘，
+    // 实测滞后 11 分钟——那段时间里「已投出」在板面上是看不见的，盯盘很容易误读成
+    // 「没投出去」。在途是**第三个状态**：在途 / 已投出 / 没投过。
+    await input?.subscriptions?.markInFlight?.(projectName, {
+      type: triggerType,
+      triggerId: delivery?.trigger?.id ?? '',
+      activityAt: Number(delivery?.trigger?.at ?? 0) || 0,
+      sentAt: Date.now(),
+    });
     const outcome = await deliverToSession({
       agent: input?.agent,
       sessionId,
@@ -170,6 +180,9 @@ export async function deliverToThreads(input) {
         }
       },
     });
+    // 投递有结果了：在途标记撤掉。成功 → 下面记账（转成 `delivered`）；失败 → 事件
+    // 下一轮还会被计划到（**失败不记账**的语义不变）。
+    await input?.subscriptions?.clearInFlight?.(projectName, triggerType);
     results.push({
       triggerId: delivery?.trigger?.id ?? '',
       projectName,
