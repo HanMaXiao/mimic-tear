@@ -501,7 +501,13 @@ if (command === 'facts') {
   }));
 
   const cards = buildProjectCards({ projects, sessions, goals, questionnaires, tasks, plans });
-  const runtimeItems = buildInbox({ projects, sessions, goals, questionnaires, plans }, new Set());
+  // **已排除的条目**（大哥查实是旧残骸的那些）。板面那条路径传了 dismissed，CLI 这条路径
+  // 没传：于是 `duty.dismissed` 恒为 0、已排除的条目还以「未处理」的样子躺在待办里——
+  // 模型读表会以为「从没排除过任何东西」，可能把排除过的事再报一遍。
+  // 同一个词（「已处理」）不该有两套口径（2026-11-01 13:37 那一轮查出来的）。
+  const dismissedRecords = await new Persistence(dataDir).listDismissed();
+  const dismissedById = new Map(dismissedRecords.map((entry) => [entry.id, entry.reason ?? '']));
+  const runtimeItems = buildInbox({ projects, sessions, goals, questionnaires, plans }, new Set(), dismissedById);
   const answered = await patrol.listAnswered();
   // 大哥给过的建议，按 requestId 索引。
   const suggestionById = new Map(answered.map((item) => [item.requestId, item]));
@@ -670,6 +676,8 @@ if (command === 'facts') {
     ...buildDutyStatus({
       config: dutyConfig,
       findings: previousFindings,
+      // 大哥排除过的原始项——板面那边数它们，CLI 这边也得数同一个。
+      dismissed: dismissedRecords,
       intent: dutyIntentState,
       evidence: dutyEvidence,
       now: Date.now(),
@@ -868,6 +876,11 @@ if (command === 'facts') {
       title: item.title,
       body: item.body,
       createdAt: item.createdAt,
+      // **排除不等于删除**：条目还在清单里，但必须标出「已经处理过了、为什么」。
+      // 不标，大哥就会把排除过的事再报一遍（2026-11-01 13:37 那一轮查出来的）。
+      acknowledged: item.acknowledged === true,
+      handledBy: item.handledBy ?? null,
+      handledReason: item.handledReason ?? '',
     })),
     openQuestionnaires: visibleQuestionnaires,
     recoverable: visibleRecoverable,
