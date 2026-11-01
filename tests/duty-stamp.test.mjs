@@ -54,7 +54,10 @@ test('交班戳只能由大哥那条线写', async () => {
 
     // The report itself is not lost — only the stamp is now gated.
     const findings = await patrol.list();
-    assert.equal(findings.length, 2, '两条报告都要写进结论池');
+    // 同一份报告连报两次是**同一件事**（4.2 的同类合并）：账上是一条，不是两条。
+    assert.equal(findings.length, 1, '同一份报告连报两次，账上仍是一条');
+    assert.equal(findings[0].title, '一条结论', '内容不能丢');
+    assert.equal(findings[0].body, '正文');
   } finally {
     cleanupDir(dir);
   }

@@ -13,6 +13,19 @@
 /** Marker the boss is asked to end its reply with, so delivery can be verified. */
 const DELIVERY_MARKER = '已投递';
 
+/**
+ * 把这一轮的运行选项交給宿主。
+ *
+ * `whenBusy` 只在**续用已有会话**时才有意义——宿主明确说它是「只在 `sessionId` 上认」的，
+ * 所以新会话那一支不能带它。
+ *
+ * @param {{signal?:AbortSignal}} options
+ * @returns {{signal?:AbortSignal}}
+ */
+function runOptions(options) {
+  return options?.signal ? { signal: options.signal } : {};
+}
+
 export class BossBridge {
   /**
    * @param {{
@@ -27,6 +40,19 @@ export class BossBridge {
     this.persistence = deps.persistence;
     this.bossAgentName = deps.bossAgentName ?? 'boss';
     this.onPermission = deps.onPermission ?? null;
+  }
+
+  /**
+   * 大哥会话的 id。
+   *
+   * 轮次登记表用它判断「这条会话上还有没有别的轮次在跑」——**要在起轮次之前问**，
+   * 因为会话正忙时的新指令走排队还是插话，取决于在跑的是什么。
+   *
+   * @returns {Promise<string>}
+   */
+  async sessionId() {
+    const stored = await this.persistence.getBossSession();
+    return stored?.sessionId ?? '';
   }
 
   /**
@@ -69,10 +95,11 @@ export class BossBridge {
    *
    * @param {{ projectId:number, projectName:string, projectPath:string,
    *           sessionId:string|null, sessionTitle:string|null, instruction:string }} input
+   * @param {{signal?:AbortSignal, whenBusy?:'queue'|'steer'}} [options]
    * @returns {Promise<{ bossSessionId:string, status:string, text:string,
    *                     error:string|null, delivered:boolean }>}
    */
-  async dispatch(input) {
+  async dispatch(input, options = {}) {
     if (!this.agent) {
       return {
         bossSessionId: '',
@@ -91,7 +118,7 @@ export class BossBridge {
       }
     };
 
-    const { result, usedAgent } = await this.#runTurn(prompt, onEvent);
+    const { result, usedAgent } = await this.#runTurn(prompt, onEvent, options);
 
     const text = typeof result?.text === 'string' ? result.text : '';
     const delivered = result?.status === 'finished' && text.includes(DELIVERY_MARKER);
@@ -119,10 +146,13 @@ export class BossBridge {
    *
    * @param {string} prompt
    * @param {(event: any) => void} onEvent
+   * @param {{signal?:AbortSignal, whenBusy?:'queue'|'steer'}} [options]
    * @returns {Promise<{ result: any, usedAgent: 'boss'|'primary' }>}
    */
-  async #runTurn(prompt, onEvent) {
+  async #runTurn(prompt, onEvent, options = {}) {
     const stored = await this.persistence.getBossSession();
+    const signal = options?.signal;
+    const whenBusy = options?.whenBusy;
 
     /** @type {any} */
     let result;
@@ -132,13 +162,17 @@ export class BossBridge {
     try {
       if (stored?.sessionId) {
         // A continued session keeps the agent it was created with.
-        result = await this.agent.run({ text: prompt, sessionId: stored.sessionId }, { onEvent });
+        result = await this.agent.run(
+          // `whenBusy` 只在续用会话时才有意义：新会话那一支不带它。
+          { text: prompt, sessionId: stored.sessionId, ...(whenBusy ? { whenBusy } : {}) },
+          { onEvent, ...runOptions(options) },
+        );
         usedAgent = stored.agent === 'primary' ? 'primary' : 'boss';
       } else {
         const agentName = await this.#resolveAgent();
         result = await this.agent.run(
           agentName ? { text: prompt, agent: agentName } : { text: prompt },
-          { onEvent },
+          { onEvent, ...runOptions(options) },
         );
         usedAgent = agentName ? 'boss' : 'primary';
       }
@@ -147,10 +181,11 @@ export class BossBridge {
       usedAgent = 'boss';
     }
 
-    if (result?.status === 'error' && usedAgent === 'boss') {
+    // 被叫停的轮次不重试——它是被大老板按停的，不是失败了。
+    if (result?.status === 'error' && usedAgent === 'boss' && !signal?.aborted) {
       // The boss turn failed without delivering anything, so retrying is safe.
       try {
-        result = await this.agent.run({ text: prompt }, { onEvent });
+        result = await this.agent.run({ text: prompt }, { onEvent, ...runOptions(options) });
       } catch (error) {
         result = { sessionId: '', status: 'error', error: { message: error?.message ?? String(error) } };
       }
@@ -170,9 +205,10 @@ export class BossBridge {
    * the boss's own judgement; it must escalate the rest.
    *
    * @param {{ brief: string }} input
+   * @param {{signal?:AbortSignal, whenBusy?:'queue'|'steer'}} [options]
    * @returns {Promise<{ bossSessionId: string, status: string, text: string, error: string|null }>}
    */
-  async patrol(input) {
+  async patrol(input, options = {}) {
     if (!this.agent) {
       return {
         bossSessionId: '',
@@ -190,7 +226,7 @@ export class BossBridge {
       }
     };
 
-    const { result, usedAgent } = await this.#runTurn(prompt, onEvent);
+    const { result, usedAgent } = await this.#runTurn(prompt, onEvent, options);
 
     if (result?.sessionId && usedAgent === 'boss') {
       await this.persistence.setBossSession({ sessionId: result.sessionId, agent: 'boss' });
@@ -215,10 +251,11 @@ export class BossBridge {
    *
    * @param {{ text: string }} input
    * @param {(event: any) => void} [onEvent] receives the runtime's run events
+   * @param {{signal?:AbortSignal, whenBusy?:'queue'|'steer'}} [options]
    * @returns {Promise<{ bossSessionId:string, status:string, text:string, error:string|null,
    *                     request:any, usedAgent:string }>}
    */
-  async chat(input, onEvent = () => {}) {
+  async chat(input, onEvent = () => {}, options = {}) {
     if (!this.agent) {
       return {
         bossSessionId: '',
@@ -242,7 +279,7 @@ export class BossBridge {
       }
     };
 
-    const { result, usedAgent } = await this.#runTurn(text, forward);
+    const { result, usedAgent } = await this.#runTurn(text, forward, options);
 
     if (result?.sessionId && usedAgent === 'boss') {
       await this.persistence.setBossSession({ sessionId: result.sessionId, agent: 'boss' });
@@ -252,7 +289,10 @@ export class BossBridge {
       bossSessionId: result?.sessionId ?? '',
       status: result?.status ?? 'error',
       text: typeof result?.text === 'string' ? result.text : '',
-      error: result?.status === 'finished' ? null : (result?.error?.message ?? '大哥没有回复'),
+      // `steered` 不是错：这条指令被正在跑的那一轮读进去了，回复由那一轮给出。
+      error: result?.status === 'finished' || result?.status === 'steered'
+        ? null
+        : (result?.error?.message ?? '大哥没有回复'),
       // A turn that paused on a questionnaire carries it here; the page renders it and
       // continues the turn with `answer`.
       request: result?.request ?? null,

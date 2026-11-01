@@ -20,6 +20,10 @@ export const API = {
   patrol: '/api/patrol',
   patrolConfig: '/api/patrol/config',
   patrolRun: '/api/patrol/run',
+  // The rounds that are running, and the ones that just finished. A running round can
+  // be stopped — otherwise 「能异步起」就只剩「起完了没法收」这一半。
+  patrolRound: '/api/patrol/round',
+  patrolRoundStop: (id) => `/api/patrol/round/${id}/stop`,
   // The watchdog's alert log: every alert it ever raised, delivered or not.
   watchdogAlerts: '/api/watchdog/alerts',
   chat: '/api/chat',

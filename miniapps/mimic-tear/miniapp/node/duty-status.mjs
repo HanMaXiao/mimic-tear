@@ -200,7 +200,10 @@ export function computeDutyEvidence(input) {
       coveredSlots: 0,
       // The tail is empty too: with no handover at all there is nothing to be late about.
       pendingTail: { slots: 0, since: null, runs: [] },
-      blankTail: { slots: 0, since: null, firstSlot: null },
+      blankTail: { slots: 0, since: null, firstSlot: null, lastSlot: null },
+      // The slot-0 time. `duty-gap.mjs` needs it to turn a slot index back into a moment —
+      // without it, "the hole started 61 minutes ago" cannot be said.
+      anchor: null,
     };
   }
 
@@ -278,7 +281,13 @@ export function computeDutyEvidence(input) {
       slots: blankSlots.length,
       since: blankSlots.length ? anchor + blankSlots[0] * periodMs : null,
       firstSlot: blankSlots.length ? blankSlots[0] : null,
+      // The last blank slot. The range's far end — `duty-gap.mjs` needs it to know how far
+      // the hole reaches, and to mark how much of it a fill has covered.
+      lastSlot: blankSlots.length ? blankSlots[blankSlots.length - 1] : null,
     },
+    // The slot-0 time: the moment the first handover landed. Every slot index is relative
+    // to it, so it is what turns "slot 42" back into a date.
+    anchor,
     // The gap is still worth reporting when it ended inside the evidence window: that is
     // exactly the case where a late handover erased it.
     erasedOutage: Boolean(lastGap && lastGap.missedRounds > 0 && now - lastGap.to < evidenceWindowMs),

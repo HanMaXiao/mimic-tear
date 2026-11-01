@@ -93,6 +93,12 @@ export function emptyWatchdogState() {
     notifiedStale: null,
     observedMissed: null,
     notifiedMissed: null,
+    // 「在跑但没进展」：独立于 stale 的另一类故障，各有各的「报过了吗」。
+    observedStuck: null,
+    notifiedStuck: null,
+    stuckSince: null,
+    // 进展快照：上一次看到的大哥是什么样。没有它就没有「没进展」的基线。
+    progress: null,
     reportedGaps: [],
     staleSince: null,
     lastNotifiedAt: null,
@@ -138,6 +144,14 @@ export function decideAction(state, duty, evidence) {
   // evidence window closes, while a live outage is re-evaluated on every tick anyway.
   if (missed) return 'missed';
 
+  // 「在跑但没进展」比「没交班」更具体：进程活着、心跳新鲜，可它转了 45 分钟什么都没产出。
+  // 现有判定看不见这一类（交班戳可能刚被刷过），所以它单成一个结论。
+  //
+  // **一段卡住只报一次**（`notifiedStuck`）：看门狗每个周期都跑，不去重就会变成刷屏——
+  // 而刷屏的看门狗，用户会学会忽略它。
+  const stuckNow = Boolean(evidence?.stuck?.stuck);
+  if (stuckNow) return state?.notifiedStuck === true ? 'none' : 'stuck';
+
   if (previous === null) {
     // First observation. `neverRan` means "has not started", not "has fallen over":
     // reporting that as an outage would cry wolf the moment the watchdog was installed.
@@ -171,7 +185,30 @@ export function decideAction(state, duty, evidence) {
  * @returns {WatchdogState}
  */
 export function applySuccess(state, action, duty, now, evidence) {
-  const base = { ...state, checkedAt: now };
+  const base = {
+    ...state,
+    checkedAt: now,
+    // 进展快照随每一跳往前推 —— 没有它就没有「没进展」的基线。
+    progress: evidence?.progress ?? state?.progress ?? null,
+    // 这一轮没卡住了 → 重新武装，下一次卡住还能报。
+    notifiedStuck: evidence?.stuck?.stuck === false ? null : (state?.notifiedStuck ?? null),
+  };
+
+  if (action === 'stuck') {
+    return {
+      ...base,
+      observedStuck: true,
+      notifiedStuck: true,
+      observedStale: Boolean(duty?.stale),
+      notifiedStale: state?.notifiedStale ?? null,
+      observedMissed: Boolean(evidence?.erasedOutage),
+      notifiedMissed: state?.notifiedMissed ?? null,
+      // 卡住的起点：最后一次有进展的时刻，不是我们发现它的时刻。
+      stuckSince: state?.stuckSince ?? evidence?.stuck?.lastProgressAt ?? now,
+      lastNotifiedAt: now,
+      failedDeliveries: 0,
+    };
+  }
 
   if (action === 'missed') {
     const gap = evidence?.lastGap ?? null;
@@ -291,6 +328,18 @@ export function buildAlertMessage(action, input) {
   const duty = input.duty;
   const failed = input.failedDeliveries ?? 0;
   const failureNote = failed > 0 ? `（此前有 ${failed} 次通知没能送达）` : '';
+
+  if (action === 'stuck') {
+    const stuck = input.evidence?.stuck ?? {};
+    const minutes = stuck.minutes ?? 0;
+    return {
+      title: '仿身泪滴 · 大哥在跑但没进展',
+      body: `大哥的值班会话已经 ${minutes} 分钟没有实质进展了（进程活着、心跳新鲜，但产出没长）。`
+        + '这种「活着但在空转」的状态交班戳看不出来——所以另报一条。'
+        + '要止血可以在板面上给它一条指令。'
+        + failureNote,
+    };
+  }
 
   if (action === 'missed') {
     const gap = input.evidence?.lastGap ?? null;

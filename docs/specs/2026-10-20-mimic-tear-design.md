@@ -300,7 +300,7 @@ interface InboxItem {
   body: string;                  // 问卷 question / 错误信息 / 目标摘要
   createdAt: number;
   ageMinutes: number;
-  acknowledged: boolean;         // 存在 dataDir/acks.json 中
+  acknowledged: boolean;         // 存在 dataDir/board-state.json 的 acks 段里
 }
 ```
 
@@ -367,7 +367,9 @@ interface DomainGroup {
 | POST | `/api/permissions/:requestId` | 决定大哥的工具权限请求（body `{ decision: 'allowOnce' \| 'deny' }`） |
 | GET | `/api/patrol` | 大哥巡检配置与历史结论 |
 | POST | `/api/patrol/config` | 开关看板侧巡检、设巡检间隔（**不再管自动派工**，见 §24.7） |
-| POST | `/api/patrol/run` | 立即巡检一次。返回 **202**，结果通过 SSE `patrol` 事件推送 |
+| POST | `/api/patrol/run` | 立即巡检一次。返回 **202** + `roundId`，结果通过 SSE `patrol` 事件推送。**轮次是后台的**：同一时刻只跑一轮，重复调用返回 `status: 'skipped'` |
+| GET | `/api/patrol/round` | 在跑的轮次与刚跑完的那些（`?limit=` 默认 20）。轮次状态是**进程内事实**，板面重启后就没有「正在跑」了 |
+| POST | `/api/patrol/round/:id/stop` | 叫停一轮在跑的巡检。被叫停的轮次**不算结论**（没跑完，产出不可信），但**留痕**：状态是 `aborted`，页面看得见 |
 | POST | `/api/duty/intent` | 写下大哥的值班意图（`mode` 在岗 / 歇着）+ `requestedBy` + `note`；写完立刻广播一次 `update`（值班状态不在运行时修订号里，不主动推页面不会动） |
 | GET | `/api/watchdog/alerts` | 看门狗告警流水（最近 N 条，`?limit=` 默认 20）。告警只写文件、没人看板时就永远只有日志 |
 | POST | `/api/chat` | 跟大哥说一句话（body `{ text }`）。返回 **202** + `bossSessionId`，后续进展走 SSE `chat.*` 事件 |
@@ -414,11 +416,21 @@ Node 侧每 3 秒计算一次**廉价修订号**（`max(updated_at_ms)` + 各表
 
 | 文件 | 内容 |
 | --- | --- |
-| `dispatches.json` | 派工记录：id、项目、指令、大哥 sessionId、状态、时间 |
-| `acks.json` | 已确认的收件箱条目 id |
-| `boss-session.json` | 大哥会话 id（保持上下文连续） |
+| `board-state.json` | 板面自己的**全部状态**（**收口进一个带版本的 store**：一个文件、一把锁、一条写路径）：派工记录、已确认的收件箱条目 id、大哥会话 id、被排除的收件箱条目、巡检结论、已代答的问卷、归档的结论、巡检配置（含交班戳） |
+| `duty-intent.json` | 值班意图（见 §27） |
+| `managed-projects.json` | 管辖名单（见 §22 / §24） |
+| `skill-library.json` / `thread-subscriptions.json` | 可复用技能库、线的订阅表 |
+| `watchdog-state.json` / `watchdog-notices.json` / `watchdog-alert.log` | 看门狗自己的状态与告警流水（JSONL） |
 
-> **2026-10-28 补记**：上表只列了最初三个文件，**实现里 `context.dataDir` 里实际落的东西更多**——`dismissed.json`（被排除的收件箱条目）、`patrol.json` / `patrol-config.json` / `patrol-answered.json`（巡检结论、配置与已答项）、`duty-intent.json`（值班意图，见 §27）、`managed-projects.json`（管辖名单，见 §22 / §24）、`watchdog-alert.log`（看门狗告警流水，JSONL）。这些文件全部由服务端写、客户端不碰，与上表「只写自己的 dataDir」这条硬约束不冲突。逐条依据：`miniapp/node/persistence.mjs` / `patrol-store.mjs` / `duty-intent.mjs` / `managed-projects.mjs` / `watchdog-alerts.mjs`。
+> **2026-11-01 补记（6.4 状态收口）**：原来板面的状态散在十几个 json 里，其中**派工账有两个写者、两个进程**（看板的派工路径 + 值班路径），两边都做读-改-写——那出过真事故（并发写毁掉记录，而幂等键就在账里，丢一条就可能把同一条指令重投一次）。现在收口进**一个带版本的 store**（`board-state.json`）：一个文件、一把锁、一条写路径。老文件在 store 还不存在时**读一次**（一次性迁移），之后**只写不读**——不做「新旧双读」，双读就是两份口径，而判据必须只有一个（§25.1）。
+>
+> **过渡期：老文件还写一份镜像。** 每次改动的那几段会**镜像**回老文件，所以万一这套收口后来被否掉、回退到旧代码，老代码读到的是**最新的**数据，而不是迁移那一刻的快照。镜像是**派生出来的，不是真相**——真相只有 store 一份，代码读的一直是 store。回退前还可以显式跑一次 `patrol-cli export-legacy` 把老文件补齐（**回退是显式动作，不是自愈**）。过渡期结束（收口被确认是对的方向）之后，用 `MIMIC_TEAR_MIRROR_LEGACY=off` 关掉镜像，老文件就只是历史快照。
+>
+> **大哥的手**：结论账家族里的 `patrol-answered.json` 原来是大哥**手写**的（值班技能里就写着「你写 `patrol-answered.json`」）。收口之前先给了它一条命令——`patrol-cli answer <requestId> --answer "<选项>"`（只记答案、**不打交班戳**），并把两份文本改成用它；「代答走 `patrol-cli answer`」写进了 `scripts/check-boss-prompt.mjs` 的约定清单，少改一份就红。**顺序不能颠倒**：先有命令，再改用法，最后才搬数据——反过来做，大哥手写的答案板面就读不到了（代答静默失效）。
+>
+> **哪些状态没有收进 store，以及为什么**：① **看门狗自己的状态**——看门狗是独立进程（Windows 计划任务），不在 Mini App 的生命周期里；跨进程共享一个 store 会把两边的锁搅在一起。② **大哥的长期配置**（`duty-intent.json` / `managed-projects.json` / `skill-library.json` / `thread-subscriptions.json`）——各自由 CLI 或大哥独占写入，生命周期与板面的运行时状态不是一回事。
+>
+> **一条坏账只坏它自己**：一段账读不出来时，store 把它**标记为读不出来**（而不是当成空段），读那一段会报错，别的段照常读写。收口之前就是这个性质（派工账坏了不会让「代答」记不进去），收口之后必须显式保住。
 
 遵循 `security-and-state.md`：**先提交，再广播**。广播失败不回滚已提交状态；重连页面读当前快照即可恢复。
 

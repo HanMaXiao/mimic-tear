@@ -376,3 +376,129 @@ test('状态接口给总览页用：字段齐、边界写在负载里', async ()
     cleanupDir(dir);
   }
 });
+
+// ---------------------------------------------------------------------------
+// G-10：恢复路径。断档要说得清、补位要能往前走、休息时不该补。
+// ---------------------------------------------------------------------------
+
+/** 写一份值班意图。 */
+function writeIntent(dir, intent) {
+  writeFileSync(join(dir, 'duty-intent.json'), JSON.stringify(intent), 'utf8');
+}
+
+test('G10：大哥在休息时，心跳不补位', async () => {
+  const dir = tmpDir();
+  try {
+    writeIntent(dir, { mode: 'resting', since: NOW - 60 * MINUTE, requestedBy: '大老板', note: '' });
+    const calls = [];
+    const agent = { async run(input) { calls.push(input); return { status: 'finished', error: null }; } };
+
+    const result = await runDutyHeartbeat({
+      dataDir: dir, store: readOnlyStore([DELIVERED_90]), sessionId: 'mvs_boss', agent, now: NOW,
+    });
+
+    assert.equal(result.triggered, false, '被交代去休息时不该补位');
+    assert.equal(result.reason, 'resting');
+    assert.equal(calls.length, 0, '一次都不该调用');
+    assert.equal(result.gap.source, 'resting');
+    assert.equal(result.gap.gap.slots, 0, '休息期间不算漏班');
+    assert.equal(result.gap.hole.slots, 2, '但洞还在——宿主照样没投递');
+  } finally {
+    cleanupDir(dir);
+  }
+});
+
+test('G10：一趟补位覆盖整段空档，并把覆盖范围写进状态', async () => {
+  const dir = tmpDir();
+  try {
+    const calls = [];
+    const agent = { async run(input) { calls.push(input); return { status: 'finished', error: null }; } };
+
+    const result = await runDutyHeartbeat({
+      dataDir: dir, store: readOnlyStore([DELIVERED_90]), sessionId: 'mvs_boss', agent, now: NOW,
+    });
+
+    assert.equal(result.triggered, true);
+    assert.equal(calls.length, 1, '一段空档只跑一趟，不逐槽重放');
+    const state = await readHeartbeatState(dir);
+    assert.equal(state.coveredThroughSlot, result.gap.uncovered.coverThroughSlot, '覆盖到最后一个未覆盖槽位');
+    assert.equal(typeof state.coveredAt, 'number');
+    assert.equal(state.gapRounds, result.gap.gap.rounds, '断了几轮要写下来');
+  } finally {
+    cleanupDir(dir);
+  }
+});
+
+test('G10：空档继续往前推进时，会再补一次（覆盖标记不是死的）', async () => {
+  const dir = tmpDir();
+  try {
+    const calls = [];
+    const agent = { async run(input) { calls.push(input); return { status: 'finished', error: null }; } };
+
+    const first = await runDutyHeartbeat({
+      dataDir: dir, store: readOnlyStore([DELIVERED_90]), sessionId: 'mvs_boss', agent, now: NOW,
+    });
+    assert.equal(first.triggered, true);
+
+    // 又过了一个值班周期，第 3 个空槽出现 —— 这时候该再补一次。
+    const second = await runDutyHeartbeat({
+      dataDir: dir, store: readOnlyStore([DELIVERED_90]), sessionId: 'mvs_boss', agent, now: NOW + 30 * MINUTE,
+    });
+    assert.equal(second.triggered, true, '新的空槽该再补一次');
+    assert.equal(second.gap.uncovered.nextSlot, 3, '从还没补的那一槽开始');
+    assert.equal(calls.length, 2);
+  } finally {
+    cleanupDir(dir);
+  }
+});
+
+test('G10：补位失败后还能重试（失败的那轮不算补过）', async () => {
+  const dir = tmpDir();
+  try {
+    const failed = await runDutyHeartbeat({
+      dataDir: dir,
+      store: readOnlyStore([DELIVERED_90]),
+      sessionId: 'mvs_boss',
+      agent: { async run() { throw new Error('模拟补位失败'); } },
+      now: NOW,
+    });
+    assert.equal(failed.result, 'error');
+
+    const state = await readHeartbeatState(dir);
+    assert.equal(state.coveredThroughSlot ?? null, null, '失败的那轮不能算已覆盖');
+
+    // 下一跳必须还能再试一次 —— 旧实现会把失败记成「这一槽补过了」，于是永不重试。
+    const calls = [];
+    const retry = await runDutyHeartbeat({
+      dataDir: dir,
+      store: readOnlyStore([DELIVERED_90]),
+      sessionId: 'mvs_boss',
+      agent: { async run(input) { calls.push(input); return { status: 'finished', error: null }; } },
+      now: NOW + MINUTE,
+    });
+    assert.equal(retry.triggered, true, '失败后要能重试');
+    assert.equal(calls.length, 1);
+  } finally {
+    cleanupDir(dir);
+  }
+});
+
+test('G10：提示词里要带断档时长 —— 断四个小时不能汇报成普通迟到', async () => {
+  const dir = tmpDir();
+  try {
+    const calls = [];
+    const agent = { async run(input) { calls.push(input); return { status: 'finished', error: null }; } };
+
+    await runDutyHeartbeat({
+      dataDir: dir, store: readOnlyStore([DELIVERED_90]), sessionId: 'mvs_boss', agent, now: NOW,
+    });
+
+    assert.equal(calls.length, 1);
+    assert.match(calls[0].text, /你断了 \d+ 分钟/, '断多久必须写进提示词');
+    assert.match(calls[0].text, /轮值班/);
+    assert.match(calls[0].text, /不要当成普通迟到/);
+    assert.match(calls[0].text, /不要去重放/, '补的是当前状态，不是重放历史');
+  } finally {
+    cleanupDir(dir);
+  }
+});

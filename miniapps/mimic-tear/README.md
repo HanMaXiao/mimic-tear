@@ -24,12 +24,11 @@
 
 | 文件 | 内容 |
 | --- | --- |
-| `dispatches.json` | 派工记录 |
-| `acks.json` | 已确认的收件箱条目 |
-| `boss-session.json` | 大哥会话 id |
+| `board-state.json` | 板面自己的**全部状态**（收口进一个带版本的 store：一个文件、一把锁、一条写路径）：**派工记录、已确认的收件箱条目、大哥会话 id、被排除的收件箱条目、巡检结论、已代答的问卷、归档的结论、巡检配置（含交班戳）** |
+| `duty-intent.json` | 值班意图 |
 | `managed-projects.json` | 大哥管辖的项目名单 |
-| `duty-intent.json` / `patrol.json` | 值班状态与巡检配置 |
-| `watchdog-alert.log` | 看门狗告警流水 |
+| `skill-library.json` / `thread-subscriptions.json` | 可复用技能库、线的订阅表 |
+| `watchdog-state.json` / `watchdog-notices.json` / `watchdog-alert.log` | 看门狗自己的状态与告警流水 |
 
 **网络**：不主动访问任何外部服务。页面与 Agent 之间的通信走宿主分配的回环端口。
 

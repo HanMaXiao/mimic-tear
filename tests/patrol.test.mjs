@@ -15,7 +15,7 @@ import {
 } from '../miniapps/mimic-tear/miniapp/node/patrol-scheduler.mjs';
 import { buildPatrolBrief, parsePatrolReport } from '../miniapps/mimic-tear/miniapp/node/view-model.mjs';
 import { RuntimeStore } from '../miniapps/mimic-tear/miniapp/node/runtime-store.mjs';
-import { makeRuntimeDb, tmpDir, cleanupDir } from './helpers/fixture.mjs';
+import { makeRuntimeDb, readBoardSection, tmpDir, cleanupDir } from './helpers/fixture.mjs';
 
 const CLI_PATH = fileURLToPath(new URL('../miniapps/mimic-tear/miniapp/node/patrol-cli.mjs', import.meta.url));
 
@@ -158,7 +158,7 @@ test('patrol', async (t) => {
 
       // And the next write cleans the file instead of carrying the residue forward.
       await patrol.setConfig({ lastRunAt: 1234 });
-      const raw = JSON.parse(readFileSync(configPath, 'utf8'));
+      const raw = readBoardSection(join(dir, 'data'), 'config');
       assert.equal('autoDispatch' in raw, false, '写回去的时候要把废键清掉');
       assert.equal(raw.lastRunAt, 1234, '真字段不能被清掉');
     } finally {
@@ -323,7 +323,7 @@ test('patrol', async (t) => {
       assert.equal(typeof config.lastRunAt, 'number', '值班交班时间戳不能被覆盖掉');
       assert.equal(typeof config.lastBoardPatrolAt, 'number', '看板自己的时间戳也不能被覆盖掉');
       // The file itself must still be readable JSON — a half-written file would break the board.
-      const raw = JSON.parse(readFileSync(join(dataDir, 'patrol-config.json'), 'utf8'));
+      const raw = readBoardSection(dataDir, 'config');
       assert.equal(typeof raw.lastRunAt, 'number');
     } finally {
       cleanupDir(dir);
@@ -381,7 +381,11 @@ test('patrol', async (t) => {
     const dataDir = join(dir, 'data');
     try {
       // The fact sheet carries the raw runtime items the boss can rule out.
-      const facts = runCli(dbPath, dataDir);
+      //
+      // `--scope raw` = the complete sheet. The default view is the **candidates** view —
+      // only what the boss is granted to act on — so a runtime item from an ungranted
+      // project is not in it. This test is about the complete sheet, so it asks for it.
+      const facts = runCli(dbPath, dataDir, ['facts', '--scope', 'raw']);
       const item = facts.decisions.find((entry) => entry.id.startsWith('session-error:'));
       assert.ok(item, '事实表里应该有待排除的运行时原始项');
 
@@ -389,7 +393,7 @@ test('patrol', async (t) => {
       assert.equal(result.ok, true);
       assert.equal(result.id, item.id);
 
-      const dismissed = JSON.parse(readFileSync(join(dataDir, 'dismissed.json'), 'utf8'));
+      const dismissed = readBoardSection(dataDir, 'dismissed');
       assert.equal(dismissed.length, 1);
       assert.equal(dismissed[0].id, item.id);
       assert.match(dismissed[0].reason, /残骸/, '排除必须留下理由');
@@ -407,6 +411,72 @@ test('patrol', async (t) => {
     }
   });
 
+  await t.test('CLI 的 answer 能代答一张卡：只记答案，不打交班戳', () => {
+    const dir = tmpDir();
+    const dbPath = makeRuntimeDb(dir);
+    const dataDir = join(dir, 'data');
+    try {
+      const result = runCli(dbPath, dataDir, [
+        'answer', 'req-001', '--answer', '同意，先做 A', '--rationale', '风险可逆', '--session-id', 'sess-alpha-lead',
+      ]);
+      assert.equal(result.ok, true);
+      assert.equal(result.requestId, 'req-001');
+
+      const answered = readBoardSection(dataDir, 'answered');
+      assert.equal(answered.length, 1, '答案要记进账');
+      assert.equal(answered[0].answer, '同意，先做 A');
+      assert.equal(answered[0].sessionId, 'sess-alpha-lead');
+      assert.match(answered[0].rationale, /风险可逆/);
+
+      // **不打交班戳**：代答一张卡不是交班。戳是值班大哥的。
+      const config = readBoardSection(dataDir, 'config');
+      assert.equal(config.lastRunAt ?? null, null, '代答不许刷新交班戳');
+      assert.equal(readBoardSection(dataDir, 'findings').length, 0, '代答不写结论');
+
+      // 幂等：同一张卡记两次，账上还是一条。
+      runCli(dbPath, dataDir, ['answer', 'req-001', '--answer', '同意，先做 A']);
+      assert.equal(readBoardSection(dataDir, 'answered').length, 1, '同一张卡不能记成两次');
+
+      // 少给答案要被拒绝（exit 2）。
+      let rejected = false;
+      try {
+        runCli(dbPath, dataDir, ['answer', 'req-002']);
+      } catch (error) {
+        rejected = error.status === 2;
+      }
+      assert.equal(rejected, true, '没有答案内容必须被拒绝');
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
+  await t.test('CLI 的 export-legacy：回退是显式动作，老文件能补齐', () => {
+    const dir = tmpDir();
+    const dbPath = makeRuntimeDb(dir);
+    const dataDir = join(dir, 'data');
+    try {
+      const reportFile = join(dir, 'report.json');
+      writeFileSync(reportFile, JSON.stringify({
+        findings: [{ projectName: 'alpha', severity: 'high', title: '一条结论', body: '需要你处理' }],
+        answered: [],
+      }), 'utf8');
+      runCli(dbPath, dataDir, ['report', '--file', reportFile]);
+
+      // 有人把老文件改了——回退前要能补齐。
+      writeFileSync(join(dataDir, 'patrol.json'), '[]', 'utf8');
+
+      const result = runCli(dbPath, dataDir, ['export-legacy']);
+      assert.equal(result.ok, true, '导出不该有段失败');
+      assert.ok(result.written.includes('findings'));
+
+      const findings = JSON.parse(readFileSync(join(dataDir, 'patrol.json'), 'utf8'));
+      assert.equal(findings.length, 1, '老文件补齐后结论还在');
+      assert.equal(findings[0].title, '一条结论');
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
   await t.test('大哥回复无法解析时也不静默', async () => {
     const { service, store, dir } = makeService({ text: '完全不符合格式的一段话' });
     try {
@@ -419,7 +489,7 @@ test('patrol', async (t) => {
     }
   });
 
-  await t.test('CLI 的 facts 带出值班状态：大哥能看出上一轮有没有交班', () => {
+  await t.test('CLI 的 facts 带出值班状态：大哥能看出上一轮有没有交班', async () => {
     const dir = tmpDir();
     const dbPath = makeRuntimeDb(dir);
     const dataDir = join(dir, 'data');
@@ -443,10 +513,8 @@ test('patrol', async (t) => {
       assert.ok(handed.duty.lastRunAt > 0, '交班时间戳必须落盘');
 
       // Now age the clock: a round was interrupted and never handed over.
-      const configPath = join(dataDir, 'patrol-config.json');
-      const aged = JSON.parse(readFileSync(configPath, 'utf8'));
-      aged.lastRunAt = Date.now() - 70 * 60_000;
-      writeFileSync(configPath, JSON.stringify(aged), 'utf8');
+      // 交班戳住在板面状态的 store 里（`config` 段），所以「把时间拨老」得走 store。
+      await new PatrolStore(dataDir).setConfig({ lastRunAt: Date.now() - 70 * 60_000 });
 
       const gapped = runCli(dbPath, dataDir);
       assert.ok(gapped.duty.missedRounds >= 1, '漏了一轮以上，大哥必须能从事实表里看出来');
@@ -545,13 +613,24 @@ test('patrol', async (t) => {
     try {
       runCli(dbPath, dataDir, ['manage', 'add', 'alpha', '大老板指示']);
 
-      const facts = runCli(dbPath, dataDir);
+      // The complete sheet shows both projects and marks which one is in the jurisdiction.
+      // The default (candidates) view only carries the granted project — that is the point
+      // of the first filter — so this assertion reads the complete sheet.
+      const facts = runCli(dbPath, dataDir, ['facts', '--scope', 'raw']);
       const alpha = facts.projects.find((project) => project.name === 'alpha');
       const beta = facts.projects.find((project) => project.name === 'beta');
 
       assert.equal(alpha.managed, true, '在名单里的项目要标出来');
       assert.equal(beta.managed, false, '不在名单里的项目不算管辖范围');
       assert.equal(beta.ownerSessions, undefined, '名单外的项目不带会话入口——那是越权的入口');
+
+      // And the default view is the other half of the same contract: the granted project
+      // only, with the ungranted one counted rather than carried.
+      const candidates = runCli(dbPath, dataDir);
+      assert.equal(candidates.scope, 'candidates');
+      assert.equal(candidates.projects.length, 1, '候选视图只带管辖区内的项目');
+      assert.equal(candidates.projects[0].name, 'alpha');
+      assert.ok(candidates.excluded.projects >= 1, '滤掉的数量要报出来');
 
       // The boss needs the session id to send a message to; a name on a list is not a door.
       const ids = alpha.ownerSessions.map((session) => session.id);
@@ -693,7 +772,7 @@ test('patrol', async (t) => {
         text: '按你的要求排的',
       });
 
-      const dispatches = JSON.parse(readFileSync(join(dataDir, 'dispatches.json'), 'utf8'));
+      const dispatches = readBoardSection(dataDir, 'dispatches');
       assert.equal(dispatches.length, 1, '值班路径的投递要落在看板那本账里');
       assert.equal(dispatches[0].source, 'duty');
       assert.equal(dispatches[0].targetSessionId, 'sess-alpha-lead');
@@ -721,7 +800,7 @@ test('patrol', async (t) => {
         optionIds: ['a'],
       });
 
-      const dispatches = JSON.parse(readFileSync(join(dataDir, 'dispatches.json'), 'utf8'));
+      const dispatches = readBoardSection(dataDir, 'dispatches');
       assert.equal(dispatches.length, 1, '代答也是一次真实投递');
       assert.equal(dispatches[0].source, 'duty');
       assert.equal(dispatches[0].targetSessionId, 'sess-alpha-lead');
@@ -735,7 +814,7 @@ test('patrol', async (t) => {
         rationale: '风险可逆',
         optionIds: ['a'],
       });
-      const again = JSON.parse(readFileSync(join(dataDir, 'dispatches.json'), 'utf8'));
+      const again = readBoardSection(dataDir, 'dispatches');
       assert.equal(again.length, 1, '同一张卡不能被记成两次投递');
     } finally {
       cleanupDir(dir);
@@ -769,7 +848,7 @@ test('patrol', async (t) => {
         instruction: '值班投递的指令',
       });
 
-      const dispatches = JSON.parse(readFileSync(join(dataDir, 'dispatches.json'), 'utf8'));
+      const dispatches = readBoardSection(dataDir, 'dispatches');
       assert.equal(dispatches.length, 2, '两条记录都要在');
       assert.ok(
         dispatches.some((d) => d.id === 'dsp_board_1' && d.idempotencyKey === 'key-1'),
@@ -805,7 +884,7 @@ test('patrol', async (t) => {
       }), 'utf8');
       runCli(dbPath, dataDir, ['report', '--file', reportFile, '--duty-stamp']);
 
-      const findings = JSON.parse(readFileSync(join(dataDir, 'patrol.json'), 'utf8'));
+      const findings = readBoardSection(dataDir, 'findings');
       assert.equal(findings.length, 1);
       assert.equal(findings[0].source, 'duty', '值班路径写出来的结论必须带 duty 来源');
 

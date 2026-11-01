@@ -1,7 +1,4 @@
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
-
-import { readJsonArray, updateJsonArray, writeJsonAtomic } from './json-ledger.mjs';
+import { BoardStateStore } from './board-state.mjs';
 
 /**
  * Durable state owned by the Mini App.
@@ -10,10 +7,15 @@ import { readJsonArray, updateJsonArray, writeJsonAtomic } from './json-ledger.m
  * never in the runtime database. Files are written through a temporary file plus rename so
  * a crash mid-write cannot leave a half-written JSON document behind.
  *
- * The write discipline for the ledger files lives in `json-ledger.mjs` — one
- * implementation, shared with the duty path (`patrol-store.mjs`), because
- * `dispatches.json` has two writers in two processes and both do read-modify-write. See
- * that module for what happens when they do not coordinate.
+ * ## 这些账现在住在哪
+ *
+ * **一个 store，一个文件，一把锁**（`board-state.mjs`）。原来它们是四个文件，而其中
+ * 派工账有**两个写者、两个进程**——看板的派工路径和值班路径各写各的，都做读-改-写。
+ * 那出过真事故：并发写毁掉过记录，而幂等键就在账里，丢一条就可能把同一条指令重投一次。
+ *
+ * 收口之后两个写者写的是同一段、锁的是同一把锁，写路径也只剩一条。
+ *
+ * 写纪律住在 `json-ledger.mjs`——一份实现，值班路径（`patrol-store.mjs`）也用它。
  */
 
 /**
@@ -27,18 +29,12 @@ export class Persistence {
   /** @param {string} dataDir */
   constructor(dataDir) {
     this.dataDir = dataDir;
-    this.dispatchesPath = join(dataDir, 'dispatches.json');
-    this.acksPath = join(dataDir, 'acks.json');
-    // The boss's own screening of the raw runtime items (a session error it proved is a
-    // leftover, a blocked plan task that is not actually blocked). Kept apart from the
-    // user's own "标记已知" so the two never get confused.
-    this.dismissedPath = join(dataDir, 'dismissed.json');
-    this.bossSessionPath = join(dataDir, 'boss-session.json');
+    this.state = new BoardStateStore(dataDir);
   }
 
   /** @returns {Promise<DispatchRecord[]>} */
   async listDispatches() {
-    return readJsonArray(this.dispatchesPath);
+    return this.state.section('dispatches');
   }
 
   /**
@@ -47,12 +43,13 @@ export class Persistence {
    * @param {DispatchRecord} record
    */
   async saveDispatch(record) {
-    await updateJsonArray(this.dispatchesPath, (all) => {
+    await this.state.update((state) => {
+      const all = [...state.dispatches];
       const index = all.findIndex((d) => d.id === record.id);
       if (index === -1) all.push(record);
       else all[index] = record;
-      return all;
-    }, record.id);
+      return { ...state, dispatches: all };
+    });
     return record;
   }
 
@@ -67,15 +64,16 @@ export class Persistence {
 
   /** @returns {Promise<string[]>} */
   async listAcks() {
-    return readJsonArray(this.acksPath);
+    return this.state.section('acks');
   }
 
   /** @param {string} id */
   async addAck(id) {
-    await updateJsonArray(this.acksPath, (all) => {
+    await this.state.update((state) => {
+      const all = [...state.acks];
       if (!all.includes(id)) all.push(id);
-      return all;
-    }, id);
+      return { ...state, acks: all };
+    });
     return this.listAcks();
   }
 
@@ -90,8 +88,7 @@ export class Persistence {
    * @returns {Promise<DismissedRecord[]>}
    */
   async listDismissed() {
-    const value = await readJsonArray(this.dismissedPath);
-    return Array.isArray(value) ? value : [];
+    return this.state.section('dismissed');
   }
 
   /**
@@ -100,7 +97,8 @@ export class Persistence {
    * @returns {Promise<DismissedRecord[]>}
    */
   async addDismissed(id, reason) {
-    await updateJsonArray(this.dismissedPath, (all) => {
+    await this.state.update((state) => {
+      const all = [...state.dismissed];
       const existing = all.find((entry) => entry.id === id);
       if (existing) {
         existing.reason = reason;
@@ -108,8 +106,8 @@ export class Persistence {
       } else {
         all.push({ id, reason, at: Date.now() });
       }
-      return all;
-    }, id);
+      return { ...state, dismissed: all };
+    });
     return this.listDismissed();
   }
 
@@ -123,35 +121,14 @@ export class Persistence {
    * @returns {Promise<{ sessionId: string, agent: string } | null>}
    */
   async getBossSession() {
-    const value = await readJson(this.bossSessionPath, null);
-    if (!value) return null;
-    if (typeof value === 'string') return { sessionId: value, agent: 'boss' };
-    if (typeof value.sessionId !== 'string') return null;
-    return { sessionId: value.sessionId, agent: typeof value.agent === 'string' ? value.agent : 'boss' };
+    return this.state.section('bossSession');
   }
 
   /**
    * @param {{ sessionId: string, agent: string }} session
    */
   async setBossSession(session) {
-    await writeJsonAtomic(this.bossSessionPath, session);
+    await this.state.setSection('bossSession', session);
     return session;
   }
 }
-
-async function readJson(path, fallback) {
-  try {
-    const raw = await readFile(path, 'utf8');
-    if (!raw.trim()) return fallback;
-    return JSON.parse(raw);
-  } catch (error) {
-    // A missing file is normal — nothing has been written yet. A file that exists but
-    // cannot be parsed is NOT: the state is damaged, and reporting it as "nothing here"
-    // is how a dispatch record that exists on disk silently reads back as missing —
-    // which breaks the board's idempotency, because the same instruction would then be
-    // delivered twice. So a damaged file is an error, not an empty list.
-    if (error?.code === 'ENOENT') return fallback;
-    throw new Error(`读不了 ${path}：${error?.message ?? String(error)}（文件已损坏，不要当成「没有记录」）`);
-  }
-}
-

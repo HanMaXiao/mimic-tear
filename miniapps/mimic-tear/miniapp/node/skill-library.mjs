@@ -343,7 +343,15 @@ export class SkillLibraryStore {
       scored.push({ ...entry, score, matchedTriggers });
     }
 
-    scored.sort((a, b) => b.score - a.score || (b.lastUsedAt ?? 0) - (a.lastUsedAt ?? 0));
+    // 排序必须是**确定的**：同样的描述永远给出同样的顺序。
+    // 以前这里拿「最近用过」当次序——那让结果依赖历史：同一个描述在用过之后和没用过的
+    // 时候会命中不同的技能，于是「派工命中哪个技能」变成了一个会漂移的问题。
+    // 现在只按分数排，分数一样时按技能名、再按 id 排。
+    scored.sort((a, b) => (
+      b.score - a.score
+      || compareText(a.skillName, b.skillName)
+      || compareText(String(a.id), String(b.id))
+    ));
     return scored.slice(0, limit);
   }
 
@@ -482,6 +490,23 @@ async function readJson(path, fallback) {
   } catch {
     return fallback;
   }
+}
+
+/**
+ * 按码位比两段文本。
+ *
+ * 不用 `localeCompare`：它跟着运行环境的语言设置走，同一份数据在两台机器上可能排出不同
+ * 的次序。这里的次序必须到处一样。
+ *
+ * @param {string} a
+ * @param {string} b
+ * @returns {number}
+ */
+function compareText(a, b) {
+  const left = String(a ?? '');
+  const right = String(b ?? '');
+  if (left === right) return 0;
+  return left < right ? -1 : 1;
 }
 
 function delay(ms) {

@@ -22,7 +22,7 @@ import { buildPatrolFindings, resolvePatrolProposals } from '../miniapps/mimic-t
 import { splitVisibleProjects } from '../miniapps/mimic-tear/miniapp/node/project-scope.mjs';
 import { buildDutyStatus, resolveDutyIntervals } from '../miniapps/mimic-tear/miniapp/node/duty-status.mjs';
 import { ageMinutes, severityRank, sortBySeverity } from '../miniapps/mimic-tear/miniapp/node/inbox-builder.mjs';
-import { makeRuntimeDb, tmpDir, cleanupDir } from './helpers/fixture.mjs';
+import { makeRuntimeDb, readBoardSection, tmpDir, cleanupDir } from './helpers/fixture.mjs';
 
 function makeService(overrides = {}) {
   const dir = tmpDir();
@@ -290,9 +290,8 @@ test('project-service', async (t) => {
       await service.ack('item-1');
       await service.dispatch({ projectId: 1, sessionId: null, instruction: 'x', idempotencyKey: 'k-p' });
 
-      const { readFile } = await import('node:fs/promises');
-      const acks = JSON.parse(await readFile(join(dir, 'data', 'acks.json'), 'utf8'));
-      const dispatches = JSON.parse(await readFile(join(dir, 'data', 'dispatches.json'), 'utf8'));
+      const acks = readBoardSection(join(dir, 'data'), 'acks');
+      const dispatches = readBoardSection(join(dir, 'data'), 'dispatches');
 
       assert.deepEqual(acks, ['item-1']);
       assert.equal(dispatches.length, 1);
@@ -330,10 +329,14 @@ test('project-service', async (t) => {
       await service.runPatrol();
 
       // The duty path writes one.
+      //
+      // 它的严重度必须是 `low`：同项目同严重度的结论会被**合并**（4.2 的同类合并），
+      // 而看板那条巡检结论正是 alpha/high。这个测试要验的是**来源标注**，所以给值班
+      // 结论换一个严重度，让三条结论各占一格。
       await new PatrolStore(dataDir).add({
         projectId: 1,
         projectName: 'alpha',
-        severity: 'high',
+        severity: 'low',
         title: '值班结论',
         body: '值班这一轮发现的问题',
         source: 'duty',

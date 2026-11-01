@@ -1,0 +1,168 @@
+/**
+ * 订阅表：哪条线有投递口，负责会话是谁，投过什么。
+ *
+ * ## 它是什么
+ *
+ * 「事件该投给谁」这件事的**唯一权威**。没有订阅项 → 这条线没有投递口 → 事件投不出去。
+ *
+ * ## 为什么是状态，不是现推
+ *
+ * 现推的话，每一轮都要重新决定「谁负责这条线」。那个决定一旦飘了，事件就投错人——而
+ * **投错人比不投更糟**：不投只是晚一点，投错是把工作交到不该拿的人手里。所以归属落成状态，
+ * 只由显式动作改。
+ *
+ * ## 与管辖名单的关系
+ *
+ * 订阅表**不是**管辖权。管辖名单说「大哥可以管哪些项目」，订阅表说「这些项目的事件投给
+ * 哪个会话」。两者都必须成立，直通才发生——**投递口比管辖权更窄**。
+ *
+ * 形状与 `managed-projects.json` 同形（一个数组、一个文件、原子写），免得又长出一套
+ * 读写的规矩。
+ */
+
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+
+/**
+ * @typedef {{
+ *   projectName:string,
+ *   projectId?:number|string|null,
+ *   ownerSessionId:string|null,
+ *   reason:string,
+ *   since:number,
+ *   addedAt:number,
+ *   active:boolean,
+ *   delivered:string[],
+ * }} Subscription
+ */
+
+/** 添加订阅必须写明理由——跟管辖名单一个规矩。 */
+const REASON_REQUIRED = '添加订阅必须写明理由（大老板的原话或指示）';
+
+/** 一条线最多记多少个「已投递」的事件 id。 */
+const DELIVERED_MEMORY = 200;
+
+export class ThreadSubscriptions {
+  /** @param {string} dataDir */
+  constructor(dataDir) {
+    this.dataDir = dataDir;
+    this.path = join(dataDir, 'thread-subscriptions.json');
+  }
+
+  /**
+   * 当前的订阅。
+   *
+   * @returns {Promise<Subscription[]>}
+   */
+  async list() {
+    const value = await readJson(this.path, []);
+    return Array.isArray(value)
+      ? value.filter((entry) => entry && typeof entry.projectName === 'string')
+      : [];
+  }
+
+  /**
+   * 给一条线开投递口。
+   *
+   * @param {string} projectName
+   * @param {string} ownerSessionId 负责会话；没有它就没有投递口
+   * @param {string} reason 为什么
+   * @param {{projectId?:number|string|null}} [options]
+   * @returns {Promise<Subscription[]>}
+   */
+  async add(projectName, ownerSessionId, reason, options = {}) {
+    const name = String(projectName ?? '').trim();
+    const sessionId = String(ownerSessionId ?? '').trim();
+    const why = String(reason ?? '').trim();
+    if (!name) throw new Error('必须写明项目名');
+    if (!sessionId) throw new Error('必须写明负责会话——没有会话就没有投递口');
+    if (!why) throw new Error(REASON_REQUIRED);
+
+    const all = await this.list();
+    const existing = all.find((entry) => entry.projectName === name);
+    if (existing) {
+      existing.ownerSessionId = sessionId;
+      existing.reason = why;
+      existing.addedAt = Date.now();
+      existing.active = true;
+      if (options.projectId != null) existing.projectId = options.projectId;
+    } else {
+      all.push({
+        projectName: name,
+        projectId: options.projectId ?? null,
+        ownerSessionId: sessionId,
+        reason: why,
+        since: Date.now(),
+        addedAt: Date.now(),
+        active: true,
+        delivered: [],
+      });
+    }
+    await this.#write(all);
+    return all;
+  }
+
+  /**
+   * 关掉一条线的投递口。
+   *
+   * @param {string} projectName
+   * @param {string} reason
+   * @returns {Promise<Subscription[]>}
+   */
+  async remove(projectName, reason) {
+    const name = String(projectName ?? '').trim();
+    const why = String(reason ?? '').trim();
+    if (!name) throw new Error('必须写明项目名');
+    if (!why) throw new Error(REASON_REQUIRED);
+    const all = await this.list();
+    const next = all.filter((entry) => entry.projectName !== name);
+    await this.#write(next);
+    return next;
+  }
+
+  /**
+   * 记下「这个事件已经投过了」。
+   *
+   * 去重靠它——同一条事件不能投两次，那会让负责人会话收到重复的活。
+   *
+   * @param {string} projectName
+   * @param {string[]} triggerIds
+   * @returns {Promise<Subscription[]>}
+   */
+  async markDelivered(projectName, triggerIds) {
+    const name = String(projectName ?? '').trim();
+    const ids = (triggerIds ?? []).map((id) => String(id)).filter(Boolean);
+    if (!name || ids.length === 0) return this.list();
+    const all = await this.list();
+    const entry = all.find((item) => item.projectName === name);
+    if (!entry) return all;
+    const seen = new Set(Array.isArray(entry.delivered) ? entry.delivered : []);
+    for (const id of ids) seen.add(id);
+    entry.delivered = [...seen].slice(-DELIVERED_MEMORY);
+    await this.#write(all);
+    return all;
+  }
+
+  /**
+   * @param {Subscription[]} entries
+   */
+  async #write(entries) {
+    await mkdir(this.dataDir, { recursive: true });
+    const temp = `${this.path}.${process.pid}.${Date.now().toString(36)}.tmp`;
+    await writeFile(temp, JSON.stringify(entries, null, 2), 'utf8');
+    await rename(temp, this.path);
+  }
+}
+
+/**
+ * @param {string} path
+ * @param {any} fallback
+ * @returns {Promise<any>}
+ */
+async function readJson(path, fallback) {
+  try {
+    return JSON.parse(await readFile(path, 'utf8'));
+  } catch {
+    return fallback;
+  }
+}

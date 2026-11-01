@@ -326,6 +326,7 @@ export async function start(context) {
   const { ProjectService } = await import('./project-service.mjs');
   const { BossBridge } = await import('./boss-bridge.mjs');
   const { PatrolStore } = await import('./patrol-store.mjs');
+  const { RoundControl } = await import('./round-control.mjs');
 
   const { homedir } = await import('node:os');
 
@@ -361,6 +362,10 @@ export async function start(context) {
     onPermission: app.requestPermission,
   });
 
+  // 在跑的轮次登记表。**只在内存里**：它是「这一轮正在跑」的进程内事实，不是要落盘的
+  // 业务状态。板面重启后没有「正在跑」这回事——宿主那边的会话轮次也跟着没了。
+  const rounds = new RoundControl();
+
   const service = new ProjectService({
     store,
     readPlan,
@@ -369,6 +374,7 @@ export async function start(context) {
     persistence,
     boss,
     patrol,
+    rounds,
     refreshSkills,
   });
 
@@ -421,6 +427,32 @@ export async function start(context) {
           // 之前直接写 broadcast(...) 会被下面那个 catch 吞掉，交班汇报从来没到过页面。
           app.broadcast('duty', { rounds: await service.getDutyRounds() });
         }
+        // 直通：把这一轮的事件直接投进项目负责人的会话，**不经过大哥**。
+        //
+        // **默认关**（`patrol-config.json` 的 `directDelivery`）。打开的前提是大哥的提示词
+        // 已经改成「事件直达了，你只管没有归属的事」——否则两边各干一遍，同一份活干两次，
+        // 而收件箱已经堆了 93 条没人看的结论了。
+        //
+        // 它放在板面自己巡检的早退**之前**：板面巡检和大哥值班是两件事，不该互相绑架。
+        if (config.directDelivery) {
+          const { runRound } = await import('./direct-delivery-runner.mjs');
+          const { ManagedProjects } = await import('./managed-projects.mjs');
+          const { ThreadSubscriptions } = await import('./thread-subscriptions.mjs');
+          const direct = await runRound({
+            store,
+            patrol,
+            managed: new ManagedProjects(context.dataDir),
+            subscriptions: new ThreadSubscriptions(context.dataDir),
+            agent: context.agent ?? null,
+          });
+          context.logger.info('mimic-tear.direct.delivered', {
+            attempted: direct.outcome.attempted,
+            delivered: direct.outcome.delivered,
+            queued: direct.outcome.queued,
+            failed: direct.outcome.failed,
+          });
+        }
+
         // Cheap early-outs before the (expensive) snapshot.
         if (!config.enabled) return;
         if (!isPatrolDue(config)) return;
@@ -436,8 +468,23 @@ export async function start(context) {
           return;
         }
 
-        const outcome = await service.runPatrol();
-        app.broadcast('patrol', outcome);
+        // 轮次是后台的：起完就等它跑完。已经被叫停的轮次**不算跑完**——如实报出去。
+        const started = await service.startPatrol();
+        if (started.skipped) {
+          // 已经有一轮在跑了。同一件事不跑第二遍。
+          context.logger.info('mimic-tear.patrol.skipped', { reason: started.reason });
+          return;
+        }
+        const settled = await started.promise;
+        if (settled.status !== 'finished') {
+          context.logger.warn('mimic-tear.patrol.not_finished', {
+            status: settled.status,
+            message: settled.error,
+          });
+          app.broadcast('patrol', { findings: [], error: settled.error, status: settled.status });
+          return;
+        }
+        app.broadcast('patrol', settled.result);
         const overview = await service.getOverview();
         app.broadcast('update', overview);
       } catch (error) {

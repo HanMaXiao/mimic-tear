@@ -42,6 +42,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { sendToast } from './toast.mjs';
 import { computeDutyEvidence } from './view-model.mjs';
 import { RuntimeStore } from './runtime-store.mjs';
+import { BoardStateStore } from './board-state.mjs';
 import { appendAlert, buildBoardNotice, buildDutyTruthLine, publishBoardNotice } from './watchdog-alerts.mjs';
 import { DUTY_CRON_SEED, readDutyChain } from './duty-chain.mjs';
 import { decideNextCheckAt } from './watchdog-schedule.mjs';
@@ -100,7 +101,6 @@ const launchedByTask = process.env.MIMIC_WATCHDOG_LAUNCHED === '1';
 /** An explicit opt-out, for a caller that wants a check without touching the schedule. */
 const noRearm = args.includes('--no-rearm');
 
-const CONFIG_FILE = 'patrol-config.json';
 const INTENT_FILE = 'duty-intent.json';
 const STATE_FILE = 'watchdog-state.json';
 
@@ -158,7 +158,7 @@ async function readEvidence(input) {
   let store = null;
   try {
     store = RuntimeStore.open(input.dbPath);
-    const config = input.dir ? await readJson(join(input.dir, CONFIG_FILE), {}) : {};
+    const config = input.dir ? await new BoardStateStore(input.dir).section('config') : {};
     // The pin (the user's decision) and the seed (the built-in family hint) are separate
     // channels: a pinned id that has been deleted is a misconfiguration, not a hint.
     const pinnedCronId = typeof config?.dutyCronId === 'string' && config.dutyCronId.trim()
@@ -186,6 +186,38 @@ async function readEvidence(input) {
 }
 
 /**
+ * 给值班会话拍一张进展快照。
+ *
+ * 「在跑」看会话状态，「有进展」看消息数——这两个都不是模型判的，是从运行时数据里读出来的。
+ *
+ * @param {{dbPath:string, sessionId:string|null, now:number}} input
+ * @returns {Promise<{current:any|null}>}
+ */
+async function readProgress(input) {
+  const sessionId = input?.sessionId ?? null;
+  if (!sessionId) return { current: null };
+  const { snapshotProgress } = await import('./progress-rules.mjs');
+  let store = null;
+  try {
+    store = RuntimeStore.open(input.dbPath);
+    const session = store.listSessions().find((item) => item.id === sessionId) ?? null;
+    const messages = store.countSessionMessages(sessionId) ?? 0;
+    return {
+      current: snapshotProgress({
+        sessionId,
+        status: session?.status ?? 'idle',
+        messages,
+        at: input.now,
+      }),
+    };
+  } catch {
+    return { current: null };
+  } finally {
+    store?.close();
+  }
+}
+
+/**
  * Run one watchdog tick.
  *
  * @param {{dataDir?:string, now?:number, dbPath?:string, cronId?:string|null, noNotify?:boolean,
@@ -202,7 +234,7 @@ export async function runWatchdog(options = {}) {
       : sendToast);
   const dbPath = options.dbPath ?? runtimeDbPath;
 
-  const config = await readJson(join(dir, CONFIG_FILE), {});
+  const config = await new BoardStateStore(dir).section('config');
   // The duty intent: was the boss explicitly told to rest? A missing file means "no
   // decision", which means on duty — never an excuse to stay quiet about a dead boss.
   const intent = await readJson(join(dir, INTENT_FILE), null);
@@ -210,6 +242,28 @@ export async function runWatchdog(options = {}) {
 
   const duty = evaluateDuty(config, now, intent);
   const evidence = await readEvidence({ dbPath, cronId: options.cronId ?? null, dir, duty, now });
+
+  // 「在跑但没进展」：交班戳看不出来的那一类故障（进程活着、心跳新鲜，却一直在空转）。
+  // 判据是**确定性**的——消息数、状态、产出量，不靠模型判。
+  if (evidence) {
+    const { decideStuck, snapshotProgress } = await import('./progress-rules.mjs');
+    const progress = await readProgress({
+      dbPath,
+      sessionId: evidence.chain?.targetSessionId ?? null,
+      now,
+    });
+    const stuck = decideStuck({
+      previous: state?.progress ?? null,
+      current: progress.current,
+      now,
+    });
+    evidence.stuck = stuck;
+    // 快照随这一跳推进：下次要比的就是它。
+    evidence.progress = progress.current
+      ? { ...progress.current, lastProgressAt: stuck.lastProgressAt }
+      : (state?.progress ?? null);
+  }
+
   const action = decideAction(state, duty, evidence);
 
   // The board's notice is decided **independently of the toast's own state machine**:
@@ -308,7 +362,7 @@ export async function runWatchdog(options = {}) {
  * @returns {Promise<any>}
  */
 export async function inspect() {
-  const config = await readJson(join(dataDir, CONFIG_FILE), {});
+  const config = await new BoardStateStore(dataDir).section('config');
   const intent = await readJson(join(dataDir, INTENT_FILE), null);
   const state = await readJson(join(dataDir, STATE_FILE), emptyWatchdogState());
   const now = Date.now();

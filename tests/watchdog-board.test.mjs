@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { appendAlert, buildDutyTruthLine } from '../miniapps/mimic-tear/miniapp/node/watchdog-alerts.mjs';
 import { runWatchdog } from '../miniapps/mimic-tear/miniapp/node/watchdog.mjs';
 import { PatrolStore } from '../miniapps/mimic-tear/miniapp/node/patrol-store.mjs';
-import { tmpDir, cleanupDir } from './helpers/fixture.mjs';
+import { readBoardSection, tmpDir, cleanupDir } from './helpers/fixture.mjs';
 
 const MINUTE = 60_000;
 const NOW = Date.parse('2026-10-20T12:00:00Z');
@@ -68,9 +68,18 @@ test('同一状态只转一次，状态变了才再转', async () => {
     assert.equal((await patrol.list()).length, 1, '同一次掉线不刷屏');
 
     // A new outage (a new handover stamp) is a new state → published again.
-    await appendAlert(dir, record({ identity: 'stale:222', at: NOW + 3 * MINUTE }));
+    //
+    // 它**并进**板面上那一条（4.2 的同类合并：全局结论同键就是同一格），所以条数还是 1，
+    // 但板面看到的是**新状态**的内容——这才是「状态变了才再转」的可观察结果。
+    await appendAlert(dir, record({
+      identity: 'stale:222',
+      at: NOW + 3 * MINUTE,
+      body: '已 576 分钟没有交班',
+    }));
     patrol = new PatrolStore(dir);
-    assert.equal((await patrol.list()).length, 2, '状态变了才再转');
+    const findings = await patrol.list();
+    assert.equal(findings.length, 1, '同一条全局结论只占一格');
+    assert.match(findings[0].body, /576/, '板面看到的是新状态');
   } finally {
     cleanupDir(dir);
   }
@@ -82,7 +91,9 @@ test('app 关着也能落盘——写的是板面自己的数据目录', async (
     // Nothing here needs a Mini App runtime: the watchdog is a separate process and the
     // board's data directory is all it writes to. That is the whole point of this path.
     await appendAlert(dir, record({ identity: 'stale:999' }));
-    assert.ok(existsSync(join(dir, 'patrol.json')), 'patrol.json 必须被写出来');
+    // 结论账住在板面状态的单一 store 里（`board-state.json`）——app 关着也一样落盘。
+    const findings = readBoardSection(dir, 'findings');
+    assert.equal(findings.length, 1, '结论必须写进板面自己的数据目录');
     assert.ok(existsSync(join(dir, 'watchdog-alert.log')), '告警日志也要写');
   } finally {
     cleanupDir(dir);

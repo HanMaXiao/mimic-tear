@@ -69,6 +69,15 @@ export function attentionItemHtml(item) {
 }
 
 /**
+ * 总览的「需你处理」只渲染**一屏**。
+ *
+ * 「不超过一个屏幕」得是**结构性的**，不能靠「现在恰好只有 5 条」。
+ * 运行时原始项（会话异常、问卷卡…）**不受** `deskLimit` 约束——那是运行时的事实，
+ * 大哥管不了——所以条数随时可能涨回几十条。总览只放得下一屏，剩下的去收件箱看。
+ */
+export const ATTENTION_SCREEN_MAX = 8;
+
+/**
  * The list of things waiting for a decision.
  *
  * @param {any} overview
@@ -76,19 +85,30 @@ export function attentionItemHtml(item) {
 export function renderAttention(overview) {
   const list = el('attention-list');
   const items = overview?.attention ?? [];
+  const shown = items.slice(0, ATTENTION_SCREEN_MAX);
+  const rest = items.length - shown.length;
 
-  el('attention-count').textContent = items.length ? `${items.length} 项` : '';
+  el('attention-count').textContent = items.length
+    ? `${items.length} 项${rest > 0 ? ` · 一屏只放得下 ${shown.length} 项` : ''}`
+    : '';
   renderDutyStatus(overview?.duty);
 
   if (state.error && !items.length) {
     list.innerHTML = '<div class="state state--error">数据读取失败，请点击右上角刷新重试。</div>';
+    renderLines(overview);
     return;
   }
   if (!items.length) {
     list.innerHTML = '<div class="empty">目前没有需要你处理的事项。</div>';
+    renderLines(overview);
     return;
   }
-  list.innerHTML = items.map(attentionItemHtml).join('');
+  list.innerHTML = shown.map(attentionItemHtml).join('')
+    + (rest > 0
+      ? `<div class="empty">还有 ${rest} 项，去<a href="#/inbox">收件箱</a>看全部。</div>`
+      : '');
+  // 线与待办同源（同一份总览快照），一起重绘。
+  renderLines(overview);
 }
 
 /**
@@ -150,4 +170,63 @@ export function renderProjects(overview) {
     return;
   }
   body.innerHTML = projects.map(projectRowHtml).join('');
+}
+
+/**
+ * One line: a project the boss is managing, what he has been doing on it, and what is
+ * waiting for you there.
+ *
+ * @param {any} line
+ * @returns {string}
+ */
+export function lineCardHtml(line) {
+  const progress = line?.progress ?? {};
+  const goals = progress.goalsTotal
+    ? `${progress.goalsActive}/${progress.goalsTotal} 个目标进行中`
+    : '暂无目标';
+  const tasks = progress.tasksTotal
+    ? `${progress.tasksDone}/${progress.tasksTotal} 个任务完成`
+    : '暂无计划任务';
+  const delivery = line?.thread?.active ? ' · 事件直达已开' : '';
+  const pending = line?.pending ?? [];
+  const actions = line?.actions ?? [];
+  return `
+    <div class="item${line?.waitingOnYou ? ' item--high' : ''}">
+      <div class="item__head">
+        <span class="tag ${line?.waitingOnYou ? 'tag--high' : 'tag--low'}">${line?.waitingOnYou ? '在等你' : '进行中'}</span>
+        <span class="item__title">${escapeHtml(line?.projectName ?? '')}</span>
+      </div>
+      <p class="item__meta">下一步：${escapeHtml(line?.nextStep ?? '')} · ${escapeHtml(goals)} · ${escapeHtml(tasks)}${escapeHtml(delivery)}</p>
+      ${pending.length
+        ? `<p class="item__body doc">待你决策 ${pending.length} 项：${escapeHtml(pending[0].title ?? '')}</p>`
+        : ''}
+      ${actions.length
+        ? `<p class="item__note">最近动作：${escapeHtml(actions[0].title ?? '')}（${relativeTime(actions[0].at)}）</p>`
+        : '<p class="item__note">这一轮没有变化。</p>'}
+    </div>`;
+}
+
+/**
+ * The lines the boss is looking after.
+ *
+ * 这是「我的一个大哥 + N 条线」的那一段。**名单外的项目不在这里**——那不是大哥的活；
+ * 它们在下面的项目台账里（下钻层）。
+ *
+ * @param {any} overview
+ */
+export function renderLines(overview) {
+  const list = el('lines-list');
+  if (!list) return;
+  const lines = overview?.lines ?? [];
+  el('lines-count').textContent = lines.length ? `${lines.length} 条线` : '';
+
+  if (state.error && !lines.length) {
+    list.innerHTML = '<div class="state state--error">线的数据读取失败，请刷新重试。</div>';
+    return;
+  }
+  if (!lines.length) {
+    list.innerHTML = '<div class="empty">大哥当前没有受托管理的项目。</div>';
+    return;
+  }
+  list.innerHTML = lines.map(lineCardHtml).join('');
 }

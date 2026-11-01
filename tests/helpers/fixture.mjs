@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -204,16 +204,27 @@ CREATE TABLE local_runtime_v2_cron_definitions (
  * @returns {string} absolute path of the created database
  */
 export function makeCronDb(dir, options = {}) {
+  const dbPath = join(dir, 'cron-state.sqlite');
+  const db = new DatabaseSync(dbPath);
+  db.exec(CRON_DDL);
+  seedCronFamily(db, options);
+  db.close();
+  return dbPath;
+}
+
+/**
+ * Seed the cron family — one definition plus its run log — into an open database.
+ *
+ * @param {import('node:sqlite').DatabaseSync} db
+ * @param {{cronId?:string, sessionId?:string, definition?:object|false, runs?:Array<object>}} options
+ */
+function seedCronFamily(db, options) {
   const {
     cronId = 'cron-test',
     sessionId = 'sess-cron',
     definition = {},
     runs = [],
   } = options;
-
-  const dbPath = join(dir, 'cron-state.sqlite');
-  const db = new DatabaseSync(dbPath);
-  db.exec(CRON_DDL);
 
   // The definition has to exist: a chain that resolves by name and finds no definition
   // reads "no runs" and calls it "nothing went wrong".
@@ -245,6 +256,60 @@ export function makeCronDb(dir, options = {}) {
       run.failedAt ?? null, run.errorCode ?? null, run.error ?? null,
       run.retryAt ?? null, run.retryAttempt ?? 0,
     );
+  }
+}
+
+/**
+ * Build a database carrying **both** the runtime-state tables and the cron family.
+ *
+ * The duty board's CLI reads both: the project list (runtime) to resolve the jurisdiction
+ * names, and the cron run log (duty chain) to work out how long the chain was broken.
+ * A CLI test needs one file that answers both — the two single-purpose factories above
+ * each leave half the questions unanswerable.
+ *
+ * @param {string} dir directory to create the db in
+ * @param {{cronId?:string, sessionId?:string, definition?:object|false, runs?:Array<object>}} [options]
+ * @returns {string} absolute path of the created database
+ */
+export function makeDutyBoardDb(dir, options = {}) {
+  const dbPath = join(dir, 'duty-board.sqlite');
+  const db = new DatabaseSync(dbPath);
+  db.exec(DDL);
+  db.exec(CRON_DDL);
+  seedCronFamily(db, options);
+
+  // 可选的会话与消息行 —— 「进程活着但无实质进展」的场景要靠它们造出来。
+  const sessions = options.sessions ?? [];
+  if (sessions.length) {
+    const insert = db.prepare(
+      `INSERT INTO local_runtime_sessions
+         (session_id, agent_name, status, archived, visibility, session_type, purpose,
+          origin_cron_id, parent_session_id, workspace_dir, title, created_at_ms, updated_at_ms,
+          error_code, error_message, project_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    for (const s of sessions) {
+      insert.run(
+        s.id, s.agentName ?? 'boss', s.status ?? 'idle', 0, 'visible', 'root', null,
+        null, null, s.workspaceDir ?? 'D:/projects/alpha', s.title ?? '值班会话',
+        s.createdAt ?? 1000, s.updatedAt ?? 1000, null, null, s.projectId ?? 1,
+      );
+    }
+  }
+
+  const messages = options.messages ?? [];
+  if (messages.length) {
+    const insert = db.prepare(
+      `INSERT INTO local_runtime_message_rows
+         (id, session_id, msg_id, role, turn_id, created_at_ms, data_json, source)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    messages.forEach((m, index) => {
+      insert.run(
+        index + 1, m.sessionId, `m-${index + 1}`, m.role ?? 'user', 'turn-1',
+        m.createdAt ?? 1000, JSON.stringify({ msg_content: m.text ?? 'hi' }), 'cron',
+      );
+    });
   }
 
   db.close();
@@ -357,4 +422,19 @@ export function makeRuntimeDb(dir) {
 
   db.close();
   return dbPath;
+}
+
+/**
+ * 读板面状态 store 的一段。
+ *
+ * 板面自己的那几本账收口进了一个文件（`board-state.json`），所以「数据在哪」这个问题的
+ * 答案变了：不再是几个独立文件，而是这一个文件里的几段。
+ *
+ * @param {string} dataDir the board's data directory
+ * @param {string} section the segment to read
+ * @returns {any}
+ */
+export function readBoardSection(dataDir, section) {
+  const raw = JSON.parse(readFileSync(join(dataDir, 'board-state.json'), 'utf8'));
+  return raw?.[section] ?? null;
 }

@@ -35,10 +35,14 @@ import {
 } from './duty-status.mjs';
 import { assembleInbox, buildPatrolInboxItems } from './inbox-assembly.mjs';
 import { buildInbox, buildKpi, selectAttentionItems } from './inbox-builder.mjs';
+import { buildLines } from './line-view.mjs';
+import { resolveWhenBusy } from './round-control.mjs';
+import { ThreadSubscriptions } from './thread-subscriptions.mjs';
 import { buildOrgTree } from './org-tree.mjs';
 import { buildPatrolFindings, resolvePatrolProposals } from './patrol-run.mjs';
 import { buildPatrolBrief, parsePatrolReport } from './patrol-report.mjs';
 import { buildProjectCards } from './project-cards.mjs';
+import { DEFAULT_DESK_LIMIT } from './patrol-rules.mjs';
 import { isInternalWorkspace, splitVisibleProjects } from './project-scope.mjs';
 import { normalizeConclusionSource } from './conclusion-source.mjs';
 
@@ -47,6 +51,21 @@ export { isInternalWorkspace };
 
 /** 技能库多久重扫一次，这样新装上的技能才能露出来。 */
 const SKILL_REFRESH_MS = 10 * 60 * 1000;
+
+/**
+ * 桌面上界的兜底值：读不到 `patrol-config.json` 时用它。
+ *
+ * 它是**兜底**，不是「收件箱就这么大」——运行时原始项（会话异常等）不受它约束。
+ */
+const DEFAULT_ATTENTION_LIMIT = 20;
+
+/**
+ * 板面巡检的槽位。
+ *
+ * 同一个槽位上只允许有一轮在跑——重复的启动直接跳过，而不是排着队跑第二遍。
+ * 手动点的「巡检」和定时器自己跑的巡检共用它：两者是同一件事，不该同时跑两份。
+ */
+const PATROL_SLOT = 'board-patrol';
 
 /**
  * Mini App 唯一的领域服务。
@@ -68,6 +87,7 @@ export class ProjectService {
    *   managed?: import('./managed-projects.mjs').ManagedProjects,
    *   skillLibrary?: import('./skill-library.mjs').SkillLibraryStore,
    *   refreshSkills?: () => Promise<{ skills: any[], failures: any[] }>,
+   *   rounds?: import('./round-control.mjs').RoundControl,
    * }} deps
    */
   constructor(deps) {
@@ -78,6 +98,9 @@ export class ProjectService {
     this.persistence = deps.persistence;
     this.boss = deps.boss;
     this.patrol = deps.patrol ?? null;
+    // 在跑的轮次登记表。缺了它，这一层就没有「谁在忙」这个事实——于是会话正忙时，
+    // 新的指令会被宿主直接拒掉（`BUSY`），大老板说的话就丢了。
+    this.rounds = deps.rounds ?? null;
     // 值班意图与管辖名单住在值班配置同一个目录里，所以是就近找到的，而不是注入两遍。
     const sharedDir = deps.patrol?.dataDir ?? deps.dutyIntent?.dataDir ?? null;
     this.dutyIntent = deps.dutyIntent ?? (sharedDir ? new DutyIntent(sharedDir) : null);
@@ -174,6 +197,7 @@ export class ProjectService {
         enabled: false,
         intervalMinutes: intervals.intervalMinutes,
         dutyIntervalMinutes: intervals.dutyIntervalMinutes,
+        deskLimit: DEFAULT_DESK_LIMIT,
         lastRunAt: null,
         lastBoardPatrolAt: null,
         lastSignature: null,
@@ -254,23 +278,97 @@ export class ProjectService {
   }
 
   /**
+   * 起一轮巡检，**不等它跑完**。
+   *
+   * 轮次是后台的：登记完就返回，跑完了自己 resolve。同一时刻只允许一轮板面巡检——
+   * 同一个槽位上已经有在跑的，第二轮会被**跳过**（不会排着队跑第二遍）。
+   *
+   * @param {{slot?:string, whenBusy?:'queue'|'steer'}} [options]
+   * @returns {Promise<{id:string, kind:string, slot:string, status:string, skipped:boolean,
+   *                     reason:string|null, promise:Promise<{status:string,result:any,error:string|null}>}>}
+   */
+  async startPatrol(options = {}) {
+    if (!this.patrol) {
+      throw new DomainError('patrol_unavailable', '当前部署不支持主动巡检', 501);
+    }
+    if (!this.rounds) {
+      // 没有轮次登记表就退回到「跑完才返回」的老路子——那条路是能用的，只是不能叫停。
+      return {
+        id: '',
+        kind: 'patrol',
+        slot: options.slot ?? PATROL_SLOT,
+        status: 'running',
+        skipped: false,
+        reason: null,
+        promise: this.#runPatrolRound({ whenBusy: options.whenBusy })
+          .then((result) => ({ status: 'finished', result, error: null })),
+      };
+    }
+
+    const sessionId = this.boss?.sessionId ? await this.boss.sessionId() : '';
+    const active = this.rounds.activeForSession(sessionId);
+    // 会话正忙时，巡检**排队**——不插话进可能正在改文件的那一轮。
+    const whenBusy = options.whenBusy ?? resolveWhenBusy(active.map((round) => round.kind));
+
+    return this.rounds.start({
+      kind: 'patrol',
+      slot: options.slot ?? PATROL_SLOT,
+      sessionId,
+      run: (signal, ctx) => this.#runPatrolRound({
+        signal,
+        whenBusy,
+        onEvent: ctx.onEvent,
+      }),
+    });
+  }
+
+  /**
    * 跑一轮主动巡检，把大哥发现的东西记下来。
    *
    * 事实由看板提供，判断由大哥提供。结论会落盘，所以板面关着时跑过的那一轮，重新打开
    * 还能看见。
+   *
+   * @param {{slot?:string, whenBusy?:'queue'|'steer'}} [options]
+   * @returns {Promise<any>}
    */
-  async runPatrol() {
-    if (!this.patrol) {
-      throw new DomainError('patrol_unavailable', '当前部署不支持主动巡检', 501);
+  async runPatrol(options = {}) {
+    const started = await this.startPatrol(options);
+    const settled = await started.promise;
+    if (settled.status === 'finished') return settled.result;
+    // 被叫停不是失败，但它也不能算「跑完了」——如实报出去。
+    if (settled.status === 'aborted') {
+      return {
+        runAt: Date.now(),
+        conclusion: '',
+        dispatches: 0,
+        proposals: [],
+        executed: [],
+        findings: [],
+        rejected: [],
+        error: settled.error ?? '这一轮巡检被叫停了。',
+        status: 'aborted',
+      };
     }
+    throw new DomainError('patrol_failed', settled.error ?? '巡检轮次失败', 500);
+  }
 
+  /**
+   * 一轮巡检的正文。它是**轮次里跑的东西**，所以拿得到 signal（叫停）与 whenBusy。
+   *
+   * @param {{signal?:AbortSignal, whenBusy?:'queue'|'steer', onEvent?:(event:any)=>void}} [options]
+   * @returns {Promise<any>}
+   */
+  async #runPatrolRound(options = {}) {
     const snapshot = await this.snapshot();
     const brief = buildPatrolBrief(snapshot);
 
     // 每轮唯一，所以重复跑一轮不会重复投递同一个提案。
     this.patrolRunKey = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
-    const outcome = await this.boss.patrol({ brief });
+    const outcome = await this.boss.patrol(
+      { brief },
+      { signal: options.signal, whenBusy: options.whenBusy },
+    );
 
     const report = parsePatrolReport(outcome.text);
     const findings = buildPatrolFindings(
@@ -280,10 +378,22 @@ export class ProjectService {
     );
 
     const created = [];
+    // 入账被拒的结论（例如正文超了带宽上限）要**单独报出来**，不能悄悄少记一条——
+    // 大哥得知道自己写的东西没进来。
+    const rejected = [];
     for (const finding of findings) {
       // 看板自己的巡检循环。结论的来源在这里写下来，所以收件箱能把看板的产出和值班大哥的
       // 结论分开。
-      created.push(await this.patrol.add({ ...finding, source: 'board' }));
+      try {
+        created.push(await this.patrol.add({ ...finding, source: 'board' }));
+      } catch (error) {
+        rejected.push({
+          projectName: finding?.projectName ?? null,
+          severity: finding?.severity ?? null,
+          title: finding?.title ?? null,
+          error: error?.message ?? String(error),
+        });
+      }
     }
 
     // 大哥提建议，看板负责派工。要不要提建议是大哥自己的判断——没有一个开关能决定派不
@@ -324,7 +434,10 @@ export class ProjectService {
       proposals: report.proposals,
       executed,
       findings: created,
+      rejected,
       error: outcome.error,
+      // 大哥的原文。插话进这一轮的对话，回复由这一轮给出——原文就是回复。
+      text: outcome.text ?? '',
     };
   }
 
@@ -334,17 +447,95 @@ export class ProjectService {
    * 这是看板的正门：用户跟大哥说话的方式跟跟别的 agent 说话一样。这一轮跑在大哥自己的会话
    * 上，所以对话和值班轮次共享同一份记忆——「我能看到大哥在干什么」这句话才是真的。
    *
+   * ## 会话正忙时怎么办
+   *
+   * 大哥只有一条会话，巡检轮次、派工、对话都跑在它上面。宿主在会话正忙时会**直接拒绝**
+   * 新的 `agent.run`（`BUSY`）——所以这一层必须先说清楚要排队还是要插话：
+   *
+   * - 在跑的**全是巡检轮次**（只读事实、不改文件）→ `steer`：这条指令被正在跑的那一轮在
+   *   下个输入点读到，**不排队等它结束**。回复由那一轮给出——所以这一轮结束后，回复才到。
+   * - 只要有一轮可能是对话或派工（可能在改文件）→ `queue`：排队，不打断。主规格 §3.5：
+   *   往一个正在热跑的会话上插话会打断对方改到一半的文件。
+   *
    * @param {string} text
    * @param {(event: any) => void} [onEvent] 接收运行时的运行事件
+   * @param {{whenBusy?:'queue'|'steer'}} [options]
    * @returns {Promise<any>}
    */
-  async chat(text, onEvent) {
+  async chat(text, onEvent, options = {}) {
     if (!this.boss) {
       throw new DomainError('chat_unavailable', '当前运行时未开放 agent 能力，无法对话', 501);
     }
-    const outcome = await this.boss.chat({ text }, onEvent);
+    const sessionId = this.boss.sessionId ? await this.boss.sessionId() : '';
+    const active = this.rounds ? this.rounds.activeForSession(sessionId) : [];
+    const whenBusy = options.whenBusy ?? resolveWhenBusy(active.map((round) => round.kind));
+    // 插话的目标是**正在跑的那一轮**——在起这一轮之前就记下来。
+    const steerInto = whenBusy === 'steer' && active.length ? active[active.length - 1] : null;
+
+    if (!this.rounds) {
+      const outcome = await this.boss.chat({ text }, onEvent, { whenBusy });
+      this.cache = null;
+      return outcome;
+    }
+
+    const started = this.rounds.start({
+      kind: 'chat',
+      sessionId,
+      onEvent,
+      run: (signal, ctx) => this.boss.chat({ text }, ctx.onEvent, { signal, whenBusy }),
+    });
+    const settled = await started.promise;
     this.cache = null;
-    return outcome;
+
+    if (settled.status === 'finished') {
+      const outcome = settled.result ?? {};
+      if (outcome.status === 'steered' && steerInto) {
+        // 插话进了正在跑的那一轮：回复由那一轮给出，所以要等它说完。
+        // 这一轮的事件继续往页面上送，页面看到的是同一段流水。
+        const host = await steerInto.promise;
+        return {
+          ...outcome,
+          status: host.status === 'finished' ? 'finished' : host.status,
+          text: host.result?.text ?? outcome.text ?? '',
+          error: host.status === 'finished' ? null : (host.error ?? '大哥那一轮没跑完。'),
+          steeredInto: steerInto.id,
+        };
+      }
+      return outcome;
+    }
+    if (settled.status === 'aborted') {
+      return {
+        bossSessionId: '',
+        status: 'aborted',
+        text: '',
+        error: settled.error ?? '这一轮对话被叫停了。',
+        request: null,
+        usedAgent: 'boss',
+      };
+    }
+    throw new Error(settled.error ?? '大哥没有回复');
+  }
+
+  /**
+   * 叫停一轮在跑的活。
+   *
+   * @param {string} id
+   * @returns {{stopped:boolean, reason:string, id:string|null, status:string|null}}
+   */
+  stopRound(id) {
+    if (!this.rounds) return { stopped: false, reason: 'unavailable', id: null, status: null };
+    return this.rounds.stop(id);
+  }
+
+  /**
+   * 在跑的轮次，和刚跑完的那些。
+   *
+   * @param {{limit?:number}} [options]
+   * @returns {any[]}
+   */
+  listRounds(options = {}) {
+    if (!this.rounds) return [];
+    return this.rounds.list(options);
   }
 
   /**
@@ -382,11 +573,22 @@ export class ProjectService {
     const inbox = await this.collectInbox(snapshot);
     const patrolConfig = await this.getPatrolConfig();
     const findings = this.patrol ? await this.patrol.list() : [];
+    // 归档账里的结论**也是大哥报过的事**。线卡的「最近动作」只看当前账本的话，归档过
+    // 的那 100 条就凭空消失了——线会显得比实际更闲。
+    const archived = this.patrol?.listArchivedFindings
+      ? await this.patrol.listArchivedFindings()
+      : [];
     const dismissed = await this.persistence.listDismissed();
     const duty = await this.dutyBlock({ config: patrolConfig, findings, dismissed });
     // 告警日志跟着值班状态一起走：总览上的一行就能说清楚「大哥在 03:20 不说话了」，不用
     // 用户去翻日志。
     const alerts = await this.getWatchdogAlerts({ limit: 3 });
+    const attention = selectAttentionItems(inbox);
+    // 线：管辖名单里的每个项目一条线 —— 「我的大哥在管什么、哪条线卡住了」的答案。
+    // 名单外的项目**不是**线（那是大哥管不了的活），但它们仍在板面的项目台账里（下钻层）。
+    const threads = this.dutyIntent?.dataDir
+      ? await new ThreadSubscriptions(this.dutyIntent.dataDir).list()
+      : [];
     return {
       generatedAt: Date.now(),
       kpi: buildKpi(snapshot.cards, inbox),
@@ -394,7 +596,20 @@ export class ProjectService {
       projects: withDutyCards(snapshot.cards, duty, duty.watching),
       // 已确认的条目是已知的事：在这儿显示会让计数跟 KPI 和收件箱角标对不上。
       // 判定跟 KPI 用的是同一个函数，所以这两个数永远一致。
-      attention: selectAttentionItems(inbox),
+      attention,
+      // 桌面上界的**结构性保证**：大哥自己的结论不超过这么多条（Phase 4 的 deskLimit）。
+      // 运行时原始项（会话异常等）**不受它约束** —— 那是运行时的事实，大哥管不了。
+      attentionLimit: Number(patrolConfig?.deskLimit) > 0
+        ? Number(patrolConfig.deskLimit)
+        : DEFAULT_ATTENTION_LIMIT,
+      lines: buildLines({
+        cards: snapshot.cards,
+        attention,
+        // 当前账本 + 归档账，一起算「最近动作」。
+        findings: [...findings, ...archived],
+        threads,
+        managedNames: duty.watching,
+      }),
       internalProjectCount: snapshot.internalProjectCount,
       dataWarning: snapshot.dataWarning,
       // 大哥在不在岗、上次什么时候报的、有没有不说话了。
@@ -637,18 +852,26 @@ export class ProjectService {
       ? snapshot.sessions.find((s) => s.id === record.targetSessionId)
       : null;
 
+    // 这次派工命中了哪个已登记的技能。匹配是**确定性**的：同样的派工内容命中同样的
+    // 技能（见 `skill-library.mjs` 里的稳定排序），不靠模型判断。
+    const matched = await this.matchDispatchSkill(record);
+    record.skillMatch = matched
+      ? { id: matched.id, skillName: matched.skillName, score: matched.score }
+      : null;
+
     record.status = 'running';
     record.updatedAt = Date.now();
     await this.persistence.saveDispatch(record);
 
     let outcome;
     try {
-      outcome = await this.boss.dispatch(buildDispatchPayload(record, card, targetSession));
+      outcome = await this.#runDispatchTurn({ record, card, targetSession });
     } catch (error) {
       record.status = 'error';
       record.error = error?.message ?? String(error);
       record.updatedAt = Date.now();
       await this.persistence.saveDispatch(record);
+      await this.#recordSkillUse(matched, false);
       return dispatchResult(record);
     }
 
@@ -658,8 +881,71 @@ export class ProjectService {
     record.error = outcome?.error ?? null;
     record.updatedAt = Date.now();
     await this.persistence.saveDispatch(record);
+    await this.#recordSkillUse(matched, record.status === 'done');
 
     return dispatchResult(record);
+  }
+
+  /**
+   * 派工那一轮。
+   *
+   * 它是**登记在册的轮次**：会话正忙时，别的新指令才知道该排队还是插话。派工一律排队——
+   * 插话进一轮可能正在改文件的对话会切人家半成品（主规格 §3.5）。
+   *
+   * @param {{record:any, card:any, targetSession:any}} input
+   * @returns {Promise<any>}
+   */
+  async #runDispatchTurn(input) {
+    const payload = buildDispatchPayload(input.record, input.card, input.targetSession);
+    if (!this.rounds) {
+      return this.boss.dispatch(payload);
+    }
+    const sessionId = this.boss.sessionId ? await this.boss.sessionId() : '';
+    const started = this.rounds.start({
+      kind: 'dispatch',
+      slot: `dispatch:${input.record.id}`,
+      sessionId,
+      run: (signal) => this.boss.dispatch(payload, { signal, whenBusy: 'queue' }),
+    });
+    const settled = await started.promise;
+    if (settled.status === 'finished') return settled.result;
+    throw new Error(settled.error ?? (settled.status === 'aborted' ? '这一轮派工被叫停了。' : '派工失败'));
+  }
+
+  /**
+   * 派工内容命中哪个已登记的技能。
+   *
+   * 关键词命中就是全部依据：触发词、名字、标题、领域，谁在派工内容里出现谁就算数。
+   * 命中多个时取分数最高的那个；分数一样时按技能名排（`match()` 里的排序是稳定的），
+   * 所以同样的输入永远命中同样的技能。
+   *
+   * @param {any} record
+   * @returns {Promise<any|null>}
+   */
+  async matchDispatchSkill(record) {
+    if (!this.skillLibrary) return null;
+    const text = [record?.projectName, record?.instruction].filter(Boolean).join('\n');
+    if (!text.trim()) return null;
+    const matches = await this.skillLibrary.match(text, { limit: 1 });
+    return matches[0] ?? null;
+  }
+
+  /**
+   * 记一次技能使用。
+   *
+   * 计数记不上**不该让派工失败**：派工本身已经完成了，技能登记表只是它的账。
+   *
+   * @param {any} matched
+   * @param {boolean} success
+   * @returns {Promise<any|null>}
+   */
+  async #recordSkillUse(matched, success) {
+    if (!matched?.id || !this.skillLibrary) return null;
+    try {
+      return await this.skillLibrary.recordUse(matched.id, { success });
+    } catch {
+      return null;
+    }
   }
 
   /**

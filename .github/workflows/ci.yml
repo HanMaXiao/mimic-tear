@@ -32,8 +32,8 @@ jobs:
       - name: Run the test suite
         run: node --test
 
-      # 下面四步是「发布漂移 / 打包 / 风格 / 决策记录」守卫，全部零第三方依赖，只用 Node 标准库。
-      # 任何一步非零退出都会把 CI 标红——这是有意的：这些正是测试盖不到的缺口。
+      # 下面五步是「发布漂移 / 打包 / 风格 / 决策记录 / 值班提示词契约」守卫，全部零第三方依赖，
+      # 只用 Node 标准库。任何一步非零退出都会把 CI 标红——这是有意的：这些正是测试盖不到的缺口。
       - name: Check the published copy for drift
         # runner 上没有安装插件，这里会打印 SKIPPED 并以 0 退出，不会把 CI 变红。
         run: node scripts/check-published.mjs
@@ -46,3 +46,8 @@ jobs:
 
       - name: Check the Agent Note tree for structure and format
         run: node scripts/verify-agent-notes.mjs
+
+      - name: Check the duty prompt and the boss skill say the same thing
+        # 两份文本都在仓库外（~/.minimax/agents/boss/），CI 上没有 → 报 SKIPPED 并以 0 退出。
+        # 但「该同步什么」写在了仓库里，本机随时能查。
+        run: node scripts/check-boss-prompt.mjs

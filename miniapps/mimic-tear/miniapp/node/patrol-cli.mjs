@@ -9,6 +9,11 @@
  * Commands:
  *   facts            print the fact sheet (projects, decisions, questionnaires, goals, plan)
  *   report <file>    merge findings / answered questions / recovery notes into the board
+ *   archive "<why>"  move the ledger's conclusions into the archive file (nothing is deleted)
+ *   archive          print the archive's metadata (when / who / why / how many)
+ *   gap              print the handover sheet: how long the duty chain was broken, how many
+ *                    rounds count as missed duty, how many are still owed
+ *   gap reset "<why>" clear the "already covered" marker so the next tick re-covers the gap
  *   paths            print the paths the boss writes to
  *
  * Options:
@@ -28,6 +33,10 @@ import { PatrolStore } from './patrol-store.mjs';
 import { Persistence } from './persistence.mjs';
 import { ManagedProjects } from './managed-projects.mjs';
 import { DutyIntent } from './duty-intent.mjs';
+import { selectTriggers } from './trigger.mjs';
+import { detectTriggers, TRIGGER_WHITELIST } from './trigger-source.mjs';
+import { ThreadSubscriptions } from './thread-subscriptions.mjs';
+import { applySpill, buildFactRefGraph } from './recall.mjs';
 
 const args = process.argv.slice(2);
 const command = args.find((arg) => !arg.startsWith('--')) ?? 'facts';
@@ -36,12 +45,28 @@ const flag = (name, fallback) => {
   return index === -1 ? fallback : args[index + 1];
 };
 
+/**
+ * All the values of a flag that may appear more than once.
+ *
+ * @param {string} name
+ * @returns {string[]}
+ */
+const allFlags = (name) => args
+  .reduce((values, arg, index) => {
+    if (arg === `--${name}` && args[index + 1]) values.push(args[index + 1]);
+    return values;
+  }, [])
+  .filter(Boolean);
+
 const dataDir = resolve(flag('data-dir', join(homedir(), '.minimax', 'v2', 'plugin-data', 'liveboards', 'mimic-tear')));
 const dbPath = resolve(flag('db', process.env.MIMIC_RUNTIME_DB
   ?? join(homedir(), '.minimax', 'v2', 'sqlite', 'runtime-state.sqlite')));
 
 /** Flags that take a value; the value must not be mistaken for a positional argument. */
-const VALUE_FLAGS = new Set(['--data-dir', '--db', '--file']);
+const VALUE_FLAGS = new Set([
+  '--data-dir', '--db', '--file', '--scope',
+  '--answer', '--rationale', '--session-id', '--option-id',
+]);
 
 /**
  * The positional arguments only.
@@ -66,9 +91,8 @@ if (command === 'paths') {
   print({
     dataDir,
     dbPath,
-    findings: patrol.findingsPath,
-    answered: patrol.answeredPath,
-    config: patrol.configPath,
+    // 结论账、已答项、归档账、巡检配置都在板面状态的**单一 store** 里。
+    state: patrol.state.path,
     managed: managed.path,
     dutyIntent: dutyIntent.path,
   });
@@ -191,6 +215,240 @@ if (command === 'duty-cron') {
   process.exit(0);
 }
 
+if (command === 'gap') {
+  // 断档的账：断了多久、断了几轮、其中多少算漏班、还欠几轮。
+  //
+  // 这是「大哥上岗」的那张单子。值班链断了之后，空槽会一直堆着——堆了多少、断多久、
+  // 哪些该补，必须有一个地方能一眼看到，而不是让人去翻调度器的运行记录。
+  //
+  // `reset` 是**显式**动作：把「已经补到哪里」的标记清掉，让下一跳重新覆盖整段空档。
+  // 它必须带理由，因为「解除锁死」是一次决定，不是一个自动行为——自动解除就等于把
+  // 「自动补位会出事」那个坑重新打开。
+  const action = positionalArgs()[1] ?? 'show';
+  const reason = positionalArgs().slice(2).join(' ').trim();
+  try {
+    const { getDutyHeartbeatStatus, writeHeartbeatState, readHeartbeatState } =
+      await import('./duty-heartbeat.mjs');
+    const { buildDutyHandoverSummary } = await import('./duty-gap.mjs');
+
+    if (action === 'reset') {
+      if (!reason) {
+        throw new Error('用法：gap reset "<大老板的原话>"——解除覆盖标记是一次决定，必须有理由');
+      }
+      const before = await readHeartbeatState(dataDir);
+      const cleared = before.coveredThroughSlot ?? null;
+      await writeHeartbeatState(dataDir, {
+        ...before,
+        coveredThroughSlot: null,
+        coveredAt: null,
+        resetAt: Date.now(),
+        resetReason: reason,
+      });
+      print({
+        ok: true,
+        action: 'reset',
+        clearedThroughSlot: cleared,
+        reason,
+        note: cleared === null
+          ? '本来就没有覆盖标记——已经补过的段落会被重新补一遍'
+          : `覆盖标记已清到第 ${cleared} 槽之前；下一跳会重新覆盖整段空档`,
+      });
+    } else if (action === 'show') {
+      const now = Date.now();
+      const status = await getDutyHeartbeatStatus({ dataDir, store, now });
+      const managedEntries = await managedList();
+      const findings = await patrol.list();
+      const summary = buildDutyHandoverSummary(status.gap, {
+        now,
+        managedCount: managedEntries.filter((entry) => entry.matched).length,
+        pendingDecisions: findings.filter((finding) => !finding.acknowledged).length,
+      });
+      print({
+        gap: status.gap,
+        reason: status.reason,
+        mode: status.mode,
+        coveredThroughSlot: status.coveredThroughSlot,
+        summary,
+      });
+    } else {
+      process.stderr.write('用法：gap | gap reset "<理由>"\n');
+      store.close();
+      process.exit(2);
+    }
+  } catch (error) {
+    process.stderr.write(`${error?.message ?? error}\n`);
+    store.close();
+    process.exit(2);
+  }
+  store.close();
+  process.exit(0);
+}
+
+if (command === 'thread') {
+  // 订阅表：哪条线有投递口、负责会话是谁。
+  //
+  // 「事件该投给谁」必须是可查的状态，不是每轮现推——现推的话那个决定一飘，事件就投错人，
+  // 而投错人比不投更糟。
+  const action = positionalArgs()[1] ?? 'list';
+  try {
+    const subscriptions = new ThreadSubscriptions(dataDir);
+    if (action === 'list') {
+      print({ threads: await subscriptions.list() });
+    } else if (action === 'add') {
+      const name = positionalArgs()[2] ?? '';
+      const ownerSessionId = positionalArgs()[3] ?? '';
+      const reason = positionalArgs().slice(4).join(' ').trim();
+      if (!reason) throw new Error('用法：thread add <项目名> <会话id> "<理由>"——开投递口是一次决定，必须有理由');
+      // 会话必须真的存在。**落空的投递口是查不出来的**：订阅表里躺着一条，
+      // 看起来一切正常，事件却投不出去——所以在这里就拒绝。
+      const sessions = store.listSessions();
+      const target = sessions.find((session) => session.id === ownerSessionId);
+      if (!target) {
+        throw new Error(`没有这个会话：${ownerSessionId}。这条订阅会落空——事件投不出去。`);
+      }
+      const project = store.listProjects().find((p) => projectName(p.workspaceDir) === name);
+      const list = await subscriptions.add(name, ownerSessionId, reason, {
+        projectId: project?.id ?? null,
+      });
+      print({
+        ok: true,
+        thread: name,
+        ownerSessionId,
+        sessionTitle: target.title ?? null,
+        threads: list,
+      });
+    } else if (action === 'remove') {
+      const name = positionalArgs()[2] ?? '';
+      const reason = positionalArgs().slice(3).join(' ').trim();
+      if (!reason) throw new Error('用法：thread remove <项目名> "<理由>"');
+      const before = await subscriptions.list();
+      const onList = before.some((entry) => entry.projectName === String(name ?? '').trim());
+      const list = await subscriptions.remove(name, reason);
+      print({
+        ok: true,
+        removed: onList,
+        threads: list,
+        warning: onList ? null : `订阅表里没有「${name}」，什么都没变——核对项目名是否逐字一致`,
+      });
+    } else {
+      process.stderr.write('用法：thread list | thread add <项目名> <会话id> "<理由>" | thread remove <项目名> "<理由>"\n');
+      store.close();
+      process.exit(2);
+    }
+  } catch (error) {
+    process.stderr.write(`${error?.message ?? error}\n`);
+    store.close();
+    process.exit(2);
+  }
+  store.close();
+  process.exit(0);
+}
+
+if (command === 'recall') {
+  // 按 ID 取回完整内容 —— 被 Spill 出去的那部分的**续读入口**。
+  //
+  // 「省下来的不是内容，是位置」：摘要代替原文是允许的，**原文没了不允许**。
+  // 所以这一条必须能**原样**取回：取回来的正文要和原文逐字一致。
+  //
+  // 顺带给出**链式召回**：从��个 ID 出发，顺着引用关系一跳一跳地展开——
+  // 这就是基线规格 §3.1「连续」那条判据的机器形态：同一件事换个入口继续讨论，
+  // 大哥能接上上下文，不要求用户复述。
+  const id = positionalArgs()[1] ?? '';
+  if (!id) {
+    process.stderr.write('用法：recall <id>\n');
+    store.close();
+    process.exit(2);
+  }
+  try {
+    const { planRecall } = await import('./recall.mjs');
+    const projects = store.listProjects();
+    const visibleIds = new Set(projects.map((p) => p.id));
+    const sessions = store.listSessions().filter((s) => visibleIds.has(s.projectId));
+    const questionnaires = store.listQuestionnaires(true);
+    const goals = store.listGoals();
+    // 归档过的结论照样能取回：归档是搬家，不是销毁。
+    const findings = [...await patrol.list(), ...await patrol.listArchivedFindings()];
+    const managedEntries = await managedList();
+    const managedNames = new Set(
+      managedEntries.filter((entry) => entry.matched).map((entry) => entry.projectName ?? entry.name),
+    );
+    const inScope = (projectName) => !projectName || managedNames.has(projectName);
+
+    const projectById = new Map(projects.map((p) => [p.id, p]));
+    const nameOf = (projectId) => {
+      const project = projectById.get(projectId);
+      return project ? project.workspaceDir.split(/[\\/]/).pop() : null;
+    };
+
+    const graph = buildFactRefGraph({
+      findings: findings.filter((f) => inScope(f.projectName)),
+      projects: projects
+        .filter((p) => inScope(p.workspaceDir.split(/[\\/]/).pop()))
+        .map((p) => ({ name: p.workspaceDir.split(/[\\/]/).pop(), ownerSessionId: null })),
+      sessions: sessions
+        .filter((s) => ['error', 'interrupted', 'aborted'].includes(s.status))
+        .filter((s) => inScope(nameOf(s.projectId)))
+        .map((s) => ({ id: s.id, projectName: nameOf(s.projectId), title: s.title })),
+      questionnaires: questionnaires.map((q) => ({ requestId: q.id, sessionId: q.sessionId, question: null })),
+      goals: goals
+        .map((g) => {
+          const owner = sessions.find((s) => s.id === g.sessionId);
+          return {
+            goalId: g.goalId,
+            sessionId: g.sessionId,
+            objective: g.objective,
+            projectName: nameOf(owner?.projectId),
+          };
+        })
+        .filter((g) => inScope(g.projectName))
+        .map((g) => ({ goalId: g.goalId, sessionId: g.sessionId, objective: g.objective })),
+      planTasks: [],
+      triggers: [],
+    });
+
+    // 全文：按 id 找回原对象。
+    const finding = findings.find((f) => f.id === id);
+    const session = sessions.find((s) => s.id === id);
+    const project = projects.find((p) => p.workspaceDir.split(/[\\/]/).pop() === id);
+    const questionnaire = questionnaires.find((q) => q.id === id);
+    const goal = goals.find((g) => g.id === id);
+
+    let record = null;
+    if (finding) record = { kind: 'conclusion', value: finding };
+    else if (session) record = { kind: 'session', value: session };
+    else if (project) record = { kind: 'project', value: project };
+    else if (questionnaire) record = { kind: 'questionnaire', value: questionnaire };
+    else if (goal) record = { kind: 'goal', value: goal };
+    else if (id.includes(':')) {
+      // 计划任务的主键是 `<项目名>:<任务 id>`。
+      const [projectName, taskId] = [id.slice(0, id.lastIndexOf(':')), id.slice(id.lastIndexOf(':') + 1)];
+      const owner = projects.find((p) => p.workspaceDir.split(/[\\/]/).pop() === projectName);
+      if (owner) {
+        try {
+          const plan = await readPlan(owner.workspaceDir);
+          const task = (plan?.tasks ?? []).find((t) => String(t.id) === taskId);
+          if (task) record = { kind: 'plan-task', value: { projectName, ...task } };
+        } catch {
+          record = null;
+        }
+      }
+    }
+
+    print({
+      id,
+      found: record !== null,
+      record,
+      chain: planRecall(id, graph),
+    });
+  } catch (error) {
+    process.stderr.write(`${error?.message ?? error}\n`);
+    store.close();
+    process.exit(2);
+  }
+  store.close();
+  process.exit(0);
+}
+
 if (command === 'facts') {
   const projects = store.listProjects();
   const visibleIds = new Set(projects.map((p) => p.id));
@@ -213,6 +471,10 @@ if (command === 'facts') {
   const answered = await patrol.listAnswered();
   const answeredIds = new Set(answered.map((item) => item.requestId));
   const previousFindings = await patrol.list();
+  // 归档过的结论：不在账本上了，但**仍然是大哥报过的事**。去重账要看得见它们，
+  // 否则同一件事会被再报一遍。
+  const archivedFindings = await patrol.listArchivedFindings();
+  const archive = await patrol.listArchive();
 
   // The jurisdiction list, each entry resolved against the live project set. A grant whose
   // name no longer points at a project is shown as `matched: false` — the boss has to be
@@ -339,20 +601,113 @@ if (command === 'facts') {
     watching: [...managedNames],
   };
 
-  print({
+  // 事实表的两种视图。
+  //
+  // 默认给模型的是**候选**：管辖区内的、这一轮真的变了的。`raw` 是诊断用的——它要全量，
+  // 所以它必须**显式要**，而且这份负载里会写明「这次要了全量」，免得下次看到的人分不清
+  // 「这就是全部」和「这是筛过的」。
+  const scope = String(flag('scope', 'candidates')).trim().toLowerCase();
+  if (!['candidates', 'raw'].includes(scope)) {
+    process.stderr.write(`未知的 scope「${scope}」：可用 candidates（默认，给模型）/ raw（全量，诊断用）\n`);
+    store.close();
+    process.exit(2);
+  }
+  const wantRaw = scope === 'raw';
+
+  // 管辖闸：有名有姓的项目，不在名单里就不进候选视图。
+  // **没有项目归属的行一律保留**——无法证明它在管辖范围外，就不该当成范围外。
+  const withinJurisdiction = (projectName) => (
+    wantRaw || !projectName || managedNames.has(projectName)
+  );
+
+  const visibleCards = wantRaw ? cards : cards.filter((card) => managedNames.has(card.name));
+  const visibleItems = runtimeItems.filter((item) => withinJurisdiction(item.projectName));
+  const visibleQuestionnaires = openQuestionnaires.filter((q) => withinJurisdiction(q.projectName));
+  const visibleRecoverable = recoverable.filter((r) => withinJurisdiction(r.projectName));
+  const visibleGoals = goalRows.filter((g) => withinJurisdiction(g.projectName));
+  const visiblePlanTasks = planRows.filter((t) => withinJurisdiction(t.projectName));
+  // `alreadyReported` **不按管辖过滤**：这是大哥自己报过的账。忘了报过的事，就会再报一遍——
+  // 而「重复报同一件事」正是收件箱堆到 93 条的原因之一。它是账本，不是环境状态。
+  // 归档过的结论也算数：它们退场了，但「报过了」这件事没变。
+  const visibleReported = [...previousFindings, ...archivedFindings];
+
+  // 这一轮真的发生了什么。
+  //
+  // 事件从**全量**行里认——不先筛——然后交给第一道闸（`selectTriggers`）去筛。这样「筛掉
+  // 了多少」才是真的数字，而不是自己筛完自己报「一个没筛掉」。
+  //
+  // 水位线是**交班戳**：上一轮交班之后发生的事，就是这一轮的事件。没有新状态文件。
+  const dutyConfig = await patrol.getConfig();
+  const rawTriggers = detectTriggers({
+    projects: cards.map((card) => ({
+      id: card.id,
+      name: card.name,
+      latestActivityAt: card.lastActivityAt,
+    })),
+    sessions: recoverable.map((r) => ({
+      id: r.sessionId,
+      status: r.status,
+      title: r.sessionTitle,
+      updatedAt: r.updatedAt,
+      projectName: r.projectName,
+    })),
+    questionnaires: openQuestionnaires.map((q) => ({
+      id: q.requestId,
+      createdAt: q.createdAt,
+      question: q.question,
+      sessionId: q.sessionId,
+      projectName: q.projectName,
+    })),
+    watermark: dutyConfig.lastRunAt ?? 0,
+    now: Date.now(),
+  });
+  const selected = selectTriggers(rawTriggers, {
+    managedNames: managedNames,
+    allowTypes: TRIGGER_WHITELIST,
+  });
+
+  // `delivered` 标记：这条事件**已经由程序直投给了那条线的负责人会话**（订阅表里的
+  // 「已投出」账）。带这个标记的不归大哥管——**别再派一次工、别再报一次**。
+  //
+  // 它记的是「已投出」，**不是「已执行」**：目标会话在跑 goal 链时消息会排队，
+  // 排队中的那一轮还没跑。
+  const subscriptions = await new ThreadSubscriptions(dataDir).list();
+  const deliveredIds = new Set(subscriptions.flatMap((entry) => entry.delivered ?? []));
+  const markedCandidates = selected.kept.map((trigger) => ({
+    ...trigger,
+    delivered: deliveredIds.has(trigger.id),
+  }));
+
+  const rawPayload = {
     generatedAt: Date.now(),
+    // Which view this is. `candidates` is what the model gets by default; `raw` means the
+    // caller explicitly asked for everything — and the payload says so, so that whoever
+    // reads it later can tell "this is all of it" from "this was filtered".
+    scope,
+    fullScopeRequested: wantRaw,
     paths: {
-      report: join(dataDir, 'patrol.json'),
-      answered: join(dataDir, 'patrol-answered.json'),
+      // 结论账、已答项、归档账、巡检配置都在板面状态的**单一 store** 里
+      // （`board-state.json`）。老文件只在第一次访问时被读一次，之后不再被读。
+      state: patrol.state.path,
       db: dbPath,
     },
     // Which projects the boss is allowed to manage. The user grants this explicitly; the
     // boss never widens it on its own. Anything not on this list is out of bounds, however
     // broken or long-idle it looks.
     managed: managedEntries,
+    // 订阅表：哪些线有投递口、负责会话是谁。没有投递口的事件投不出去——所以这一段
+    // 不是「可选信息」，是「哪些线还能收到东西」的答案。
+    threads: (await new ThreadSubscriptions(dataDir).list()).map((entry) => ({
+      projectName: entry.projectName,
+      projectId: entry.projectId ?? null,
+      ownerSessionId: entry.ownerSessionId ?? null,
+      active: entry.active !== false,
+      deliveredCount: (entry.delivered ?? []).length,
+      reason: entry.reason ?? '',
+    })),
     // What the boss already filed in earlier runs. Without this it would re-report the
     // same stuck project on every tick.
-    alreadyReported: previousFindings.map((finding) => ({
+    alreadyReported: visibleReported.map((finding) => ({
       id: finding.id,
       projectId: finding.projectId,
       projectName: finding.projectName,
@@ -366,13 +721,37 @@ if (command === 'facts') {
     })),
     // The boss's own duty state — see above.
     duty,
+    // 归档账的元数据：退场了多少条、为什么、什么时候、谁退的。
+    archive: {
+      total: archive.total,
+      batches: archive.batches.length,
+      reason: archive.batches[0]?.reason ?? null,
+      archivedAt: archive.batches[0]?.archivedAt ?? null,
+      archivedBy: archive.batches[0]?.archivedBy ?? null,
+    },
     alreadyAnswered: answered.map((item) => ({
       requestId: item.requestId,
       sessionId: item.sessionId,
       answeredAt: item.answeredAt,
       answer: item.answer,
     })),
-    projects: withDutyCards(cards, duty, managedNames).map((card) => {
+    // 这一轮的事件。`candidates` 是过了第一道闸的；`dropped` 说清筛掉了多少、为什么。
+    triggers: {
+      watermark: dutyConfig.lastRunAt ?? null,
+      allowedTypes: [...TRIGGER_WHITELIST],
+      candidates: markedCandidates,
+      dropped: selected.dropped,
+    },
+    // 筛掉了多少。数字留着，人就知道「还有多少我没看见」——而不是以为那就是全部。
+    excluded: {
+      projects: cards.length - visibleCards.length,
+      decisions: runtimeItems.length - visibleItems.length,
+      openQuestionnaires: openQuestionnaires.length - visibleQuestionnaires.length,
+      recoverable: recoverable.length - visibleRecoverable.length,
+      goals: goalRows.length - visibleGoals.length,
+      planTasks: planRows.length - visiblePlanTasks.length,
+    },
+    projects: withDutyCards(visibleCards, duty, managedNames).map((card) => {
       const inScope = managedNames.has(card.name);
       const ownerSessions = ownerSessionsByProject.get(card.id) ?? [];
       // The default target: the most recently active root session. The boss still judges
@@ -401,7 +780,7 @@ if (command === 'facts') {
           : {}),
       };
     }),
-    decisions: runtimeItems.map((item) => ({
+    decisions: visibleItems.map((item) => ({
       id: item.id,
       kind: item.kind,
       severity: item.severity,
@@ -412,14 +791,56 @@ if (command === 'facts') {
       body: item.body,
       createdAt: item.createdAt,
     })),
-    openQuestionnaires,
-    recoverable,
-    goals: goalRows,
-    planTasks: planRows,
+    openQuestionnaires: visibleQuestionnaires,
+    recoverable: visibleRecoverable,
+    goals: visibleGoals,
+    planTasks: visiblePlanTasks,
     brief: buildPatrolBrief({
-      cards,
-      inbox: runtimeItems,
+      cards: visibleCards,
+      inbox: visibleItems,
     }),
+  };
+
+  // Spill：过长的文本换成摘要 + 续读入口。**省下来的是位置，不是内容**——
+  // 每一段被 Spill 掉的原文都能按 ID 原样取回（`patrol-cli recall <id>`）。
+  //
+  // 例外清单是必须的：`managed[].reason` 是**大老板的原话**（授权的理由，截了它授权就说不清），
+  // `scope` / `paths` 是判定口径与边界（写一半等于没说）。
+  const spilled = applySpill(rawPayload, {
+    exclude: ['managed[].reason', 'scope', 'fullScopeRequested', 'paths'],
+  });
+
+  // 引用图：每个内容项内联**下一跳的 ID**，模型可以顺着它一跳一跳地展开（链式召回）。
+  const graph = buildFactRefGraph({
+    findings: [...previousFindings, ...archivedFindings],
+    projects: visibleCards.map((card) => ({
+      name: card.name,
+      ownerSessionId: (ownerSessionsByProject.get(card.id) ?? []).find((s) => s.isRoot)?.id ?? null,
+    })),
+    sessions: visibleRecoverable.map((r) => ({
+      id: r.sessionId, projectName: r.projectName, title: r.sessionTitle,
+    })),
+    questionnaires: visibleQuestionnaires.map((q) => ({
+      requestId: q.requestId, sessionId: q.sessionId, question: q.question,
+    })),
+    goals: visibleGoals.map((g) => ({
+      goalId: g.goalId, sessionId: g.sessionId, objective: g.objective,
+    })),
+    planTasks: visiblePlanTasks.map((t) => ({
+      projectName: t.projectName, id: t.id, title: t.title,
+    })),
+    triggers: selected.kept,
+  });
+
+  print({
+    ...spilled.value,
+    // 被 Spill 掉了什么、在哪 —— 不然「省下来的」就变成了「丢掉的」。
+    spills: spilled.spills,
+    // 这份事实表里有几个对象可以按 ID 取回（图住在系统里，不在这里）。
+    recallable: graph.size,
+    // **引用图不在这里。** 文章 §3.3 的设计是：图住在系统里，上下文里只内联**下一跳的 ID**。
+    // 把整张图塞进负载，等于把「按需召回」变成「一次性全读」——那正是 Spill 要治的病。
+    // 要走链，用 `patrol-cli recall <id>`（它按需重建这张图）。
   });
   store.close();
   process.exit(0);
@@ -437,14 +858,26 @@ if (command === 'report') {
   const payload = JSON.parse(await readFile(resolve(file), 'utf8'));
 
   const written = [];
+  // 入账被拒的结论（正文超了带宽上限）要单独报出来：大哥得知道自己写的东西没进来，
+  // 而不是以为已经报上去了。
+  const rejected = [];
   for (const finding of payload.findings ?? []) {
-    written.push(await patrol.add({
-      projectId: finding.projectId ?? null,
-      projectName: finding.projectName ?? null,
-      severity: finding.severity ?? 'medium',
-      title: String(finding.title ?? '大哥巡检结论').slice(0, 120),
-      body: String(finding.body ?? ''),
-    }));
+    try {
+      written.push(await patrol.add({
+        projectId: finding.projectId ?? null,
+        projectName: finding.projectName ?? null,
+        severity: finding.severity ?? 'medium',
+        title: String(finding.title ?? '大哥巡检结论').slice(0, 120),
+        body: String(finding.body ?? ''),
+      }));
+    } catch (error) {
+      rejected.push({
+        projectName: finding.projectName ?? null,
+        severity: finding.severity ?? 'medium',
+        title: String(finding.title ?? '大哥巡检结论').slice(0, 120),
+        error: error?.message ?? String(error),
+      });
+    }
   }
 
   for (const entry of payload.answered ?? []) {
@@ -492,6 +925,7 @@ if (command === 'report') {
   print({
     ok: true,
     findings: written.length,
+    rejected,
     answered: (payload.answered ?? []).length,
     dutyStamp,
     // Whether the watchdog was woken up. It is reported, not enforced: the handover
@@ -539,7 +973,105 @@ if (command === 'dismiss') {
   process.exit(0);
 }
 
-process.stderr.write(`未知命令：${command}\n可用：facts / report / withdraw / dismiss / paths\n`);
+if (command === 'archive') {
+  // 归档：把账上的结论搬进归档账，然后清空账本。
+  //
+  // **一条都不删**——退场的结论连同原文搬进 `patrol-archive.json`，附上这次归档的元数据
+  // （什么时候、谁、为什么、多少条）。理由是必填的：以后有人问「这条为什么退场了」，
+  // 答案只能在那儿。
+  //
+  // 不带理由时是**只读**：把归档账打出来。
+  const reason = positionalArgs().slice(1).join(' ').trim();
+  try {
+    if (!reason) {
+      const archive = await patrol.listArchive();
+      print({
+        ok: true,
+        archived: archive.total,
+        batches: archive.batches.map((batch) => ({
+          archivedAt: batch.archivedAt,
+          archivedBy: batch.archivedBy,
+          reason: batch.reason,
+          count: batch.count,
+        })),
+      });
+    } else {
+      const result = await patrol.archive({ reason, by: 'boss' });
+      print({
+        ok: true,
+        archived: result.archived,
+        reason: result.reason,
+        archivedBy: result.archivedBy,
+        archivedAt: result.archivedAt,
+      });
+    }
+  } catch (error) {
+    process.stderr.write(`${error?.message ?? error}\n`);
+    store.close();
+    process.exit(2);
+  }
+  store.close();
+  process.exit(0);
+}
+
+if (command === 'answer') {
+  // 大哥替大老板回答一张待答的卡。
+  //
+  // **这条命令存在的理由是「大哥不再手写账」。** 在它之前，代答是往
+  // `patrol-answered.json` 里手写 JSON——那个文件一旦被收进板面状态 store，大哥再手写，
+  // 板面就再也读不到了（代答会**静默失效**：大老板以为有人替他答了，其实没有）。
+  // 给它一条命令，手和账就脱钩了。
+  //
+  // **只记答案**：不写结论、**不打交班戳**。交班戳是值班大哥的（见 `report` 里的说明），
+  // 代答一张卡不是交班。
+  //
+  // 幂等：同一个 `requestId` 记过一次就不再记（`markAnswered` 自己判）。
+  const positional = positionalArgs();
+  const [, requestId] = positional;
+  const answer = flag('answer', '');
+  const rationale = flag('rationale', '');
+  const sessionId = flag('session-id', '');
+  const optionIds = allFlags('option-id');
+  if (!requestId || !answer) {
+    process.stderr.write('用法：answer <requestId> --answer "<选项>" [--rationale "<理由>"] [--session-id <会话id>] [--option-id <id>]\n');
+    store.close();
+    process.exit(2);
+  }
+  const answered = await patrol.markAnswered({
+    requestId,
+    sessionId,
+    answer,
+    rationale,
+    optionIds,
+  });
+  print({
+    ok: true,
+    requestId,
+    sessionId,
+    answer,
+    rationale,
+    optionIds,
+    answered: answered.length,
+  });
+  store.close();
+  process.exit(0);
+}
+
+if (command === 'export-legacy') {
+  // 把 store 的内容**显式**写回老文件。
+  //
+  // 过渡期的保险：万一这套收口后来被否掉了、或者镜像写失败过、或者 store 文件丢了，
+  // 老代码（它只读老文件）得能读到**最新的**数据，而不是迁移那一刻的快照。
+  //
+  // **回退是显式动作，不是自愈**——所以它是一条命令，不是一个后台任务。
+  const { BoardStateStore } = await import('./board-state.mjs');
+  const result = await new BoardStateStore(dataDir).exportLegacy();
+  print({ ok: result.failed.length === 0, written: result.written, failed: result.failed });
+  store.close();
+  process.exit(result.failed.length === 0 ? 0 : 1);
+}
+
+process.stderr.write(`未知命令：${command}\n可用：facts / report / answer / withdraw / dismiss / archive / gap / manage / duty-cron / paths / export-legacy\n`);
 store.close();
 process.exit(2);
 
