@@ -2,7 +2,8 @@ import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 import { normalizeConclusionSource } from './view-model.mjs';
-import { readJsonArray, updateJsonArray, writeJsonAtomic } from './json-ledger.mjs';
+import { BoardStateStore } from './board-state.mjs';
+import { writeJsonAtomic } from './json-ledger.mjs';
 import {
   assertConclusionBandwidth,
   assignDesk,
@@ -87,7 +88,11 @@ export class PatrolStore {
     // The dispatch ledger is the BOARD's file (the board path writes it), but the duty
     // path writes into it too — that is the whole point of the ledger: both bosses'
     // deliveries end up in one place instead of two private histories.
-    this.dispatchesPath = join(this.dataDir, 'dispatches.json');
+    //
+    // **收口**：派工账现在住在板面状态的单一 store 里（`board-state.mjs`），和看板那边
+    // 的写路径共用一个文件、一把锁。老的 `dispatches.json` 只在第一次访问时被读一次
+    // （一次性迁移），之后不再被读。
+    this.state = new BoardStateStore(this.dataDir);
   }
 
   /**
@@ -379,7 +384,7 @@ export class PatrolStore {
    * @returns {Promise<DispatchRecord[]>}
    */
   async listDispatches() {
-    return readJsonArray(this.dispatchesPath);
+    return this.state.section('dispatches');
   }
 
   /**
@@ -419,11 +424,17 @@ export class PatrolStore {
    * separate one). A plain overwrite would drop the other side's record, and a dropped
    * board record breaks the board's idempotency — the same key would be delivered twice.
    *
+   * **两个写者现在写的是同一段、锁的是同一把锁**——收口进 `board-state.mjs` 之后，
+   * 这段账只有一条写路径。
+   *
    * @param {DispatchRecord} record
    * @returns {Promise<void>}
    */
   async #appendDispatch(record) {
-    await appendToJsonArray(this.dispatchesPath, record);
+    await this.state.update((state) => ({
+      ...state,
+      dispatches: [...state.dispatches, record],
+    }));
   }
 
   /** @param {string} requestId */
@@ -547,37 +558,6 @@ function buildDutyDispatchRecord(input) {
 }
 
 /**
- * Merge one record into a list, replacing the record with the same id.
- *
- * @param {any[]} list
- * @param {any} record
- * @returns {any[]}
+ * 板面自己的账（派工、确认、排除、大哥会话）现在住在 `board-state.mjs` 的单一 store 里。
+ * 这一层只管结论账与巡检配置。
  */
-function mergeById(list, record) {
-  const index = list.findIndex((item) => item?.id === record.id);
-  if (index === -1) return [...list, record];
-  const next = [...list];
-  next[index] = record;
-  return next;
-}
-
-/**
- * Append one record to a JSON array file without losing anybody else's records.
- *
- * The dispatch ledger has two writers in two processes, and both do read-modify-write.
- * A plain overwrite drops whatever the other side wrote in the meantime — and a dropped
- * board record breaks the board's idempotency, because the same key would then be
- * delivered twice.
- *
- * The write discipline itself lives in `json-ledger.mjs`: unique temporary file name,
- * read-merge-write under a lock, rename, then check that our own record survived. It is
- * shared with `persistence.mjs` — the other writer of this very file — because two
- * implementations of the same discipline are two implementations that can drift apart.
- *
- * @param {string} path
- * @param {any} record
- * @returns {Promise<void>}
- */
-async function appendToJsonArray(path, record) {
-  await updateJsonArray(path, (all) => mergeById(all, record), record.id);
-}

@@ -15,7 +15,7 @@ import {
 } from '../miniapps/mimic-tear/miniapp/node/patrol-scheduler.mjs';
 import { buildPatrolBrief, parsePatrolReport } from '../miniapps/mimic-tear/miniapp/node/view-model.mjs';
 import { RuntimeStore } from '../miniapps/mimic-tear/miniapp/node/runtime-store.mjs';
-import { makeRuntimeDb, tmpDir, cleanupDir } from './helpers/fixture.mjs';
+import { makeRuntimeDb, readBoardSection, tmpDir, cleanupDir } from './helpers/fixture.mjs';
 
 const CLI_PATH = fileURLToPath(new URL('../miniapps/mimic-tear/miniapp/node/patrol-cli.mjs', import.meta.url));
 
@@ -393,7 +393,7 @@ test('patrol', async (t) => {
       assert.equal(result.ok, true);
       assert.equal(result.id, item.id);
 
-      const dismissed = JSON.parse(readFileSync(join(dataDir, 'dismissed.json'), 'utf8'));
+      const dismissed = readBoardSection(dataDir, 'dismissed');
       assert.equal(dismissed.length, 1);
       assert.equal(dismissed[0].id, item.id);
       assert.match(dismissed[0].reason, /残骸/, '排除必须留下理由');
@@ -708,7 +708,7 @@ test('patrol', async (t) => {
         text: '按你的要求排的',
       });
 
-      const dispatches = JSON.parse(readFileSync(join(dataDir, 'dispatches.json'), 'utf8'));
+      const dispatches = readBoardSection(dataDir, 'dispatches');
       assert.equal(dispatches.length, 1, '值班路径的投递要落在看板那本账里');
       assert.equal(dispatches[0].source, 'duty');
       assert.equal(dispatches[0].targetSessionId, 'sess-alpha-lead');
@@ -736,7 +736,7 @@ test('patrol', async (t) => {
         optionIds: ['a'],
       });
 
-      const dispatches = JSON.parse(readFileSync(join(dataDir, 'dispatches.json'), 'utf8'));
+      const dispatches = readBoardSection(dataDir, 'dispatches');
       assert.equal(dispatches.length, 1, '代答也是一次真实投递');
       assert.equal(dispatches[0].source, 'duty');
       assert.equal(dispatches[0].targetSessionId, 'sess-alpha-lead');
@@ -750,7 +750,7 @@ test('patrol', async (t) => {
         rationale: '风险可逆',
         optionIds: ['a'],
       });
-      const again = JSON.parse(readFileSync(join(dataDir, 'dispatches.json'), 'utf8'));
+      const again = readBoardSection(dataDir, 'dispatches');
       assert.equal(again.length, 1, '同一张卡不能被记成两次投递');
     } finally {
       cleanupDir(dir);
@@ -784,7 +784,7 @@ test('patrol', async (t) => {
         instruction: '值班投递的指令',
       });
 
-      const dispatches = JSON.parse(readFileSync(join(dataDir, 'dispatches.json'), 'utf8'));
+      const dispatches = readBoardSection(dataDir, 'dispatches');
       assert.equal(dispatches.length, 2, '两条记录都要在');
       assert.ok(
         dispatches.some((d) => d.id === 'dsp_board_1' && d.idempotencyKey === 'key-1'),

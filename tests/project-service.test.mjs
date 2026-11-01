@@ -22,7 +22,7 @@ import { buildPatrolFindings, resolvePatrolProposals } from '../miniapps/mimic-t
 import { splitVisibleProjects } from '../miniapps/mimic-tear/miniapp/node/project-scope.mjs';
 import { buildDutyStatus, resolveDutyIntervals } from '../miniapps/mimic-tear/miniapp/node/duty-status.mjs';
 import { ageMinutes, severityRank, sortBySeverity } from '../miniapps/mimic-tear/miniapp/node/inbox-builder.mjs';
-import { makeRuntimeDb, tmpDir, cleanupDir } from './helpers/fixture.mjs';
+import { makeRuntimeDb, readBoardSection, tmpDir, cleanupDir } from './helpers/fixture.mjs';
 
 function makeService(overrides = {}) {
   const dir = tmpDir();
@@ -290,9 +290,8 @@ test('project-service', async (t) => {
       await service.ack('item-1');
       await service.dispatch({ projectId: 1, sessionId: null, instruction: 'x', idempotencyKey: 'k-p' });
 
-      const { readFile } = await import('node:fs/promises');
-      const acks = JSON.parse(await readFile(join(dir, 'data', 'acks.json'), 'utf8'));
-      const dispatches = JSON.parse(await readFile(join(dir, 'data', 'dispatches.json'), 'utf8'));
+      const acks = readBoardSection(join(dir, 'data'), 'acks');
+      const dispatches = readBoardSection(join(dir, 'data'), 'dispatches');
 
       assert.deepEqual(acks, ['item-1']);
       assert.equal(dispatches.length, 1);

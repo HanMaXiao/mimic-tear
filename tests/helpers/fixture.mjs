@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -422,4 +422,19 @@ export function makeRuntimeDb(dir) {
 
   db.close();
   return dbPath;
+}
+
+/**
+ * 读板面状态 store 的一段。
+ *
+ * 板面自己的那几本账收口进了一个文件（`board-state.json`），所以「数据在哪」这个问题的
+ * 答案变了：不再是几个独立文件，而是这一个文件里的几段。
+ *
+ * @param {string} dataDir the board's data directory
+ * @param {string} section the segment to read
+ * @returns {any}
+ */
+export function readBoardSection(dataDir, section) {
+  const raw = JSON.parse(readFileSync(join(dataDir, 'board-state.json'), 'utf8'));
+  return raw?.[section] ?? null;
 }

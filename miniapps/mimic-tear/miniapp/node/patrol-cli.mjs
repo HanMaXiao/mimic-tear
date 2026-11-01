@@ -78,6 +78,8 @@ if (command === 'paths') {
     findings: patrol.findingsPath,
     answered: patrol.answeredPath,
     config: patrol.configPath,
+    // 板面自己的那几本账（派工 / 确认 / 排除 / 大哥会话）收口进这一个 store。
+    state: patrol.state.path,
     managed: managed.path,
     dutyIntent: dutyIntent.path,
   });

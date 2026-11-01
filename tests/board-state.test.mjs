@@ -1,0 +1,171 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+import { BoardStateStore, BOARD_STATE_FILE } from '../miniapps/mimic-tear/miniapp/node/board-state.mjs';
+import { tmpDir, cleanupDir } from './helpers/fixture.mjs';
+
+/**
+ * @param {string} dir
+ * @param {string} file
+ * @param {any} value
+ * @returns {void}
+ */
+function writeLegacy(dir, file, value) {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, file), JSON.stringify(value), 'utf8');
+}
+
+test('老账搬进 store：一次性搬完，之后老文件不再被读', async () => {
+  const dir = tmpDir();
+  try {
+    writeLegacy(dir, 'dispatches.json', [{ id: 'dsp-1', instruction: '干活' }]);
+    writeLegacy(dir, 'acks.json', ['item-1']);
+    writeLegacy(dir, 'dismissed.json', [{ id: 'item-2', reason: '残骸', at: 1 }]);
+    writeLegacy(dir, 'boss-session.json', { sessionId: 'sess-1', agent: 'boss' });
+
+    const store = new BoardStateStore(dir);
+    const state = await store.read();
+
+    assert.equal(state.dispatches.length, 1, '派工账要搬进来');
+    assert.deepEqual(state.acks, ['item-1']);
+    assert.equal(state.dismissed.length, 1);
+    assert.deepEqual(state.bossSession, { sessionId: 'sess-1', agent: 'boss' });
+
+    // 老文件改了，store 不跟着变——**只有一份口径**。
+    writeLegacy(dir, 'dispatches.json', [{ id: 'dsp-2', instruction: '后来的' }]);
+    const again = await store.read();
+    assert.equal(again.dispatches.length, 1, '老文件不再是真相');
+    assert.equal(again.dispatches[0].id, 'dsp-1');
+  } finally {
+    cleanupDir(dir);
+  }
+});
+
+test('迁移只发生一次：store 在了就直接用它', async () => {
+  const dir = tmpDir();
+  try {
+    const store = new BoardStateStore(dir);
+    await store.update((state) => ({ ...state, acks: ['item-1'] }));
+
+    // 老文件这时才出现——它不该被读进来。
+    writeLegacy(dir, 'acks.json', ['老文件里的']);
+    const state = await store.read();
+    assert.deepEqual(state.acks, ['item-1'], 'store 在了，老文件就不算了');
+  } finally {
+    cleanupDir(dir);
+  }
+});
+
+test('老账坏了：迁移要报错，不能搬出一份空账', async () => {
+  const dir = tmpDir();
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'dispatches.json'), '[{"id":"dsp-1",', 'utf8');
+
+    const store = new BoardStateStore(dir);
+    await assert.rejects(
+      () => store.read(),
+      /不是合法 JSON|读不了|损坏/,
+      '读不出来的老账必须报错——当成空账就等于把一份还在的账读成没有',
+    );
+    assert.equal(
+      existsSync(join(dir, BOARD_STATE_FILE)),
+      false,
+      '迁移没成功就不该留下 store 文件——那会让下一轮以为「本来就没有记录」',
+    );
+  } finally {
+    cleanupDir(dir);
+  }
+});
+
+test('两段互不干扰：写派工不会动确认账', async () => {
+  const dir = tmpDir();
+  try {
+    const store = new BoardStateStore(dir);
+    await store.update((state) => ({ ...state, acks: ['item-1'] }));
+    await store.update((state) => ({
+      ...state,
+      dispatches: [...state.dispatches, { id: 'dsp-1' }],
+    }));
+
+    const state = await store.read();
+    assert.deepEqual(state.acks, ['item-1'], '确认账没被动过');
+    assert.equal(state.dispatches.length, 1);
+  } finally {
+    cleanupDir(dir);
+  }
+});
+
+test('两个 store 实例（两个进程）各写各的，一条都不能丢', async () => {
+  const dir = tmpDir();
+  try {
+    const board = new BoardStateStore(dir);
+    const duty = new BoardStateStore(dir);
+
+    await Promise.all([
+      board.update((state) => ({ ...state, dispatches: [...state.dispatches, { id: 'board-1' }] })),
+      duty.update((state) => ({ ...state, dispatches: [...state.dispatches, { id: 'duty-1' }] })),
+    ]);
+
+    const state = await board.read();
+    const ids = state.dispatches.map((item) => item.id).sort();
+    assert.deepEqual(ids, ['board-1', 'duty-1'], '两个写者的记录都要在');
+  } finally {
+    cleanupDir(dir);
+  }
+});
+
+test('老版本写的大哥会话是裸字符串，读得出来', async () => {
+  const dir = tmpDir();
+  try {
+    writeLegacy(dir, 'boss-session.json', 'sess-old');
+    const store = new BoardStateStore(dir);
+    assert.deepEqual(
+      await store.section('bossSession'),
+      { sessionId: 'sess-old', agent: 'boss' },
+    );
+  } finally {
+    cleanupDir(dir);
+  }
+});
+
+test('写的时候永远读到完整文档', async () => {
+  const dir = tmpDir();
+  try {
+    const store = new BoardStateStore(dir);
+    const path = join(dir, BOARD_STATE_FILE);
+    let stop = false;
+    let reads = 0;
+
+    const reader = (async () => {
+      while (!stop) {
+        try {
+          const raw = readFileSync(path, 'utf8');
+          if (raw.trim()) {
+            JSON.parse(raw);
+            reads += 1;
+          }
+        } catch (error) {
+          if (error?.code !== 'ENOENT') throw error;
+        }
+        await new Promise((resolve) => { setTimeout(resolve, 1); });
+      }
+    })();
+
+    for (let index = 0; index < 30; index += 1) {
+      await store.update((state) => ({
+        ...state,
+        dispatches: [...state.dispatches, { id: `dsp-${index}` }],
+      }));
+    }
+    stop = true;
+    await reader;
+
+    assert.ok(reads > 0, '读的那一侧根本没读到东西，测试没有意义');
+    assert.equal((await store.read()).dispatches.length, 30);
+  } finally {
+    cleanupDir(dir);
+  }
+});

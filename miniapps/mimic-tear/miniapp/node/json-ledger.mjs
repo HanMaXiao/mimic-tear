@@ -115,6 +115,54 @@ export async function updateJsonArray(path, mutate, expectedId) {
 }
 
 /**
+ * Read a JSON document, whatever shape it has.
+ *
+ * A missing file is the fallback — nothing has been written yet. A file that exists but
+ * cannot be parsed is NOT the fallback: the state is damaged, and reporting it as "nothing
+ * here" is exactly how a record that exists on disk reads back as missing.
+ *
+ * @param {string} path
+ * @param {any} fallback
+ * @returns {Promise<any>}
+ */
+export async function readJsonFile(path, fallback) {
+  let raw;
+  try {
+    raw = await readFile(path, 'utf8');
+  } catch (error) {
+    if (error?.code === 'ENOENT') return fallback;
+    throw error;
+  }
+  if (!raw.trim()) return fallback;
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`${path} 里的内容不是合法 JSON：${error?.message ?? error}`);
+  }
+}
+
+/**
+ * Do one thing while holding the file's write lock.
+ *
+ * The lock is the same one `updateJsonArray` uses — a directory next to the file, because
+ * `mkdir` is atomic on Windows and on POSIX alike, and because the duty path is a separate
+ * process (an in-process mutex would not do).
+ *
+ * @template T
+ * @param {string} path the file whose lock to take
+ * @param {() => Promise<T>} task
+ * @returns {Promise<T>}
+ */
+export async function withFileLock(path, task) {
+  const release = await acquireLock(`${path}.lock`);
+  try {
+    return await task();
+  } finally {
+    await release();
+  }
+}
+
+/**
  * Write a whole JSON document, atomically.
  *
  * @param {string} path

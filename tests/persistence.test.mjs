@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -86,7 +86,8 @@ test('派工记录并发写入', async (t) => {
     const dir = tempDir();
     try {
       const persistence = new Persistence(dir);
-      const path = join(dir, 'dispatches.json');
+      // 板面自己的账收口进了一个 store 文件（`board-state.json`）：一个文件、一把锁。
+      const path = join(dir, 'board-state.json');
 
       let stop = false;
       let reads = 0;
@@ -130,8 +131,8 @@ test('派工记录并发写入', async (t) => {
   await t.test('账坏了要报错，不能当成「没有记录」', async () => {
     const dir = tempDir();
     try {
-      const path = join(dir, 'dispatches.json');
-      writeFileSync(path, '[{"id":"dsp-1",', 'utf8'); // 截断的 JSON
+      const path = join(dir, 'board-state.json');
+      writeFileSync(path, '{"dispatches":[{"id":"dsp-1",', 'utf8'); // 截断的 JSON
 
       const persistence = new Persistence(dir);
       await assert.rejects(
@@ -147,8 +148,8 @@ test('派工记录并发写入', async (t) => {
   await t.test('账坏了写入要报错，不许清空重来', async () => {
     const dir = tempDir();
     try {
-      const path = join(dir, 'dispatches.json');
-      writeFileSync(path, '[{"id":"dsp-1",', 'utf8'); // 截断的 JSON
+      const path = join(dir, 'board-state.json');
+      writeFileSync(path, '{"dispatches":[{"id":"dsp-1",', 'utf8'); // 截断的 JSON
 
       const persistence = new Persistence(dir);
       await assert.rejects(
@@ -158,7 +159,30 @@ test('派工记录并发写入', async (t) => {
       );
 
       // 原来的内容必须还在，不能被覆盖。
-      assert.equal(readFileSync(path, 'utf8'), '[{"id":"dsp-1",', '损坏的账被改写了');
+      assert.equal(readFileSync(path, 'utf8'), '{"dispatches":[{"id":"dsp-1",', '损坏的账被改写了');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  await t.test('迁移时老账坏了要报错，不许当成空账', async () => {
+    // 一次性迁移读的是老文件。老文件坏了就得**报错**——把它当成「没有记录」，
+    // 等于把一份还在的账读成空账，然后同一条指令被重投一次。
+    const dir = tempDir();
+    try {
+      writeFileSync(join(dir, 'dispatches.json'), '[{"id":"dsp-1",', 'utf8');
+
+      const persistence = new Persistence(dir);
+      await assert.rejects(
+        () => persistence.listDispatches(),
+        /不是合法 JSON|读不了|损坏/,
+        '迁移读不出老账就必须报错',
+      );
+      assert.equal(
+        existsSync(join(dir, 'board-state.json')),
+        false,
+        '迁移没成功就不能留下一个空 store——那会让下一轮以为「本来就没有记录」',
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

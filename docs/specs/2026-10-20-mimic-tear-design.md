@@ -300,7 +300,7 @@ interface InboxItem {
   body: string;                  // 问卷 question / 错误信息 / 目标摘要
   createdAt: number;
   ageMinutes: number;
-  acknowledged: boolean;         // 存在 dataDir/acks.json 中
+  acknowledged: boolean;         // 存在 dataDir/board-state.json 的 acks 段里
 }
 ```
 
@@ -416,11 +416,16 @@ Node 侧每 3 秒计算一次**廉价修订号**（`max(updated_at_ms)` + 各表
 
 | 文件 | 内容 |
 | --- | --- |
-| `dispatches.json` | 派工记录：id、项目、指令、大哥 sessionId、状态、时间 |
-| `acks.json` | 已确认的收件箱条目 id |
-| `boss-session.json` | 大哥会话 id（保持上下文连续） |
+| `board-state.json` | 板面自己的账（**收口进一个带版本的 store**：一个文件、一把锁、一条写路径）：派工记录、已确认的收件箱条目 id、大哥会话 id、被排除的收件箱条目 |
+| `patrol.json` / `patrol-config.json` / `patrol-answered.json` / `patrol-archive.json` | 巡检结论、巡检配置（含交班戳）、已代答的问卷、归档的结论 |
+| `duty-intent.json` | 值班意图（见 §27） |
+| `managed-projects.json` | 管辖名单（见 §22 / §24） |
+| `skill-library.json` / `thread-subscriptions.json` | 可复用技能库、线的订阅表 |
+| `watchdog-state.json` / `watchdog-notices.json` / `watchdog-alert.log` | 看门狗自己的状态与告警流水（JSONL） |
 
-> **2026-10-28 补记**：上表只列了最初三个文件，**实现里 `context.dataDir` 里实际落的东西更多**——`dismissed.json`（被排除的收件箱条目）、`patrol.json` / `patrol-config.json` / `patrol-answered.json`（巡检结论、配置与已答项）、`duty-intent.json`（值班意图，见 §27）、`managed-projects.json`（管辖名单，见 §22 / §24）、`watchdog-alert.log`（看门狗告警流水，JSONL）。这些文件全部由服务端写、客户端不碰，与上表「只写自己的 dataDir」这条硬约束不冲突。逐条依据：`miniapp/node/persistence.mjs` / `patrol-store.mjs` / `duty-intent.mjs` / `managed-projects.mjs` / `watchdog-alerts.mjs`。
+> **2026-11-01 补记（6.4 状态收口）**：原来板面自己的账散在四个文件里（`dispatches.json` / `acks.json` / `dismissed.json` / `boss-session.json`），其中**派工账有两个写者、两个进程**（看板的派工路径 + 值班路径），两边都做读-改-写——那出过真事故（并发写毁掉记录，而幂等键就在账里，丢一条就可能把同一条指令重投一次）。现在收口进**一个带版本的 store**（`board-state.json`）：一个文件、一把锁、一条写路径。老文件在 store 还不存在时**读一次**（一次性迁移），之后**再也不被读**——不做「新旧双读」，双读就是两份口径，而判据必须只有一个（§25.1）。
+>
+> **哪些状态没有收进 store，以及为什么**：① **结论账家族与巡检配置**——它们被大哥按文件名直接读写（值班技能里「写进 `patrol-answered.json`」是手写文件），而 CLI 还没有能替代手写的 `answer` 命令；收口它们等于动大哥的手，得先改大哥的契约，那是独立立项。② **看门狗自己的状态**——看门狗是独立进程（Windows 计划任务），不在 Mini App 的生命周期里。③ **大哥的长期配置**（`duty-intent.json` / `managed-projects.json` / `skill-library.json` / `thread-subscriptions.json`）——各自由 CLI 或大哥独占写入，生命周期与板面的运行时状态不是一回事。
 
 遵循 `security-and-state.md`：**先提交，再广播**。广播失败不回滚已提交状态；重连页面读当前快照即可恢复。
 
