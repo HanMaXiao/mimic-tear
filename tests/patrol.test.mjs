@@ -416,11 +416,14 @@ test('patrol', async (t) => {
     const dbPath = makeRuntimeDb(dir);
     const dataDir = join(dir, 'data');
     try {
+      // **requestId 必须是运行时库里真实存在的卡**：`ask-1` 是 fixture 里 status='pending'
+      // 的那张。给一张查无此卡的记一笔 = 造一笔谁也查不到底的假账，CLI 现在会拒绝入账
+      // （2026-11-01 上岗验收轮查出来的）。
       const result = runCli(dbPath, dataDir, [
-        'answer', 'req-001', '--answer', '同意，先做 A', '--rationale', '风险可逆', '--session-id', 'sess-alpha-lead',
+        'answer', 'ask-1', '--answer', '同意，先做 A', '--rationale', '风险可逆', '--session-id', 'sess-alpha-lead',
       ]);
       assert.equal(result.ok, true);
-      assert.equal(result.requestId, 'req-001');
+      assert.equal(result.requestId, 'ask-1');
 
       const answered = readBoardSection(dataDir, 'answered');
       assert.equal(answered.length, 1, '答案要记进账');
@@ -434,13 +437,14 @@ test('patrol', async (t) => {
       assert.equal(readBoardSection(dataDir, 'findings').length, 0, '代答不写结论');
 
       // 幂等：同一张卡记两次，账上还是一条。
-      runCli(dbPath, dataDir, ['answer', 'req-001', '--answer', '同意，先做 A']);
+      runCli(dbPath, dataDir, ['answer', 'ask-1', '--answer', '同意，先做 A']);
       assert.equal(readBoardSection(dataDir, 'answered').length, 1, '同一张卡不能记成两次');
 
-      // 少给答案要被拒绝（exit 2）。
+      // 少给答案要被拒绝（exit 2）。**这里必须用一张真实存在的卡**——
+      // 否则「查无此卡」也会回 exit 2，这条断言就成了恒真的，抓不到真问题。
       let rejected = false;
       try {
-        runCli(dbPath, dataDir, ['answer', 'req-002']);
+        runCli(dbPath, dataDir, ['answer', 'ask-1']);
       } catch (error) {
         rejected = error.status === 2;
       }

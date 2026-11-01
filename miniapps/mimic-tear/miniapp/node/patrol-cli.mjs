@@ -38,6 +38,7 @@ import { detectTriggers, TRIGGER_WHITELIST } from './trigger-source.mjs';
 import { ThreadSubscriptions } from './thread-subscriptions.mjs';
 import { DUTY_CRON_SEED, readDutyChain } from './duty-chain.mjs';
 import { applySpill, buildFactRefGraph } from './recall.mjs';
+import { resolveCardState } from './questionnaire-rules.mjs';
 
 const args = process.argv.slice(2);
 const command = args.find((arg) => !arg.startsWith('--')) ?? 'facts';
@@ -502,7 +503,11 @@ if (command === 'facts') {
   const cards = buildProjectCards({ projects, sessions, goals, questionnaires, tasks, plans });
   const runtimeItems = buildInbox({ projects, sessions, goals, questionnaires, plans }, new Set());
   const answered = await patrol.listAnswered();
-  const answeredIds = new Set(answered.map((item) => item.requestId));
+  // 大哥给过的建议，按 requestId 索引。
+  const suggestionById = new Map(answered.map((item) => [item.requestId, item]));
+  // 宿主那边每张卡的开合状态。**运行时是唯一权威**——板面账只说明「大哥给没给建议」。
+  // 少了这张索引，「记了建议」和「卡翻了」就会又变成同一个词（2026-11-01 13:07 轮查出）。
+  const cardById = new Map(store.listQuestionnaires(false).map((card) => [card.id, card]));
   const previousFindings = await patrol.list();
   // 归档过的结论：不在账本上了，但**仍然是大哥报过的事**。去重账要看得见它们，
   // 否则同一件事会被再报一遍。
@@ -552,11 +557,16 @@ if (command === 'facts') {
   const sessionById = new Map(sessions.map((s) => [s.id, s]));
   const projectById = new Map(projects.map((p) => [p.id, p]));
 
+  // 宿主还开着的卡，**一张都不许少**——哪怕大哥已经给过建议。
+  //
+  // 以前这里按「账上记过了」把卡剔掉，于是大哥记完建议就看不见这张卡了，而宿主那边
+  // 它照样开着、那个会话照样卡着：卡着的事从此没人再管（2026-11-01 13:07 轮查出）。
+  // 「卡开没开」只有一个权威：运行时。板面账只负责另一个问题——「大哥给没给建议」。
   const openQuestionnaires = questionnaires
-    .filter((q) => !answeredIds.has(q.id))
     .map((q) => {
       const session = sessionById.get(q.sessionId);
       const project = projectById.get(session?.projectId);
+      const suggestion = suggestionById.get(q.id) ?? null;
       return {
         requestId: q.id,
         sessionId: q.sessionId,
@@ -567,6 +577,15 @@ if (command === 'facts') {
         question: extractQuestion(q.requestJson),
         stepIds: extractSteps(q.requestJson),
         options: extractOptions(q.requestJson),
+        // 大哥已经表过态的卡也要把建议带着：大哥得看见「这张我答过了，等大老板点头」。
+        bossSuggestion: suggestion
+          ? {
+              answer: suggestion.answer ?? '',
+              rationale: suggestion.rationale ?? '',
+              optionIds: suggestion.optionIds ?? [],
+              decidedAt: suggestion.answeredAt ?? null,
+            }
+          : null,
       };
     });
 
@@ -785,11 +804,14 @@ if (command === 'facts') {
       archivedAt: archive.batches[0]?.archivedAt ?? null,
       archivedBy: archive.batches[0]?.archivedBy ?? null,
     },
+    // 大哥记过的每一条建议，都带上宿主那边的状态：**「记了建议」不等于「卡翻了」**。
+    // 少了这一段，大哥只看得见「我答过」，看不见「哪张还卡着」。
     alreadyAnswered: answered.map((item) => ({
       requestId: item.requestId,
       sessionId: item.sessionId,
       answeredAt: item.answeredAt,
       answer: item.answer,
+      ...resolveCardState(cardById.get(item.requestId)),
     })),
     // 这一轮的事件。`candidates` 是过了第一道闸的；`dropped` 说清筛掉了多少、为什么。
     triggers: {
@@ -940,7 +962,21 @@ if (command === 'report') {
     }
   }
 
+  // 代答（记录大哥的建议）也走同一条核对：**查无此卡不入账**，宿主还开着的卡单独报出来。
+  // 报告是批量动作，所以不因一条错就整体失败——错的单独报，和结论被拒一个待遇。
+  const answeredRejected = [];
+  let answeredAwaitingUser = 0;
+  const cardById = new Map(store.listQuestionnaires(false).map((card) => [card.id, card]));
   for (const entry of payload.answered ?? []) {
+    const cardState = resolveCardState(cardById.get(entry.requestId));
+    if (!cardState.known) {
+      answeredRejected.push({
+        requestId: entry.requestId,
+        reason: '运行时库里没有这张卡',
+      });
+      continue;
+    }
+    if (cardState.awaitingUser) answeredAwaitingUser += 1;
     await patrol.markAnswered({
       requestId: entry.requestId,
       sessionId: entry.sessionId ?? '',
@@ -986,7 +1022,11 @@ if (command === 'report') {
     ok: true,
     findings: written.length,
     rejected,
-    answered: (payload.answered ?? []).length,
+    answered: (payload.answered ?? []).length - answeredRejected.length,
+    // 宿主还开着的那几张：大哥记了建议，但卡没翻、那个会话还卡着。
+    answeredAwaitingUser,
+    // 查无此卡的那些：没入账，得让大哥知道少记了什么。
+    answeredRejected,
     dutyStamp,
     // Whether the watchdog was woken up. It is reported, not enforced: the handover
     // above already went through either way.
@@ -1075,7 +1115,7 @@ if (command === 'archive') {
 }
 
 if (command === 'answer') {
-  // 大哥替大老板回答一张待答的卡。
+  // 大哥替大老板**表态**一张待答的卡。
   //
   // **这条命令存在的理由是「大哥不再手写账」。** 在它之前，代答是往
   // `patrol-answered.json` 里手写 JSON——那个文件一旦被收进板面状态 store，大哥再手写，
@@ -1084,6 +1124,12 @@ if (command === 'answer') {
   //
   // **只记答案**：不写结论、**不打交班戳**。交班戳是值班大哥的（见 `report` 里的说明），
   // 代答一张卡不是交班。
+  //
+  // **它记的是「大哥的建议」，不是「这张卡已经翻了」。** CLI 没有宿主的投递口——
+  // Mini App 只能续自己拥有的会话（宿主所有权闸），而 CLI 连 Mini App 运行时都不在。
+  // 所以这条命令翻不了宿主那张卡。以前它回一句 `ok: true`，看着像答了，其实没答：
+  // 宿主卡照样 `status='pending'`、那个会话照样卡着（2026-11-01 13:07 轮查出来的）。
+  // 现在它先直读运行时核对这张卡，再如实报出宿主状态。
   //
   // 幂等：同一个 `requestId` 记过一次就不再记（`markAnswered` 自己判）。
   const positional = positionalArgs();
@@ -1094,6 +1140,14 @@ if (command === 'answer') {
   const optionIds = allFlags('option-id');
   if (!requestId || !answer) {
     process.stderr.write('用法：answer <requestId> --answer "<选项>" [--rationale "<理由>"] [--session-id <会话id>] [--option-id <id>]\n');
+    store.close();
+    process.exit(2);
+  }
+  // **查无此卡就不入账**：给一张不存在的卡记一笔「已答」，是造一笔谁也查不到底的假账。
+  const card = store.listQuestionnaires(false).find((item) => item.id === requestId);
+  const cardState = resolveCardState(card);
+  if (!cardState.known) {
+    process.stderr.write(`运行时库里没有这张卡（${requestId}）——没有入账。核对 requestId 是否逐字一致。\n`);
     store.close();
     process.exit(2);
   }
@@ -1112,6 +1166,14 @@ if (command === 'answer') {
     rationale,
     optionIds,
     answered: answered.length,
+    // 宿主那边这张卡开没开。**这是两件事，不是一件事**。
+    known: cardState.known,
+    hostStatus: cardState.hostStatus,
+    awaitingUser: cardState.awaitingUser,
+    note: cardState.awaitingUser
+      ? '宿主卡仍开着：这条只记了大哥的建议，没有翻转宿主卡，那个会话还卡着。'
+        + '真正解锁要由大老板在板面点「按大哥的建议回复」。'
+      : null,
   });
   store.close();
   process.exit(0);
