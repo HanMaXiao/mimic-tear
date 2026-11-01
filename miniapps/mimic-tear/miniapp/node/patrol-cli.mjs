@@ -28,7 +28,7 @@ import { fileURLToPath } from 'node:url';
 
 import { RuntimeStore } from './runtime-store.mjs';
 import { readPlan } from './plan-store.mjs';
-import { buildDutyStatus, buildInbox, buildOrgTree, buildPatrolBrief, buildProjectCards, projectName, withDutyCards } from './view-model.mjs';
+import { buildDutyStatus, buildInbox, buildOrgTree, buildPatrolBrief, buildProjectCards, computeDutyEvidence, dutyStaleAfterMinutes, projectName, withDutyCards } from './view-model.mjs';
 import { PatrolStore } from './patrol-store.mjs';
 import { Persistence } from './persistence.mjs';
 import { ManagedProjects, matchManagedProject, resolveManagedEntries } from './managed-projects.mjs';
@@ -36,6 +36,7 @@ import { DutyIntent } from './duty-intent.mjs';
 import { selectTriggers } from './trigger.mjs';
 import { detectTriggers, TRIGGER_WHITELIST } from './trigger-source.mjs';
 import { ThreadSubscriptions } from './thread-subscriptions.mjs';
+import { DUTY_CRON_SEED, readDutyChain } from './duty-chain.mjs';
 import { applySpill, buildFactRefGraph } from './recall.mjs';
 
 const args = process.argv.slice(2);
@@ -380,15 +381,47 @@ if (command === 'recall') {
       return project ? project.workspaceDir.split(/[\\/]/).pop() : null;
     };
 
+    // 这条线上的结论 id：项目节点的第二跳（「同项目的其它结论」）。
+    //
+    // **只有 `recall` 入口带它** —— `facts` 入口不传，因为引用图住在系统里、不进负载
+    // （把全部结论 id 内联进候选视图会让它从 59,265 涨到 80,638 字节）。召回是按需查图，
+    // 那里可以查全。
+    const conclusionIdsByProject = new Map();
+    for (const finding of findings) {
+      const projectName = finding?.projectName;
+      if (!projectName || !inScope(projectName)) continue;
+      const ids = conclusionIdsByProject.get(projectName) ?? [];
+      ids.push(String(finding.id));
+      conclusionIdsByProject.set(projectName, ids);
+    }
+
+    // 负责会话也要在图里：项目节点的下一跳指向它——图里没有目标节点，那一跳就是断的。
+    const ownerSessionsInScope = projects
+      .filter((p) => inScope(p.workspaceDir.split(/[\\/]/).pop()))
+      .map((p) => ownerSessionIdFor(sessions, p.id))
+      .filter(Boolean)
+      .map((id) => sessions.find((s) => s.id === id))
+      .filter(Boolean);
+
     const graph = buildFactRefGraph({
       findings: findings.filter((f) => inScope(f.projectName)),
       projects: projects
         .filter((p) => inScope(p.workspaceDir.split(/[\\/]/).pop()))
-        .map((p) => ({ name: p.workspaceDir.split(/[\\/]/).pop(), ownerSessionId: null })),
-      sessions: sessions
-        .filter((s) => ['error', 'interrupted', 'aborted'].includes(s.status))
-        .filter((s) => inScope(nameOf(s.projectId)))
-        .map((s) => ({ id: s.id, projectName: nameOf(s.projectId), title: s.title })),
+        .map((p) => {
+          const name = p.workspaceDir.split(/[\\/]/).pop();
+          return {
+            name,
+            ownerSessionId: ownerSessionIdFor(sessions, p.id),
+            conclusionIds: conclusionIdsByProject.get(name) ?? [],
+          };
+        }),
+      sessions: [
+        ...sessions
+          .filter((s) => ['error', 'interrupted', 'aborted'].includes(s.status))
+          .filter((s) => inScope(nameOf(s.projectId)))
+          .map((s) => ({ id: s.id, projectName: nameOf(s.projectId), title: s.title })),
+        ...ownerSessionsInScope.map((s) => ({ id: s.id, projectName: nameOf(s.projectId), title: s.title })),
+      ],
       questionnaires: questionnaires.map((q) => ({ requestId: q.id, sessionId: q.sessionId, question: null })),
       goals: goals
         .map((g) => {
@@ -591,11 +624,35 @@ if (command === 'facts') {
   //
   // `mode` is the decision that was made, `watching` is the jurisdiction list. Together
   // they answer "what am I here to do", which no timestamp can answer.
+  //
+  // **`missedRounds` 用权威口径**（调度记录为准，休息期不算漏班）：纯算术的口径会把
+  // 休息期也数成漏班，上岗验收时它给出 97、权威口径是 0——模型每轮读表都被那个 97 误导
+  // （2026-11-01 上岗轮大哥查出来的）。纯算术的值另放在 `missedRoundsByAge`，
+  // **同一个词不许有两种意思**。
+  const dutyConfig = await patrol.getConfig();
+  const dutyIntervalMinutes = dutyConfig.dutyIntervalMinutes ?? 30;
+  const dutyChain = readDutyChain(store, {
+    pinnedCronId: typeof dutyConfig.dutyCronId === 'string' ? dutyConfig.dutyCronId : null,
+    seedCronId: DUTY_CRON_SEED,
+  });
+  const dutyEvidence = dutyChain.runs.length
+    ? computeDutyEvidence({
+      runs: dutyChain.runs,
+      periodMs: dutyIntervalMinutes * 60_000,
+      evidenceWindowMs: dutyStaleAfterMinutes(dutyIntervalMinutes) * 60_000,
+      // 上岗分界线：**只数在岗时漏的班次**。上岗之前的洞是「还没上岗」，不是「漏班」。
+      // 这跟 gap 摘要是同一条分界线、同一套归属规则。
+      boundary: Number.isFinite(Number(dutyIntentState?.since)) ? Number(dutyIntentState.since) : null,
+      onDuty: (dutyIntentState?.mode ?? 'on-duty') !== 'resting',
+      now: Date.now(),
+    })
+    : null;
   const duty = {
     ...buildDutyStatus({
-      config: await patrol.getConfig(),
+      config: dutyConfig,
       findings: previousFindings,
       intent: dutyIntentState,
+      evidence: dutyEvidence,
       now: Date.now(),
     }),
     watching: [...managedNames],
@@ -637,7 +694,6 @@ if (command === 'facts') {
   // 了多少」才是真的数字，而不是自己筛完自己报「一个没筛掉」。
   //
   // 水位线是**交班戳**：上一轮交班之后发生的事，就是这一轮的事件。没有新状态文件。
-  const dutyConfig = await patrol.getConfig();
   const rawTriggers = detectTriggers({
     projects: cards.map((card) => ({
       id: card.id,
@@ -811,11 +867,15 @@ if (command === 'facts') {
   });
 
   // 引用图：每个内容项内联**下一跳的 ID**，模型可以顺着它一跳一跳地展开（链式召回）。
+  //
+  // 项目节点的下一跳只有一条：**负责会话**。「同项目的其它结论」那一跳**不在这里内联**
+  // ——引用图住在系统里、不在负载里（全部结论 id 内联进来会让候选视图从 59,265 涨到
+  // 80,638 字节）。召回那边按需建完整的图。
   const graph = buildFactRefGraph({
     findings: [...previousFindings, ...archivedFindings],
     projects: visibleCards.map((card) => ({
       name: card.name,
-      ownerSessionId: (ownerSessionsByProject.get(card.id) ?? []).find((s) => s.isRoot)?.id ?? null,
+      ownerSessionId: ownerSessionIdFor(sessions, card.id),
     })),
     sessions: visibleRecoverable.map((r) => ({
       id: r.sessionId, projectName: r.projectName, title: r.sessionTitle,
@@ -1112,6 +1172,28 @@ function resolveProject(name, projects) {
  */
 async function managedList() {
   return resolveManagedEntries(await managed.list(), store.listProjects());
+}
+
+/**
+ * 这条线的负责会话：**项目的根会话**（`parentSessionId == null`）。
+ *
+ * **两个入口必须用同一份算法** —— `facts`（给模型看的引用图）和 `recall`（按 ID 取回的
+ * 链式展开）都要用它。分叉过一次：2026-11-01 上岗验收时 `recall` 入口把
+ * `ownerSessionId` 写死成 `null`，于是事实表内联的那一跳说「结论 → 项目 → 会话」能走通，
+ * 召回却只到项目为止——最难查的那类不一致，而且两边都不报错。
+ *
+ * 多个根会话时取**最近活跃**的那个（`listSessions` 已按 `updated_at_ms` 降序排）。
+ * 项目可能开过好几条根会话，派工要发给还活着的那条。
+ *
+ * @param {any[]} sessions 运行时会话
+ * @param {number|string} projectId
+ * @returns {string|null}
+ */
+function ownerSessionIdFor(sessions, projectId) {
+  const roots = (sessions ?? [])
+    .filter((session) => session.projectId === projectId && session.parentSessionId == null)
+    .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+  return roots[0]?.id ?? null;
 }
 
 function extractQuestion(requestJson) {

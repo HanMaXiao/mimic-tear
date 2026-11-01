@@ -20,6 +20,7 @@ import { normalizeConclusionSource } from './conclusion-source.mjs';
  *             dutyOpenFindings:number, boardOpenFindings:number,
  *             dismissed:number, staleAfterMinutes:number, stale:boolean, neverRan:boolean,
  *             ageMinutes:number|null, missedRounds:number|null,
+ *             missedRoundsByAge:number|null, missedRoundsSource:'evidence'|'age-arithmetic',
  *             mode:'on-duty'|'resting', resting:boolean, modeSince:number|null,
  *             requestedBy:string|null, intentNote:string,
  *             alertable:boolean, nextDueAt:number|null, overdueMinutes:number|null }} DutyStatus
@@ -89,6 +90,7 @@ export function dutyStaleAfterMinutes(dutyIntervalMinutes) {
  *          findings:Array<{acknowledged:boolean, acknowledgedBy?:string|null, source?:string}>,
  *          dismissed?:Array<{id:string, reason?:string}>,
  *          intent?:{mode?:string, since?:number|null, requestedBy?:string|null, note?:string},
+ *          evidence?:{missedRounds?:number}|null,
  *          now?:number}} input
  * @returns {DutyStatus}
  */
@@ -105,6 +107,10 @@ export function buildDutyStatus(input) {
   const periodMs = dutyIntervalMinutes * 60_000;
   // The fact: has the boss gone quiet? It is computed from the handover stamp alone.
   const stale = lastRunAt === null || ageMinutes > staleAfterMinutes;
+  // 证据口径的漏班数。**判类型不判数值**：`Number.isFinite(Number(null))` 是 true，
+  // 「没有证据」会被误当成「证据说漏了 0 轮」。
+  const evidenceMissed = input?.evidence?.missedRounds;
+  const hasEvidence = typeof evidenceMissed === 'number' && Number.isFinite(evidenceMissed);
 
   return {
     lastRunAt,
@@ -132,7 +138,24 @@ export function buildDutyStatus(input) {
     // How many duty rounds were missed since the last handover. 0 means "on time".
     // This is what tells the boss that its previous round never landed, so it can
     // report the gap instead of silently carrying on as if nothing happened.
-    missedRounds: ageMinutes === null ? null : Math.max(0, Math.ceil(ageMinutes / dutyIntervalMinutes) - 1),
+    //
+    // **有两个数，这里给的是权威的那个**：`computeDutyEvidence` 数的是「调度器该触发却没
+    // 成功交班」的班次，休息期不算漏班。纯算术（`ageMinutes / 周期`）把休息期也算成漏班，
+    // 上岗验收时它给出 97、权威口径是 0——**模型每轮读表都会被那个 97 误导**（2026-11-01
+    // 上岗轮大哥查出来的）。
+    //
+    // 没有证据可算时（拿不到调度记录）退回纯算术，并用 `missedRoundsSource` 说清用的是
+    // 哪个口径——**同一个词不许有两种意思**。
+    //
+    // 注意：`Number.isFinite(Number(null))` 是 `true`（`Number(null)` 是 0），所以这里
+    // 必须判类型而不是判「能不能转成数」——否则「没有证据」会被当成「证据说漏了 0 轮」。
+    missedRounds: hasEvidence
+      ? evidenceMissed
+      : (ageMinutes === null ? null : Math.max(0, Math.ceil(ageMinutes / dutyIntervalMinutes) - 1)),
+    // 纯算术的口径，单独留一个名字。告警文案用它——它明写「按交班戳折算」，本来就是另一个意思。
+    missedRoundsByAge: ageMinutes === null ? null : Math.max(0, Math.ceil(ageMinutes / dutyIntervalMinutes) - 1),
+    // 这个数是用哪个口径算出来的。`evidence` = 调度记录为准；`age-arithmetic` = 纯折算。
+    missedRoundsSource: hasEvidence ? 'evidence' : 'age-arithmetic',
     // What the boss was told to do, as opposed to what it did. `resting` is an explicit
     // decision with a timestamp and a reason, never the absence of a handover.
     mode: intent.mode,
@@ -167,7 +190,8 @@ export function buildDutyStatus(input) {
  * 那次交班把它合上了，只有运行记录还记得。
  *
  * @param {{runs?:Array<{status?:string, createdAt?:number, deliveredAt?:number|null}>,
- *          periodMs?:number, now?:number, evidenceWindowMs?:number, currentStale?:boolean}} input
+ *          periodMs?:number, now?:number, evidenceWindowMs?:number, currentStale?:boolean,
+ *          boundary?:number|null, onDuty?:boolean}} input
  * @returns {{missedRounds:number,
  *            lastGap:{from:number,to:number,gapMinutes:number,missedRounds:number,attempted:boolean}|null,
  *            erasedOutage:boolean, currentStale:boolean, observedSlots:number, coveredSlots:number}}
@@ -210,6 +234,18 @@ export function computeDutyEvidence(input) {
   const anchor = delivered[0];
   const slotOf = (timestamp) => Math.floor((timestamp - anchor) / periodMs);
 
+  // 上岗分界线：大哥这一轮模式开始的时间（`intent.since`）。
+  //
+  // **在岗时只数分界线之后的洞**——分界线之前的是休息期留下的，或者大哥上岗前就断的链，
+  // 那些不是「漏班」，是「还没上岗」。这跟 `duty-gap.mjs` 的 `computeDutyGap` 是**同一条**
+  // 分界线、同一套归属规则：同一个词（「漏了几轮」）不许有两种意思。
+  //
+  // 不传 `boundary` 就不过滤——看门狗与心跳要的是**历史累计**，那是另一个量。
+  const boundary = Number.isFinite(Number(input?.boundary)) ? Number(input.boundary) : null;
+  // 休息不是故障：休息期间没有班次可漏。
+  const onDuty = input?.onDuty !== false;
+  const afterBoundary = (timestamp) => boundary === null || timestamp >= boundary;
+
   // Runs the scheduler tried but never delivered: missed, and the evidence is stronger.
   const pending = runs.filter((run) => run.status !== 'delivered'
     && typeof run.createdAt === 'number' && run.createdAt <= now);
@@ -228,13 +264,21 @@ export function computeDutyEvidence(input) {
     // measures 389m59.98s; without that step the floor drops one round per gap.
     const gapMinutes = Math.round((to - from) / 60_000);
     const expected = Math.max(0, Math.floor(gapMinutes / periodMinutes) - 1);
-    const pendingInside = pending.filter((run) => run.createdAt >= from && run.createdAt <= to);
-    if (expected === 0 && pendingInside.length === 0) continue;
+    // 这个洞可能横跨「还没上岗」和「在岗」两段，所以**按分界线切一刀**，不是整段二选一：
+    // 只有分界线之后的那一段才算漏班。洞有多大是另一件事（那是 `duty-gap` 摘要说的）。
+    const fromBoundary = boundary === null ? from : Math.max(from, boundary);
+    const afterMinutes = Math.round((to - fromBoundary) / 60_000);
+    const missed = boundary === null
+      ? expected
+      : (fromBoundary >= to ? 0 : Math.max(0, Math.ceil(afterMinutes / periodMinutes) - 1));
+    const pendingInside = pending.filter((run) => run.createdAt >= from && run.createdAt <= to
+      && afterBoundary(run.createdAt));
+    if (missed === 0 && pendingInside.length === 0) continue;
     gaps.push({
       from,
       to,
       gapMinutes,
-      missedRounds: Math.max(expected, pendingInside.length),
+      missedRounds: Math.max(missed, pendingInside.length),
       attempted: pendingInside.length > 0,
     });
   }
@@ -242,7 +286,7 @@ export function computeDutyEvidence(input) {
   // Rounds scheduled after the last handover are not inside any gap: they are the failure
   // that is still going on, and the liveness verdict is what reports it.
   const lastDelivered = delivered[delivered.length - 1];
-  const pendingTailRuns = pending.filter((run) => run.createdAt > lastDelivered);
+  const pendingTailRuns = pending.filter((run) => run.createdAt > lastDelivered && afterBoundary(run.createdAt));
   const trailingSlots = new Set(pendingTailRuns.map((run) => slotOf(run.createdAt)));
 
   // The tail splits into two kinds, and they need different answers:
@@ -257,13 +301,17 @@ export function computeDutyEvidence(input) {
   const blankSlots = [];
   for (let slot = lastSlot + 1; slot < nowSlot; slot += 1) {
     if (pendingSlots.has(slot)) continue;
+    if (!afterBoundary(anchor + slot * periodMs)) continue;
     blankSlots.push(slot);
   }
 
   const lastGap = gaps.length ? gaps[gaps.length - 1] : null;
 
   return {
-    missedRounds: gaps.reduce((sum, gap) => sum + gap.missedRounds, 0) + trailingSlots.size,
+    // 休息期间没有班次可漏。**同一个词只有一种意思**：漏班 = 在岗时该交班却没交上的班次。
+    missedRounds: onDuty
+      ? gaps.reduce((sum, gap) => sum + gap.missedRounds, 0) + trailingSlots.size
+      : 0,
     lastGap,
     // The tail after the last handover, split by what the host did about it.
     pendingTail: {
