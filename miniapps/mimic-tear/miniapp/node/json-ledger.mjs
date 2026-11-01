@@ -41,6 +41,15 @@ const LOCK_STALE_MS = 30_000;
 const LOCK_TIMEOUT_MS = 15_000;
 
 /**
+ * 这些错误码都是**暂时的**，不是「这里不让写」。
+ *
+ * `EEXIST` 是常态：别人拿着锁。`EPERM` / `EACCES` / `ENOENT` 是 Windows 上「有人正在
+ * 删这个锁目录」时 `mkdir` 会给的码——把锁目录当成普通目录看待的话，这一类错误会被
+ * 当成致命错误抛出去，于是并发写里凭空多出一堆失败。
+ */
+const TRANSIENT_LOCK_CODES = new Set(['EEXIST', 'EPERM', 'EACCES', 'ENOENT', 'EBUSY']);
+
+/**
  * Read a JSON array file.
  *
  * A missing file is an empty list — nothing has been written yet. A file that exists but
@@ -131,6 +140,11 @@ export async function writeJsonAtomic(path, value) {
  * older than {@link LOCK_STALE_MS} belongs to a process that died mid-write, so it is
  * broken rather than waited on forever.
  *
+ * **Windows 上还有三个「暂时性」的码。** 放锁是 `rm -r`，而 `rm` 还在进行时另一个
+ * 写者 `mkdir` 同一个路径，Windows 给的是 `EPERM` / `EACCES` / `ENOENT`——不是
+ * `EEXIST`。把它们当成致命错误抛出去，等于「有人正在放锁」这件事会变成一次写入失败：
+ * 记录没落盘，调用方以为失败了，而账本里确实少了一条。
+ *
  * @param {string} lockPath
  * @returns {Promise<() => Promise<void>>} the release function
  */
@@ -138,15 +152,19 @@ async function acquireLock(lockPath) {
   const deadline = Date.now() + LOCK_TIMEOUT_MS;
   // The lock lives next to the file it protects, so its directory has to exist first.
   await mkdir(dirname(lockPath), { recursive: true });
+  /** @type {any} */
+  let lastError = null;
   while (Date.now() < deadline) {
     try {
       // Not `recursive`: the directory must fail with EEXIST when somebody else holds it,
       // which is what makes this an atomic lock.
       await mkdir(lockPath);
       await writeFile(joinPath(lockPath, 'owner'), `${process.pid}\n`, 'utf8').catch(() => undefined);
-      return async () => { await rm(lockPath, { recursive: true, force: true }); };
+      return async () => { await releaseLock(lockPath); };
     } catch (error) {
-      if (error?.code !== 'EEXIST') throw error;
+      const code = error?.code;
+      if (!TRANSIENT_LOCK_CODES.has(code)) throw error;
+      lastError = error;
       const info = await stat(lockPath).catch(() => null);
       if (info && Date.now() - info.mtimeMs > LOCK_STALE_MS) {
         await rm(lockPath, { recursive: true, force: true }).catch(() => undefined);
@@ -155,7 +173,30 @@ async function acquireLock(lockPath) {
       await delay(10 + Math.floor(Math.random() * 20));
     }
   }
-  throw new Error(`拿不到 ${lockPath} 的写锁`);
+  const why = lastError?.code ? `（最后一次是 ${lastError.code}）` : '';
+  throw new Error(`拿不到 ${lockPath} 的写锁${why}`);
+}
+
+/**
+ * 放锁。
+ *
+ * **放锁失败不算写失败。** 写已经落盘了，为这个报错会让调用方以为没写进去——于是重投
+ * 一次，而重投的代价是真的（同一个指令投两遍）。放不掉的锁 30 秒后会被当成死锁拆掉。
+ *
+ * @param {string} lockPath
+ * @returns {Promise<void>}
+ */
+async function releaseLock(lockPath) {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      await rm(lockPath, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code = error?.code;
+      if (!TRANSIENT_LOCK_CODES.has(code)) return;
+      await delay(15 * (attempt + 1));
+    }
+  }
 }
 
 /**
