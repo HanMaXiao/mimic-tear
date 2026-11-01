@@ -20,8 +20,10 @@
  * 读写的规矩。
  */
 
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+
+import { readJsonArray, updateJsonArray, writeJsonAtomic } from './json-ledger.mjs';
 
 /**
  * @typedef {{
@@ -44,6 +46,15 @@ const REASON_REQUIRED = '添加订阅必须写明理由（大老板的原话或�
 /** 一条线最多记多少个「已投递」的事件 id。 */
 const DELIVERED_MEMORY = 200;
 
+/**
+ * 在途标记多久算过期。
+ *
+ * **必须有这个口径**：负责会话那一轮要是永远不结束（卡住、被中断而没 resolve），
+ * 在途标记就一直挂着 → 那条线的投递一直被合并 → 事件一直不投。
+ * 过期之后旧标记作废、照常投递（事件不丢，最多多唤醒一次）。
+ */
+export const IN_FLIGHT_EXPIRY_MS = 60 * 60_000;
+
 export class ThreadSubscriptions {
   /** @param {string} dataDir */
   constructor(dataDir) {
@@ -57,10 +68,8 @@ export class ThreadSubscriptions {
    * @returns {Promise<Subscription[]>}
    */
   async list() {
-    const value = await readJson(this.path, []);
-    return Array.isArray(value)
-      ? value.filter((entry) => entry && typeof entry.projectName === 'string')
-      : [];
+    const all = await readJsonArray(this.path);
+    return all.filter((entry) => entry && typeof entry.projectName === 'string');
   }
 
   /**
@@ -183,34 +192,102 @@ export class ThreadSubscriptions {
   }
 
   /**
-   * 记下「这条线有一笔投递在途」。
+   * 投递前的一次**认领**：要么「这一笔归我发」，要么「已经有同类的在途，并进去」。
    *
-   * **为什么要有独立的在途标记**：`delivered`（已投出）是**投递成功之后**才落盘的，
-   * 而「投递成功」的信号要等**负责会话那一轮结束**才回来——实测滞后 11 分钟。
-   * 拿 `delivered` 判「这个会话是不是正在处理同类事件」，**窗口永远是空的**，
-   * 判定永远落在「不在处理中」——合并逻辑一行都命中不了。
+   * **为什么是「认领」而不是「读一眼再写」**：拆成两步，两个 tick 就可能同时读到
+   * 「没有在途」，于是各发一次——同一个项目两个在途。认领是一次读-改-写。
    *
-   * 所以在途是**第三个状态**：在途 / 已投出 / 没投过。三个词各管各的。
+   * **并入不是丢事件**：命中的那条事件 id 进在途记录，等那一轮结束后按**合并后的最新
+   * 活动时间**再投一次（见 `direct-delivery.mjs` 的尾巴投递）。
    *
    * @param {string} projectName
-   * @param {{ type:string, triggerId:string, activityAt:number, sentAt:number }} record
-   * @returns {Promise<Subscription[]>}
+   * @param {string} type 事件类型（同类才并）
+   * @param {{id?:string, at?:number}} trigger 要认领的事件
+   * @param {{expiryMs?:number, now?:number}} [options]
+   * @returns {Promise<{claimed:boolean, merged:boolean, expired:boolean, reason:string, record:any}>}
    */
-  async markInFlight(projectName, record) {
+  async claimDelivery(projectName, type, trigger, options = {}) {
     const name = String(projectName ?? '').trim();
-    if (!name || !record?.type) return this.list();
+    const kind = String(type ?? '').trim();
+    if (!name || !kind) return { claimed: false, merged: false, expired: false, reason: 'invalid', record: null };
+    const expiryMs = Number(options.expiryMs) > 0 ? Number(options.expiryMs) : IN_FLIGHT_EXPIRY_MS;
+    const now = Number(options.now) || Date.now();
+
     const all = await this.list();
     const entry = all.find((item) => item.projectName === name);
-    if (!entry) return all;
-    const inflight = { ...(entry.inFlight ?? {}) };
-    inflight[record.type] = {
-      triggerId: record.triggerId ?? '',
-      activityAt: Number(record.activityAt ?? 0) || 0,
-      sentAt: Number(record.sentAt ?? 0) || 0,
-    };
-    entry.inFlight = inflight;
-    await this.#write(all);
-    return all;
+    if (!entry) return { claimed: false, merged: false, expired: false, reason: 'no_subscription', record: null };
+
+    /** @type {any} */
+    let outcome = null;
+    // **一次读-改-写，在锁里**（`json-ledger.mjs` 的纪律）：拆成「先读后写」，两个 tick
+    // 就可能同时读到「没有在途」，于是各发一次——同一个项目两个在途。
+    await updateJsonArray(this.path, (current) => {
+      // 账本的修补重写会再调一次 mutate → 那时内容已经写对了，原样返回即可。
+      if (outcome) return current;
+      const target = current.find((item) => item?.projectName === name);
+      if (!target) {
+        outcome = { claimed: false, merged: false, expired: false, reason: 'no_subscription', record: null };
+        return current;
+      }
+      const inflight = { ...(target.inFlight ?? {}) };
+      const running = inflight[kind] ?? null;
+      const expired = Boolean(running) && (now - Number(running?.sentAt ?? 0) > expiryMs);
+
+      if (running && !expired) {
+        // **命中在途**：并进来，本轮不投。
+        const merged = [...(running.merged ?? []), trigger];
+        const record = {
+          ...running,
+          merged,
+          activityAt: Math.max(Number(running.activityAt ?? 0), Number(trigger?.at ?? 0) || 0),
+        };
+        inflight[kind] = record;
+        target.inFlight = inflight;
+        outcome = {
+          claimed: false, merged: true, expired: false, reason: 'merged_into_inflight', record,
+        };
+        return current;
+      }
+
+      // **认领**（新的一笔，或旧的已过期 → 接管）。
+      const record = {
+        type: kind,
+        triggerId: trigger?.id ?? '',
+        activityAt: Number(trigger?.at ?? 0) || 0,
+        sentAt: now,
+        merged: [],
+        sessionId: target.ownerSessionId ?? '',
+      };
+      inflight[kind] = record;
+      target.inFlight = inflight;
+      outcome = {
+        claimed: true,
+        merged: false,
+        expired: Boolean(expired),
+        reason: expired ? 'expired_taken_over' : 'claimed',
+        record,
+        // 过期那条里的合并事件**不能丢**：它们从没被投出去。交给调用方补投。
+        expiredRecord: expired ? running : null,
+      };
+      return current;
+    }, null);
+
+    return outcome ?? { claimed: false, merged: false, expired: false, reason: 'no_subscription', record: null };
+  }
+
+  /**
+   * 读一条在途记录（投递结束时要读它——并进来的事件是在途期间才写进去的）。
+   *
+   * @param {string} projectName
+   * @param {string} type
+   * @returns {Promise<any>}
+   */
+  async getInFlight(projectName, type) {
+    const name = String(projectName ?? '').trim();
+    const kind = String(type ?? '').trim();
+    if (!name || !kind) return null;
+    const entry = (await this.list()).find((item) => item.projectName === name);
+    return entry?.inFlight?.[kind] ?? null;
   }
 
   /**
@@ -243,21 +320,21 @@ export class ThreadSubscriptions {
    */
   async #write(entries) {
     await mkdir(this.dataDir, { recursive: true });
-    const temp = `${this.path}.${process.pid}.${Date.now().toString(36)}.tmp`;
-    await writeFile(temp, JSON.stringify(entries, null, 2), 'utf8');
-    await rename(temp, this.path);
+    // **用仓库自己的写盘纪律**（`json-ledger.mjs`）：唯一临时名 + 原子替换 + **rename 重试**。
+    // 少了重试，Windows 上「刚写的文件被扫描器占住」会变成一次写失败——
+    // 2026-11-01 跑在途合并的测试时真机撞到过 `EPERM: rename`。
+    await writeJsonAtomic(this.path, entries);
   }
 }
 
 /**
  * @param {string} path
- * @param {any} fallback
  * @returns {Promise<any>}
  */
-async function readJson(path, fallback) {
+async function readJson(path) {
   try {
     return JSON.parse(await readFile(path, 'utf8'));
   } catch {
-    return fallback;
+    return [];
   }
 }

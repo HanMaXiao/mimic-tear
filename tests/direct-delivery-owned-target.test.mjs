@@ -10,7 +10,6 @@ import { PatrolStore } from '../miniapps/mimic-tear/miniapp/node/patrol-store.mj
 import { RuntimeStore } from '../miniapps/mimic-tear/miniapp/node/runtime-store.mjs';
 import { ThreadSubscriptions } from '../miniapps/mimic-tear/miniapp/node/thread-subscriptions.mjs';
 import { planRound, runRound } from '../miniapps/mimic-tear/miniapp/node/direct-delivery-runner.mjs';
-import { createSingleFlight } from '../miniapps/mimic-tear/miniapp/node/single-flight.mjs';
 import { makeRuntimeDb, tmpDir, cleanupDir } from './helpers/fixture.mjs';
 
 const CLI = fileURLToPath(new URL('../miniapps/mimic-tear/miniapp/node/patrol-cli.mjs', import.meta.url));
@@ -520,32 +519,6 @@ test('投递失败：在途标记要撤掉，事件下一轮还会被计划到',
     store?.close();
     cleanupDir(dir);
   }
-});
-
-test('投递轮次不许重叠：上一轮没跑完，下一轮被跳过', async () => {
-  // 投递要等负责 agent 那一轮跑完（可能好几分钟），而循环每 30 秒跳一次。
-  // 重叠起来：同一个事件被投两次、还建出两个负责会话（2026-11-01 真机撞出来的）。
-  const flight = createSingleFlight();
-  let release = () => {};
-  const gate = new Promise((resolve) => { release = resolve; });
-
-  const first = flight.run(async () => {
-    await gate;
-    return '第一轮';
-  });
-  assert.equal(flight.busy, true, '第一轮在跑');
-
-  const second = await flight.run(async () => '第二轮');
-  assert.equal(second.skipped, true, '上一轮没跑完，这一轮必须跳过');
-  assert.equal(second.value, null);
-
-  release();
-  assert.equal((await first).value, '第一轮');
-  assert.equal(flight.busy, false, '跑完之后要能再跑下一轮');
-
-  const third = await flight.run(async () => '第三轮');
-  assert.equal(third.skipped, false, '空闲时照常跑');
-  assert.equal(third.value, '第三轮');
 });
 
 test('越权闸仍然有效：名单外的项目一条都投不出去', async () => {

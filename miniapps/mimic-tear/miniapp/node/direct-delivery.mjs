@@ -27,7 +27,7 @@
  * 「大哥说它交班了」这种结论——而排队中的轮次根本没跑。
  */
 
-import { planDeliveries } from './thread.mjs';
+import { planDeliveries, renderDelivery } from './thread.mjs';
 
 /**
  * 这个会话是不是 **Mini App 自己拥有的**？
@@ -147,23 +147,58 @@ export async function deliverToThreads(input) {
   const handedOff = new Map();
   /** @type {Map<string,string>} 这一轮建出来的负责会话——同一线的第二条事件要续第一个。 */
   const sessionByProject = new Map();
+  const subscriptions = input?.subscriptions ?? null;
 
-  for (const delivery of deliveries) {
+  /**
+   * 尾巴投递：把在途期间**并进来**的那些事件，按**合并后的最新活动时间**投一次。
+   *
+   * 事件不丢，但唤醒次数降下来：那一串活动只多唤一次，而不是每条活动各唤一次。
+   *
+   * @param {string} projectName
+   * @param {any[]} merged 并进来的事件（触发器）
+   * @param {string} sessionId 投进哪个会话
+   */
+  const deliverTail = async (projectName, merged, sessionId) => {
+    const latest = merged[merged.length - 1];
+    if (!latest) return;
+    await deliverOne({
+      trigger: latest,
+      thread: { projectName, ownerSessionId: sessionId, ownerAgent: '' },
+      text: renderDelivery(latest, { projectName }),
+    });
+  };
+
+  /**
+   * 投一笔：认领 → 投 → 撤在途 → 记账 → 尾巴投递。
+   *
+   * @param {any} delivery
+   */
+  const deliverOne = async (delivery) => {
     const projectName = delivery?.thread?.projectName ?? '';
+    const trigger = delivery?.trigger ?? {};
+    const type = String(trigger.type ?? '');
+    const triggerId = String(trigger.id ?? '');
+
+    // **认领**（一次读-改-写）：在途就并进来（事件不丢，本轮不投），否则这一笔归我发。
+    const claim = await subscriptions?.claimDelivery?.(projectName, type, trigger);
+    if (claim?.merged) {
+      results.push({
+        triggerId, projectName, reason: 'merged_into_inflight', error: null, sessionId: '',
+      });
+      return;
+    }
+    // 过期接管：旧记录里**并进来却从没投出去**的事件 → 先补投，不能丢。
+    if (claim?.expiredRecord?.merged?.length) {
+      await deliverTail(projectName, claim.expiredRecord.merged, claim.expiredRecord.sessionId ?? '');
+    }
+
     // 计划是在写回之前算的：这一轮的第二条事件看到的还是「没有负责会话」。
     // 不接住它，它就会**再建一个会话**——同一个项目两个负责人（2026-11-01 真机实测）。
     const known = sessionByProject.get(projectName);
-    const sessionId = delivery?.thread?.ownerSessionId || known || '';
-    const triggerType = delivery?.trigger?.type ?? '';
-    // **在途标记先写，再投。** `delivered`（已投出）要等负责会话那一轮结束才落盘，
-    // 实测滞后 11 分钟——那段时间里「已投出」在板面上是看不见的，盯盘很容易误读成
-    // 「没投出去」。在途是**第三个状态**：在途 / 已投出 / 没投过。
-    await input?.subscriptions?.markInFlight?.(projectName, {
-      type: triggerType,
-      triggerId: delivery?.trigger?.id ?? '',
-      activityAt: Number(delivery?.trigger?.at ?? 0) || 0,
-      sentAt: Date.now(),
-    });
+    const sessionId = delivery?.thread?.ownerSessionId
+      || known
+      || claim?.record?.sessionId
+      || '';
     const outcome = await deliverToSession({
       agent: input?.agent,
       sessionId,
@@ -175,25 +210,32 @@ export async function deliverToThreads(input) {
       // 写回失败不能当成投递失败（事件可能已经进去了），但要如实记下来。
       onSessionCreated: async (created) => {
         sessionByProject.set(projectName, created);
-        if (typeof input?.subscriptions?.setOwnerSession === 'function') {
-          await input.subscriptions.setOwnerSession(projectName, created);
+        if (typeof subscriptions?.setOwnerSession === 'function') {
+          await subscriptions.setOwnerSession(projectName, created);
         }
       },
     });
-    // 投递有结果了：在途标记撤掉。成功 → 下面记账（转成 `delivered`）；失败 → 事件
-    // 下一轮还会被计划到（**失败不记账**的语义不变）。
-    await input?.subscriptions?.clearInFlight?.(projectName, triggerType);
+    // 投递有结果了：在途标记撤掉。成功 → 下面记账（连同在途期间并进来的那些）；
+    // 失败 → 从在途里撤掉，事件下一轮还会被计划到（**失败不记账**的语义不变）。
+    const current = await subscriptions?.getInFlight?.(projectName, type);
+    await subscriptions?.clearInFlight?.(projectName, type);
     results.push({
-      triggerId: delivery?.trigger?.id ?? '',
-      projectName,
-      reason: outcome.reason,
-      error: outcome.error,
-      sessionId: outcome.sessionId,
+      triggerId, projectName, reason: outcome.reason, error: outcome.error, sessionId: outcome.sessionId,
     });
-    // 只有「投出去了」才记账。失败的不记 —— 事件还在，下一轮还会被计划到。
-    if (outcome.accepted) {
-      handedOff.set(projectName, [...(handedOff.get(projectName) ?? []), delivery?.trigger?.id ?? '']);
+    if (!outcome.accepted) return;
+    const ids = [
+      triggerId,
+      ...(current?.merged ?? []).map((item) => String(item?.id ?? '')).filter(Boolean),
+    ];
+    handedOff.set(projectName, [...(handedOff.get(projectName) ?? []), ...ids]);
+    // 尾巴投递：在途期间又并进来新活动 → 按合并后的最新值再投一次。
+    if (current?.merged?.length) {
+      await deliverTail(projectName, current.merged, current.sessionId ?? sessionId);
     }
+  };
+
+  for (const delivery of deliveries) {
+    await deliverOne(delivery);
   }
 
   // 记账是写操作，放在投递之后：写失败不影响已经投出去的东西。
