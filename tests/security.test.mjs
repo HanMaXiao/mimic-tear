@@ -69,6 +69,25 @@ function makeService() {
     async runPatrol() {
       return { runAt: 1, findings: [], error: null };
     },
+    // 轮次是后台的：接口立刻返回句柄，结论随 SSE 送。这是真服务的新契约。
+    async startPatrol() {
+      const result = { runAt: 1, findings: [], error: null };
+      return {
+        id: 'rnd_test',
+        kind: 'patrol',
+        slot: 'board-patrol',
+        status: 'running',
+        skipped: false,
+        reason: null,
+        promise: Promise.resolve({ status: 'finished', result, error: null }),
+      };
+    },
+    stopRound(id) {
+      return { stopped: true, reason: 'aborted', id, status: 'running' };
+    },
+    listRounds() {
+      return [];
+    },
     async getWatchdogAlerts() {
       return { alerts: [] };
     },
@@ -262,6 +281,8 @@ const ROUTE_CASES = [
   { key: 'POST /api/patrol/config', method: 'POST', path: '/api/patrol/config', body: { enabled: false } },
   { key: 'POST /api/duty/intent', method: 'POST', path: '/api/duty/intent', body: { mode: 'on-duty' } },
   { key: 'POST /api/patrol/run', method: 'POST', path: '/api/patrol/run', body: {} },
+  { key: 'GET /api/patrol/round', method: 'GET', path: '/api/patrol/round' },
+  { key: 'POST /api/patrol/round/:id/stop', method: 'POST', path: '/api/patrol/round/rnd_1/stop', body: {} },
   { key: 'GET /api/watchdog/alerts', method: 'GET', path: '/api/watchdog/alerts' },
   { key: 'GET /api/chat/duty', method: 'GET', path: '/api/chat/duty' },
   { key: 'GET /api/chat/history', method: 'GET', path: '/api/chat/history' },
@@ -273,7 +294,7 @@ const ROUTE_CASES = [
 
 test('路由表', async (t) => {
   await t.test('API 路由一条都不能少', async () => {
-    assert.equal(API_ROUTES.length, 22, '板面的 API 路由是 22 条，少一条就是少了一个契约');
+    assert.equal(API_ROUTES.length, 24, '板面的 API 路由是 24 条，少一条就是少了一个契约');
     const apiKeys = API_ROUTES.map((route) => `${route.method} ${route.path}`).sort();
     const caseKeys = ROUTE_CASES
       .filter((item) => item.key.includes('/api/'))

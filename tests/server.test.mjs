@@ -105,6 +105,33 @@ function makeFakeService() {
         error: null,
       };
     },
+    // 轮次是后台的：接口立刻返回句柄，结论随 SSE 送。这是真服务的新契约。
+    async startPatrol() {
+      const result = {
+        runAt: 1,
+        conclusion: '巡检结论',
+        dispatches: [],
+        proposals: [],
+        executed: [],
+        findings: [],
+        error: null,
+      };
+      return {
+        id: 'rnd_test',
+        kind: 'patrol',
+        slot: 'board-patrol',
+        status: 'running',
+        skipped: false,
+        reason: null,
+        promise: Promise.resolve({ status: 'finished', result, error: null }),
+      };
+    },
+    stopRound(id) {
+      return { stopped: true, reason: 'aborted', id, status: 'running' };
+    },
+    listRounds() {
+      return [];
+    },
     async chat(text, onEvent) {
       onEvent?.({ type: 'text.delta', text: '收到' });
       onEvent?.({ type: 'tool.started', name: 'bash' });

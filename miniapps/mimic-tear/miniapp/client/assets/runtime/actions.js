@@ -9,7 +9,7 @@ import { request } from '../shared/http.js';
 import { API } from '../shared/api.js';
 import { state } from '../shared/state.js';
 import { currentRoute, refresh, renderRoute } from './router.js';
-import { savePatrolConfig, runPatrolNow } from './patrol.js';
+import { savePatrolConfig, togglePatrolRound } from './patrol.js';
 import { loadWatchdogAlerts } from '../views/alerts.js';
 import { openDispatchDialog, submitDispatch } from '../views/dispatch.js';
 import { selectChatOption, sendChat, submitChatAnswer } from '../views/chat.js';
@@ -195,7 +195,7 @@ export function bindActions() {
   });
 
   el('patrol-run-button').addEventListener('click', () => {
-    runPatrolNow();
+    togglePatrolRound();
   });
 
   el('project-dispatch-button').addEventListener('click', () => {

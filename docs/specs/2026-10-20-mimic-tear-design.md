@@ -367,7 +367,9 @@ interface DomainGroup {
 | POST | `/api/permissions/:requestId` | 决定大哥的工具权限请求（body `{ decision: 'allowOnce' \| 'deny' }`） |
 | GET | `/api/patrol` | 大哥巡检配置与历史结论 |
 | POST | `/api/patrol/config` | 开关看板侧巡检、设巡检间隔（**不再管自动派工**，见 §24.7） |
-| POST | `/api/patrol/run` | 立即巡检一次。返回 **202**，结果通过 SSE `patrol` 事件推送 |
+| POST | `/api/patrol/run` | 立即巡检一次。返回 **202** + `roundId`，结果通过 SSE `patrol` 事件推送。**轮次是后台的**：同一时刻只跑一轮，重复调用返回 `status: 'skipped'` |
+| GET | `/api/patrol/round` | 在跑的轮次与刚跑完的那些（`?limit=` 默认 20）。轮次状态是**进程内事实**，板面重启后就没有「正在跑」了 |
+| POST | `/api/patrol/round/:id/stop` | 叫停一轮在跑的巡检。被叫停的轮次**不算结论**（没跑完，产出不可信），但**留痕**：状态是 `aborted`，页面看得见 |
 | POST | `/api/duty/intent` | 写下大哥的值班意图（`mode` 在岗 / 歇着）+ `requestedBy` + `note`；写完立刻广播一次 `update`（值班状态不在运行时修订号里，不主动推页面不会动） |
 | GET | `/api/watchdog/alerts` | 看门狗告警流水（最近 N 条，`?limit=` 默认 20）。告警只写文件、没人看板时就永远只有日志 |
 | POST | `/api/chat` | 跟大哥说一句话（body `{ text }`）。返回 **202** + `bossSessionId`，后续进展走 SSE `chat.*` 事件 |

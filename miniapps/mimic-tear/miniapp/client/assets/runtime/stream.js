@@ -16,6 +16,7 @@ import { renderInbox } from '../views/inbox.js';
 import { renderProject } from '../views/project.js';
 import { renderChat, recordChatTool, loadChatHistory } from '../views/chat.js';
 import { renderDispatchOutcome, normalizeDispatchOutcome, forgetDispatchId } from '../views/dispatch.js';
+import { setRunningRound } from './patrol.js';
 import { currentRoute, refresh } from './router.js';
 
 let eventSource = null;
@@ -74,7 +75,13 @@ export function connectStream() {
 
   eventSource.addEventListener('patrol', (event) => {
     const payload = JSON.parse(event.data);
-    if (payload.error) {
+    // 这一轮结束了：按钮回到「巡检」。
+    setRunningRound(null);
+    if (payload.status === 'skipped') {
+      toast('已经有一轮巡检在跑了');
+    } else if (payload.status === 'aborted') {
+      toast('这一轮巡检被叫停了');
+    } else if (payload.error) {
       toast(`巡检失败：${payload.error}`, 'error');
     } else {
       const count = payload.findings?.length ?? 0;

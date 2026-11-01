@@ -354,16 +354,60 @@ const API_ROUTES = [
     ],
     async handler(ctx) {
       // A patrol turn can take minutes, so it must not hold the HTTP request open.
-      ctx.sendJson(202, { status: 'started' });
-      void ctx.service.runPatrol()
-        .then((outcome) => {
-          ctx.broadcast('patrol', outcome);
-          return ctx.service.getOverview();
+      // 轮次是登记在册的：起完就返回 id，跑完了自己广播，被叫停也有地方可查。
+      const started = await ctx.service.startPatrol();
+      ctx.sendJson(202, {
+        status: started.skipped ? 'skipped' : 'started',
+        roundId: started.id,
+        reason: started.reason,
+      });
+      if (started.skipped) {
+        // 同一时刻只跑一轮。重复点「巡检」不会排第二遍。
+        ctx.broadcast('patrol', { findings: [], status: 'skipped', reason: started.reason });
+        return;
+      }
+      void started.promise
+        .then(async (settled) => {
+          if (settled.status !== 'finished') {
+            ctx.broadcast('patrol', {
+              findings: [],
+              error: settled.error,
+              status: settled.status,
+              roundId: started.id,
+            });
+            return;
+          }
+          ctx.broadcast('patrol', { ...settled.result, roundId: started.id, status: 'finished' });
+          ctx.broadcast('update', await ctx.service.getOverview());
         })
-        .then((overview) => ctx.broadcast('update', overview))
         .catch((error) => {
-          ctx.broadcast('patrol', { error: error?.message ?? String(error), findings: [] });
+          ctx.broadcast('patrol', { error: error?.message ?? String(error), findings: [], roundId: started.id });
         });
+    },
+  },
+  {
+    // 叫停一轮在跑的巡检。
+    //
+    // 被叫停的轮次**不算结论**——它没跑完，产出不可信。但它**留痕**：轮次状态是
+    // `aborted`，页面看得见。静默消失是最坏的一种丢数据。
+    method: 'POST',
+    path: '/api/patrol/round/:id/stop',
+    kind: 'api',
+    broadcast: [{ event: 'patrol', when: 'inline' }],
+    async handler(ctx) {
+      const result = ctx.service.stopRound(ctx.params.id);
+      ctx.sendJson(result.stopped ? 200 : 409, result);
+    },
+  },
+  {
+    // 在跑的轮次，和刚跑完的那些。
+    method: 'GET',
+    path: '/api/patrol/round',
+    kind: 'api',
+    broadcast: [],
+    async handler(ctx) {
+      const limit = Number(ctx.url.searchParams.get('limit')) || 20;
+      ctx.sendJson(200, { rounds: ctx.service.listRounds({ limit }) });
     },
   },
   {

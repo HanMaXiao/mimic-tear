@@ -26,7 +26,7 @@ import { applyTheme, setStatus } from './runtime/frame.js';
 import { renderRoute } from './runtime/router.js';
 import { connectStream } from './runtime/stream.js';
 import { bindActions } from './runtime/actions.js';
-import { loadPatrolConfig } from './runtime/patrol.js';
+import { loadPatrolConfig, loadRunningRound } from './runtime/patrol.js';
 import { renderChat, loadChatHistory, loadDutyRounds } from './views/chat.js';
 import { restoreDispatch } from './views/dispatch.js';
 import { initLiveSessions, selectLiveSession, stopLiveSessions } from './runtime/live-sessions.js';
@@ -178,6 +178,7 @@ setStatus('正在连接…', 'idle');
 renderChat();
 void renderRoute();
 void loadPatrolConfig();
+void loadRunningRound();
 void loadDutyRounds();
 void loadChatHistory();
 // A dispatch that was still on its way when the page was closed is read back here: the
