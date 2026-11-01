@@ -127,14 +127,24 @@ export function applySpill(value, options = {}) {
 /**
  * 从事实表的原始数组建引用图。
  *
- * **纯函数**：只认传入的数组，不碰 IO。所以 `facts` 与 `recall` 两个入口算出来的图
- * 一定是同一张——这很重要，因为「板面说能召回、召回却找不到」是最难查的那类不一致。
+ * **纯函数**：只认传入的数组，不碰 IO。所以两个入口用的是**同一个建图函数**——
+ * 这很重要，因为「板面说能召回、召回却找不到」是最难查的那类不一致。
+ *
+ * ## 两个入口的图不是一张，但方向是安全的
+ *
+ * `facts` 入口**不传** `conclusionIds`（引用图住在系统里、不进负载：把全部结论 id
+ * 内联进候选视图会让它从 59,265 涨到 80,638 字节）；`recall` 入口传，所以召回能多走
+ * 「同项目的其它结论」那一跳。
+ *
+ * **差集只出现在召回这一侧**：事实表内联的下一跳永远是召回能走到的**子集**。
+ * 反过来（「事实表说能走、召回走不到」）才是那种不一致——2026-11-01 上岗验收时
+ * `recall` 入口把项目节点的 `ownerSessionId` 写死成 `null`，就是这种。
  *
  * 节点 id 就是对象自己的 id（不同类型不在同一命名空间，见 `buildRefGraph` 的说明）。
  *
  * @param {{
  *   findings?:Array<{id?:string, projectName?:string|null, title?:string|null}>,
- *   projects?:Array<{name?:string, ownerSessionId?:string|null}>,
+ *   projects?:Array<{name?:string, ownerSessionId?:string|null, conclusionIds?:string[]}>,
  *   sessions?:Array<{id?:string, projectName?:string|null, title?:string|null}>,
  *   questionnaires?:Array<{requestId?:string, sessionId?:string|null, question?:string|null}>,
  *   goals?:Array<{goalId?:string, sessionId?:string|null, objective?:string|null}>,
@@ -157,11 +167,23 @@ export function buildFactRefGraph(input = {}) {
   }
   for (const project of input?.projects ?? []) {
     if (!project?.name) continue;
+    // 项目节点的下一跳有两条：**负责会话**（这条线找谁）与**同项目的其它结论**
+    // （这条线上还发生过什么）。基线规格 §7 Gate 1.7 要的「取回它的项目、会话、
+    // 同项目的其它结论」就是这两跳。
+    //
+    // 「同项目的其它结论」是**可选入参**：`facts` 入口不传它，因为引用图住在系统里、
+    // 不进负载（内联全部结论 id 会让候选视图从 59,265 涨到 80,638 字节）；
+    // `recall` 入口按需建完整的图。**这是同一个函数、不同的输入**——不是两份口径。
+    const refs = [];
+    if (project.ownerSessionId) refs.push(String(project.ownerSessionId));
+    for (const conclusionId of Array.isArray(project.conclusionIds) ? project.conclusionIds : []) {
+      if (conclusionId) refs.push(String(conclusionId));
+    }
     entries.push({
       id: String(project.name),
       kind: 'project',
       summary: `项目 ${project.name}`,
-      refs: project.ownerSessionId ? [String(project.ownerSessionId)] : [],
+      refs,
     });
   }
   for (const session of input?.sessions ?? []) {

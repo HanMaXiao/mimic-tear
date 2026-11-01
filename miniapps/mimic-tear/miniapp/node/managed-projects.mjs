@@ -1,6 +1,8 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { projectName } from './view-model.mjs';
+
 /**
  * The jurisdiction list: which projects the boss is allowed to manage.
  *
@@ -23,6 +25,69 @@ import { join } from 'node:path';
 
 /** Why an entry was added — always the user's words, never the boss's guess. */
 const REASON_REQUIRED = '添加管辖项目必须写明理由（大老板的原话或指示）';
+
+/**
+ * 项目名 → 运行时里的那个项目。
+ *
+ * 名单里写的是**项目名**，运行时认的是**项目 id**（`workspace_dir` 的末段）。两者要对上，
+ * 名字才是管辖的依据。
+ *
+ * 精确匹配优先；差一点的名字（大小写不同、互相包含）只当**候选**，不当匹配——乱猜比不猜更糟。
+ *
+ * @param {string} name
+ * @param {Array<{ id:number, workspaceDir:string }>} projects
+ * @returns {{ project: { id:number, name:string, path:string }|null, candidates: string[] }}
+ */
+export function matchManagedProject(name, projects) {
+  const wanted = String(name ?? '').trim();
+  const rows = (projects ?? []).map((project) => ({
+    id: project.id,
+    name: projectName(project.workspaceDir),
+    path: project.workspaceDir,
+  }));
+  const exact = rows.find((row) => row.name === wanted) ?? null;
+  if (exact) return { project: exact, candidates: [] };
+
+  const needle = wanted.toLowerCase();
+  const candidates = rows
+    .map((row) => row.name)
+    .filter((candidate) => {
+      const lower = candidate.toLowerCase();
+      return lower === needle || lower.includes(needle) || needle.includes(lower);
+    });
+  return { project: null, candidates: [...new Set(candidates)] };
+}
+
+/**
+ * 把名单条目对着**运行时的项目集**解析一遍。
+ *
+ * **为什么要有这一步**：`ManagedProjects.list()` 给的是**名单本身**（名字、理由、时间），
+ * 它不知道运行时有哪个项目——所以「这条授权还落在哪个项目上」这件事，必须拿项目集来解析。
+ * 解析完才有 `matched`（这条授权指着的东西真的存在吗）与 `projectName`（它叫什么）。
+ *
+ * **这个解析曾经有两份口径**：CLI 自己算了一份（`patrol-cli.mjs`），板面侧却直接拿
+ * `list()` 的原始条目去用——原始条目里**没有 `matched`**，于是板面算出来的管辖名单永远是空的，
+ * 每一条项目事件都被判成「不在管辖范围」，**直通从来没有真的投出去过**。
+ * 单测没抓到，是因为测试注入的是一个**带 `matched` 的假名单**，形状和真实模块不一样。
+ *
+ * 所以它必须**只有这一份实现**，两边共用。
+ *
+ * @param {Array<any>} entries 名单条目（`ManagedProjects.list()` 的原样输出）
+ * @param {Array<{ id:number, workspaceDir:string }>} projects 运行时的项目集
+ * @returns {Array<object>} 解析后的条目
+ */
+export function resolveManagedEntries(entries, projects) {
+  return (entries ?? []).map((entry) => {
+    const resolved = matchManagedProject(entry?.name, projects);
+    return {
+      ...entry,
+      matched: resolved.project !== null,
+      projectId: resolved.project?.id ?? entry?.projectId ?? null,
+      projectName: resolved.project?.name ?? null,
+      path: resolved.project?.path ?? entry?.path ?? null,
+    };
+  });
+}
 
 export class ManagedProjects {
   /** @param {string} dataDir */

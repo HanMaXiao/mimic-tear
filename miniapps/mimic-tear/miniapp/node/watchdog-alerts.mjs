@@ -113,7 +113,7 @@ export function buildDutyTruthLine(duty, evidence) {
   const lines = [];
   if (duty) {
     lines.push(`上次交班 ${formatLocal(duty.lastRunAt)}（${duty.ageMinutes ?? 0} 分钟前，阈值 ${duty.staleAfterMinutes ?? 0} 分钟）`);
-    lines.push(`按交班戳折算：漏 ${duty.missedRounds ?? 0} 轮`);
+    lines.push(`按交班戳折算：漏 ${duty.missedRoundsByAge ?? duty.missedRounds ?? 0} 轮`);
   }
   if (evidence) {
     lines.push(`调度记录累计漏 ${evidence.missedRounds ?? 0} 轮`);

@@ -28,15 +28,17 @@ import { fileURLToPath } from 'node:url';
 
 import { RuntimeStore } from './runtime-store.mjs';
 import { readPlan } from './plan-store.mjs';
-import { buildDutyStatus, buildInbox, buildOrgTree, buildPatrolBrief, buildProjectCards, projectName, withDutyCards } from './view-model.mjs';
+import { buildDutyStatus, buildInbox, buildOrgTree, buildPatrolBrief, buildProjectCards, computeDutyEvidence, dutyStaleAfterMinutes, projectName, withDutyCards } from './view-model.mjs';
 import { PatrolStore } from './patrol-store.mjs';
 import { Persistence } from './persistence.mjs';
-import { ManagedProjects } from './managed-projects.mjs';
+import { ManagedProjects, matchManagedProject, resolveManagedEntries } from './managed-projects.mjs';
 import { DutyIntent } from './duty-intent.mjs';
 import { selectTriggers } from './trigger.mjs';
 import { detectTriggers, TRIGGER_WHITELIST } from './trigger-source.mjs';
 import { ThreadSubscriptions } from './thread-subscriptions.mjs';
+import { DUTY_CRON_SEED, readDutyChain } from './duty-chain.mjs';
 import { applySpill, buildFactRefGraph } from './recall.mjs';
+import { resolveCardState } from './questionnaire-rules.mjs';
 
 const args = process.argv.slice(2);
 const command = args.find((arg) => !arg.startsWith('--')) ?? 'facts';
@@ -108,7 +110,7 @@ if (command === 'manage') {
     if (action === 'list') {
       print({ managed: await managedList() });
     } else if (action === 'add') {
-      const resolution = resolveProject(name, store.listProjects());
+      const resolution = matchManagedProject(name, store.listProjects());
       if (!resolution.project) {
         // A grant that names nothing governs nothing, and the boss would never find out:
         // it would just report "当前无管辖项目" every round. Refuse, and say what does exist.
@@ -380,15 +382,47 @@ if (command === 'recall') {
       return project ? project.workspaceDir.split(/[\\/]/).pop() : null;
     };
 
+    // 这条线上的结论 id：项目节点的第二跳（「同项目的其它结论」）。
+    //
+    // **只有 `recall` 入口带它** —— `facts` 入口不传，因为引用图住在系统里、不进负载
+    // （把全部结论 id 内联进候选视图会让它从 59,265 涨到 80,638 字节）。召回是按需查图，
+    // 那里可以查全。
+    const conclusionIdsByProject = new Map();
+    for (const finding of findings) {
+      const projectName = finding?.projectName;
+      if (!projectName || !inScope(projectName)) continue;
+      const ids = conclusionIdsByProject.get(projectName) ?? [];
+      ids.push(String(finding.id));
+      conclusionIdsByProject.set(projectName, ids);
+    }
+
+    // 负责会话也要在图里：项目节点的下一跳指向它——图里没有目标节点，那一跳就是断的。
+    const ownerSessionsInScope = projects
+      .filter((p) => inScope(p.workspaceDir.split(/[\\/]/).pop()))
+      .map((p) => ownerSessionIdFor(sessions, p.id))
+      .filter(Boolean)
+      .map((id) => sessions.find((s) => s.id === id))
+      .filter(Boolean);
+
     const graph = buildFactRefGraph({
       findings: findings.filter((f) => inScope(f.projectName)),
       projects: projects
         .filter((p) => inScope(p.workspaceDir.split(/[\\/]/).pop()))
-        .map((p) => ({ name: p.workspaceDir.split(/[\\/]/).pop(), ownerSessionId: null })),
-      sessions: sessions
-        .filter((s) => ['error', 'interrupted', 'aborted'].includes(s.status))
-        .filter((s) => inScope(nameOf(s.projectId)))
-        .map((s) => ({ id: s.id, projectName: nameOf(s.projectId), title: s.title })),
+        .map((p) => {
+          const name = p.workspaceDir.split(/[\\/]/).pop();
+          return {
+            name,
+            ownerSessionId: ownerSessionIdFor(sessions, p.id),
+            conclusionIds: conclusionIdsByProject.get(name) ?? [],
+          };
+        }),
+      sessions: [
+        ...sessions
+          .filter((s) => ['error', 'interrupted', 'aborted'].includes(s.status))
+          .filter((s) => inScope(nameOf(s.projectId)))
+          .map((s) => ({ id: s.id, projectName: nameOf(s.projectId), title: s.title })),
+        ...ownerSessionsInScope.map((s) => ({ id: s.id, projectName: nameOf(s.projectId), title: s.title })),
+      ],
       questionnaires: questionnaires.map((q) => ({ requestId: q.id, sessionId: q.sessionId, question: null })),
       goals: goals
         .map((g) => {
@@ -467,9 +501,19 @@ if (command === 'facts') {
   }));
 
   const cards = buildProjectCards({ projects, sessions, goals, questionnaires, tasks, plans });
-  const runtimeItems = buildInbox({ projects, sessions, goals, questionnaires, plans }, new Set());
+  // **已排除的条目**（大哥查实是旧残骸的那些）。板面那条路径传了 dismissed，CLI 这条路径
+  // 没传：于是 `duty.dismissed` 恒为 0、已排除的条目还以「未处理」的样子躺在待办里——
+  // 模型读表会以为「从没排除过任何东西」，可能把排除过的事再报一遍。
+  // 同一个词（「已处理」）不该有两套口径（2026-11-01 13:37 那一轮查出来的）。
+  const dismissedRecords = await new Persistence(dataDir).listDismissed();
+  const dismissedById = new Map(dismissedRecords.map((entry) => [entry.id, entry.reason ?? '']));
+  const runtimeItems = buildInbox({ projects, sessions, goals, questionnaires, plans }, new Set(), dismissedById);
   const answered = await patrol.listAnswered();
-  const answeredIds = new Set(answered.map((item) => item.requestId));
+  // 大哥给过的建议，按 requestId 索引。
+  const suggestionById = new Map(answered.map((item) => [item.requestId, item]));
+  // 宿主那边每张卡的开合状态。**运行时是唯一权威**——板面账只说明「大哥给没给建议」。
+  // 少了这张索引，「记了建议」和「卡翻了」就会又变成同一个词（2026-11-01 13:07 轮查出）。
+  const cardById = new Map(store.listQuestionnaires(false).map((card) => [card.id, card]));
   const previousFindings = await patrol.list();
   // 归档过的结论：不在账本上了，但**仍然是大哥报过的事**。去重账要看得见它们，
   // 否则同一件事会被再报一遍。
@@ -519,11 +563,16 @@ if (command === 'facts') {
   const sessionById = new Map(sessions.map((s) => [s.id, s]));
   const projectById = new Map(projects.map((p) => [p.id, p]));
 
+  // 宿主还开着的卡，**一张都不许少**——哪怕大哥已经给过建议。
+  //
+  // 以前这里按「账上记过了」把卡剔掉，于是大哥记完建议就看不见这张卡了，而宿主那边
+  // 它照样开着、那个会话照样卡着：卡着的事从此没人再管（2026-11-01 13:07 轮查出）。
+  // 「卡开没开」只有一个权威：运行时。板面账只负责另一个问题——「大哥给没给建议」。
   const openQuestionnaires = questionnaires
-    .filter((q) => !answeredIds.has(q.id))
     .map((q) => {
       const session = sessionById.get(q.sessionId);
       const project = projectById.get(session?.projectId);
+      const suggestion = suggestionById.get(q.id) ?? null;
       return {
         requestId: q.id,
         sessionId: q.sessionId,
@@ -534,6 +583,15 @@ if (command === 'facts') {
         question: extractQuestion(q.requestJson),
         stepIds: extractSteps(q.requestJson),
         options: extractOptions(q.requestJson),
+        // 大哥已经表过态的卡也要把建议带着：大哥得看见「这张我答过了，等大老板点头」。
+        bossSuggestion: suggestion
+          ? {
+              answer: suggestion.answer ?? '',
+              rationale: suggestion.rationale ?? '',
+              optionIds: suggestion.optionIds ?? [],
+              decidedAt: suggestion.answeredAt ?? null,
+            }
+          : null,
       };
     });
 
@@ -591,11 +649,37 @@ if (command === 'facts') {
   //
   // `mode` is the decision that was made, `watching` is the jurisdiction list. Together
   // they answer "what am I here to do", which no timestamp can answer.
+  //
+  // **`missedRounds` 用权威口径**（调度记录为准，休息期不算漏班）：纯算术的口径会把
+  // 休息期也数成漏班，上岗验收时它给出 97、权威口径是 0——模型每轮读表都被那个 97 误导
+  // （2026-11-01 上岗轮大哥查出来的）。纯算术的值另放在 `missedRoundsByAge`，
+  // **同一个词不许有两种意思**。
+  const dutyConfig = await patrol.getConfig();
+  const dutyIntervalMinutes = dutyConfig.dutyIntervalMinutes ?? 30;
+  const dutyChain = readDutyChain(store, {
+    pinnedCronId: typeof dutyConfig.dutyCronId === 'string' ? dutyConfig.dutyCronId : null,
+    seedCronId: DUTY_CRON_SEED,
+  });
+  const dutyEvidence = dutyChain.runs.length
+    ? computeDutyEvidence({
+      runs: dutyChain.runs,
+      periodMs: dutyIntervalMinutes * 60_000,
+      evidenceWindowMs: dutyStaleAfterMinutes(dutyIntervalMinutes) * 60_000,
+      // 上岗分界线：**只数在岗时漏的班次**。上岗之前的洞是「还没上岗」，不是「漏班」。
+      // 这跟 gap 摘要是同一条分界线、同一套归属规则。
+      boundary: Number.isFinite(Number(dutyIntentState?.since)) ? Number(dutyIntentState.since) : null,
+      onDuty: (dutyIntentState?.mode ?? 'on-duty') !== 'resting',
+      now: Date.now(),
+    })
+    : null;
   const duty = {
     ...buildDutyStatus({
-      config: await patrol.getConfig(),
+      config: dutyConfig,
       findings: previousFindings,
+      // 大哥排除过的原始项——板面那边数它们，CLI 这边也得数同一个。
+      dismissed: dismissedRecords,
       intent: dutyIntentState,
+      evidence: dutyEvidence,
       now: Date.now(),
     }),
     watching: [...managedNames],
@@ -637,7 +721,6 @@ if (command === 'facts') {
   // 了多少」才是真的数字，而不是自己筛完自己报「一个没筛掉」。
   //
   // 水位线是**交班戳**：上一轮交班之后发生的事，就是这一轮的事件。没有新状态文件。
-  const dutyConfig = await patrol.getConfig();
   const rawTriggers = detectTriggers({
     projects: cards.map((card) => ({
       id: card.id,
@@ -729,11 +812,14 @@ if (command === 'facts') {
       archivedAt: archive.batches[0]?.archivedAt ?? null,
       archivedBy: archive.batches[0]?.archivedBy ?? null,
     },
+    // 大哥记过的每一条建议，都带上宿主那边的状态：**「记了建议」不等于「卡翻了」**。
+    // 少了这一段，大哥只看得见「我答过」，看不见「哪张还卡着」。
     alreadyAnswered: answered.map((item) => ({
       requestId: item.requestId,
       sessionId: item.sessionId,
       answeredAt: item.answeredAt,
       answer: item.answer,
+      ...resolveCardState(cardById.get(item.requestId)),
     })),
     // 这一轮的事件。`candidates` 是过了第一道闸的；`dropped` 说清筛掉了多少、为什么。
     triggers: {
@@ -790,6 +876,11 @@ if (command === 'facts') {
       title: item.title,
       body: item.body,
       createdAt: item.createdAt,
+      // **排除不等于删除**：条目还在清单里，但必须标出「已经处理过了、为什么」。
+      // 不标，大哥就会把排除过的事再报一遍（2026-11-01 13:37 那一轮查出来的）。
+      acknowledged: item.acknowledged === true,
+      handledBy: item.handledBy ?? null,
+      handledReason: item.handledReason ?? '',
     })),
     openQuestionnaires: visibleQuestionnaires,
     recoverable: visibleRecoverable,
@@ -811,11 +902,15 @@ if (command === 'facts') {
   });
 
   // 引用图：每个内容项内联**下一跳的 ID**，模型可以顺着它一跳一跳地展开（链式召回）。
+  //
+  // 项目节点的下一跳只有一条：**负责会话**。「同项目的其它结论」那一跳**不在这里内联**
+  // ——引用图住在系统里、不在负载里（全部结论 id 内联进来会让候选视图从 59,265 涨到
+  // 80,638 字节）。召回那边按需建完整的图。
   const graph = buildFactRefGraph({
     findings: [...previousFindings, ...archivedFindings],
     projects: visibleCards.map((card) => ({
       name: card.name,
-      ownerSessionId: (ownerSessionsByProject.get(card.id) ?? []).find((s) => s.isRoot)?.id ?? null,
+      ownerSessionId: ownerSessionIdFor(sessions, card.id),
     })),
     sessions: visibleRecoverable.map((r) => ({
       id: r.sessionId, projectName: r.projectName, title: r.sessionTitle,
@@ -880,7 +975,21 @@ if (command === 'report') {
     }
   }
 
+  // 代答（记录大哥的建议）也走同一条核对：**查无此卡不入账**，宿主还开着的卡单独报出来。
+  // 报告是批量动作，所以不因一条错就整体失败——错的单独报，和结论被拒一个待遇。
+  const answeredRejected = [];
+  let answeredAwaitingUser = 0;
+  const cardById = new Map(store.listQuestionnaires(false).map((card) => [card.id, card]));
   for (const entry of payload.answered ?? []) {
+    const cardState = resolveCardState(cardById.get(entry.requestId));
+    if (!cardState.known) {
+      answeredRejected.push({
+        requestId: entry.requestId,
+        reason: '运行时库里没有这张卡',
+      });
+      continue;
+    }
+    if (cardState.awaitingUser) answeredAwaitingUser += 1;
     await patrol.markAnswered({
       requestId: entry.requestId,
       sessionId: entry.sessionId ?? '',
@@ -926,7 +1035,11 @@ if (command === 'report') {
     ok: true,
     findings: written.length,
     rejected,
-    answered: (payload.answered ?? []).length,
+    answered: (payload.answered ?? []).length - answeredRejected.length,
+    // 宿主还开着的那几张：大哥记了建议，但卡没翻、那个会话还卡着。
+    answeredAwaitingUser,
+    // 查无此卡的那些：没入账，得让大哥知道少记了什么。
+    answeredRejected,
     dutyStamp,
     // Whether the watchdog was woken up. It is reported, not enforced: the handover
     // above already went through either way.
@@ -1015,7 +1128,7 @@ if (command === 'archive') {
 }
 
 if (command === 'answer') {
-  // 大哥替大老板回答一张待答的卡。
+  // 大哥替大老板**表态**一张待答的卡。
   //
   // **这条命令存在的理由是「大哥不再手写账」。** 在它之前，代答是往
   // `patrol-answered.json` 里手写 JSON——那个文件一旦被收进板面状态 store，大哥再手写，
@@ -1024,6 +1137,12 @@ if (command === 'answer') {
   //
   // **只记答案**：不写结论、**不打交班戳**。交班戳是值班大哥的（见 `report` 里的说明），
   // 代答一张卡不是交班。
+  //
+  // **它记的是「大哥的建议」，不是「这张卡已经翻了」。** CLI 没有宿主的投递口——
+  // Mini App 只能续自己拥有的会话（宿主所有权闸），而 CLI 连 Mini App 运行时都不在。
+  // 所以这条命令翻不了宿主那张卡。以前它回一句 `ok: true`，看着像答了，其实没答：
+  // 宿主卡照样 `status='pending'`、那个会话照样卡着（2026-11-01 13:07 轮查出来的）。
+  // 现在它先直读运行时核对这张卡，再如实报出宿主状态。
   //
   // 幂等：同一个 `requestId` 记过一次就不再记（`markAnswered` 自己判）。
   const positional = positionalArgs();
@@ -1034,6 +1153,14 @@ if (command === 'answer') {
   const optionIds = allFlags('option-id');
   if (!requestId || !answer) {
     process.stderr.write('用法：answer <requestId> --answer "<选项>" [--rationale "<理由>"] [--session-id <会话id>] [--option-id <id>]\n');
+    store.close();
+    process.exit(2);
+  }
+  // **查无此卡就不入账**：给一张不存在的卡记一笔「已答」，是造一笔谁也查不到底的假账。
+  const card = store.listQuestionnaires(false).find((item) => item.id === requestId);
+  const cardState = resolveCardState(card);
+  if (!cardState.known) {
+    process.stderr.write(`运行时库里没有这张卡（${requestId}）——没有入账。核对 requestId 是否逐字一致。\n`);
     store.close();
     process.exit(2);
   }
@@ -1052,6 +1179,14 @@ if (command === 'answer') {
     rationale,
     optionIds,
     answered: answered.length,
+    // 宿主那边这张卡开没开。**这是两件事，不是一件事**。
+    known: cardState.known,
+    hostStatus: cardState.hostStatus,
+    awaitingUser: cardState.awaitingUser,
+    note: cardState.awaitingUser
+      ? '宿主卡仍开着：这条只记了大哥的建议，没有翻转宿主卡，那个会话还卡着。'
+        + '真正解锁要由大老板在板面点「按大哥的建议回复」。'
+      : null,
   });
   store.close();
   process.exit(0);
@@ -1087,30 +1222,15 @@ function print(value) {
  * without ever learning that the name was the problem. So the CLI refuses such a grant
  * instead of accepting it.
  *
+ * **实现在 `managed-projects.mjs`（`matchManagedProject`）**——解析只有这一份，板面侧
+ * 直通用的是同一个函数。曾经 CLI 自己留了一份，板面侧没有，两边口径分叉。
+ *
  * @param {string} name
  * @param {Array<{ id:number, workspaceDir:string }>} projects
  * @returns {{ project: { id:number, name:string, path:string }|null, candidates: string[] }}
  */
 function resolveProject(name, projects) {
-  const wanted = String(name ?? '').trim();
-  const rows = (projects ?? []).map((project) => ({
-    id: project.id,
-    name: projectName(project.workspaceDir),
-    path: project.workspaceDir,
-  }));
-  const exact = rows.find((row) => row.name === wanted) ?? null;
-  if (exact) return { project: exact, candidates: [] };
-
-  // Only useful when the name is close but not right: same letters, different case, or one
-  // name inside the other. A wild guess is worse than none.
-  const needle = wanted.toLowerCase();
-  const candidates = rows
-    .map((row) => row.name)
-    .filter((candidate) => {
-      const lower = candidate.toLowerCase();
-      return lower === needle || lower.includes(needle) || needle.includes(lower);
-    });
-  return { project: null, candidates: [...new Set(candidates)] };
+  return matchManagedProject(name, projects);
 }
 
 /**
@@ -1119,21 +1239,36 @@ function resolveProject(name, projects) {
  * `matched: false` means the grant names something that is not a project — the boss has
  * authority over nothing there, and must say so instead of quietly doing nothing.
  *
+ * **解析只有这一份实现**（`managed-projects.mjs` 的 `resolveManagedEntries`）：板面侧
+ * 直通用的是同一份。曾经两边各算各的，板面那份拿到的是**没解析过的原始条目**，
+ * 于是管辖名单算成空的，直通一条也投不出去（2026-11-01 上岗验收时真机抓到）。
+ *
  * @returns {Promise<Array<object>>}
  */
 async function managedList() {
-  const entries = await managed.list();
-  const projects = store.listProjects();
-  return entries.map((entry) => {
-    const resolved = resolveProject(entry.name, projects);
-    return {
-      ...entry,
-      matched: resolved.project !== null,
-      projectId: resolved.project?.id ?? entry.projectId ?? null,
-      projectName: resolved.project?.name ?? null,
-      path: resolved.project?.path ?? entry.path ?? null,
-    };
-  });
+  return resolveManagedEntries(await managed.list(), store.listProjects());
+}
+
+/**
+ * 这条线的负责会话：**项目的根会话**（`parentSessionId == null`）。
+ *
+ * **两个入口必须用同一份算法** —— `facts`（给模型看的引用图）和 `recall`（按 ID 取回的
+ * 链式展开）都要用它。分叉过一次：2026-11-01 上岗验收时 `recall` 入口把
+ * `ownerSessionId` 写死成 `null`，于是事实表内联的那一跳说「结论 → 项目 → 会话」能走通，
+ * 召回却只到项目为止——最难查的那类不一致，而且两边都不报错。
+ *
+ * 多个根会话时取**最近活跃**的那个（`listSessions` 已按 `updated_at_ms` 降序排）。
+ * 项目可能开过好几条根会话，派工要发给还活着的那条。
+ *
+ * @param {any[]} sessions 运行时会话
+ * @param {number|string} projectId
+ * @returns {string|null}
+ */
+function ownerSessionIdFor(sessions, projectId) {
+  const roots = (sessions ?? [])
+    .filter((session) => session.projectId === projectId && session.parentSessionId == null)
+    .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+  return roots[0]?.id ?? null;
 }
 
 function extractQuestion(requestJson) {
