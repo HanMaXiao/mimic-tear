@@ -42,7 +42,8 @@ const writeQueues = new Map();
  * @typedef {{ enabled:boolean, intervalMinutes:number,
  *             dutyIntervalMinutes:number, deskLimit:number,
  *             lastRunAt:number|null, lastBoardPatrolAt:number|null,
- *             lastSignature:string|null }} PatrolConfig
+ *             lastSignature:string|null, dutyCronId:string|null,
+ *             directDelivery:boolean }} PatrolConfig
  * @typedef {{ archivedAt:number, archivedBy:string, reason:string, count:number,
  *             findings:PatrolFinding[] }} PatrolArchiveBatch
  * @typedef {{ id:string, idempotencyKey:string|null, source:'duty'|'board',
@@ -72,6 +73,13 @@ const DEFAULT_CONFIG = {
   lastRunAt: null,
   lastBoardPatrolAt: null,
   lastSignature: null,
+  // 直通开关：**默认关**。打开的前提是大哥的提示词已经改成「事件直达了，你只管没有归属的
+  // 事」——否则两边各干一遍，同一份活干两次。
+  //
+  // **它必须列在这里**：配置读出来只认 `DEFAULT_CONFIG` 里真有的字段（见 §24.7
+  // 「废键不能靠状态文件长回来」）。不列在这里的话，开关写进文件也会被读成 undefined，
+  // 直通**一次都不会跑**——2026-11-01 上岗验收时真机抓到的。
+  directDelivery: false,
 };
 
 export class PatrolStore {

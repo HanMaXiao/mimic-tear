@@ -19,6 +19,7 @@
 
 import { detectTriggers, TRIGGER_WHITELIST } from './trigger-source.mjs';
 import { selectTriggers } from './trigger.mjs';
+import { resolveManagedEntries } from './managed-projects.mjs';
 import { planDeliveries } from './thread.mjs';
 import { deliverToThreads } from './direct-delivery.mjs';
 
@@ -43,7 +44,13 @@ export async function planRound(input) {
     return project ? project.workspaceDir.split(/[\\/]/).pop() : null;
   };
 
-  const managedEntries = await input.managed.list();
+  // 管辖名单必须**对着运行时的项目集解析过**才算数：`list()` 给的是名单本身，
+  // 它不知道「这条授权还落在哪个项目上」。不解析的话名单是空的，每一条项目事件都会被
+  // 判成「不在管辖范围」，直通一条也投不出去（2026-11-01 上岗验收时真机抓到的）。
+  // 管辖名单必须**对着运行时的项目集解析过**才算数：`list()` 给的是名单本身，
+  // 它不知道「这条授权还落在哪个项目上」。不解析的话名单是空的，每一条项目事件都会被
+  // 判成「不在管辖范围」，直通一条也投不出去（2026-11-01 上岗验收时真机抓到的）。
+  const managedEntries = resolveManagedEntries(await input.managed.list(), store.listProjects());
   const managedNames = managedEntries
     .filter((entry) => entry.matched)
     .map((entry) => entry.projectName ?? entry.name);

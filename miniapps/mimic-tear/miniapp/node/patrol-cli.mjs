@@ -31,7 +31,7 @@ import { readPlan } from './plan-store.mjs';
 import { buildDutyStatus, buildInbox, buildOrgTree, buildPatrolBrief, buildProjectCards, projectName, withDutyCards } from './view-model.mjs';
 import { PatrolStore } from './patrol-store.mjs';
 import { Persistence } from './persistence.mjs';
-import { ManagedProjects } from './managed-projects.mjs';
+import { ManagedProjects, matchManagedProject, resolveManagedEntries } from './managed-projects.mjs';
 import { DutyIntent } from './duty-intent.mjs';
 import { selectTriggers } from './trigger.mjs';
 import { detectTriggers, TRIGGER_WHITELIST } from './trigger-source.mjs';
@@ -108,7 +108,7 @@ if (command === 'manage') {
     if (action === 'list') {
       print({ managed: await managedList() });
     } else if (action === 'add') {
-      const resolution = resolveProject(name, store.listProjects());
+      const resolution = matchManagedProject(name, store.listProjects());
       if (!resolution.project) {
         // A grant that names nothing governs nothing, and the boss would never find out:
         // it would just report "当前无管辖项目" every round. Refuse, and say what does exist.
@@ -1087,30 +1087,15 @@ function print(value) {
  * without ever learning that the name was the problem. So the CLI refuses such a grant
  * instead of accepting it.
  *
+ * **实现在 `managed-projects.mjs`（`matchManagedProject`）**——解析只有这一份，板面侧
+ * 直通用的是同一个函数。曾经 CLI 自己留了一份，板面侧没有，两边口径分叉。
+ *
  * @param {string} name
  * @param {Array<{ id:number, workspaceDir:string }>} projects
  * @returns {{ project: { id:number, name:string, path:string }|null, candidates: string[] }}
  */
 function resolveProject(name, projects) {
-  const wanted = String(name ?? '').trim();
-  const rows = (projects ?? []).map((project) => ({
-    id: project.id,
-    name: projectName(project.workspaceDir),
-    path: project.workspaceDir,
-  }));
-  const exact = rows.find((row) => row.name === wanted) ?? null;
-  if (exact) return { project: exact, candidates: [] };
-
-  // Only useful when the name is close but not right: same letters, different case, or one
-  // name inside the other. A wild guess is worse than none.
-  const needle = wanted.toLowerCase();
-  const candidates = rows
-    .map((row) => row.name)
-    .filter((candidate) => {
-      const lower = candidate.toLowerCase();
-      return lower === needle || lower.includes(needle) || needle.includes(lower);
-    });
-  return { project: null, candidates: [...new Set(candidates)] };
+  return matchManagedProject(name, projects);
 }
 
 /**
@@ -1119,21 +1104,14 @@ function resolveProject(name, projects) {
  * `matched: false` means the grant names something that is not a project — the boss has
  * authority over nothing there, and must say so instead of quietly doing nothing.
  *
+ * **解析只有这一份实现**（`managed-projects.mjs` 的 `resolveManagedEntries`）：板面侧
+ * 直通用的是同一份。曾经两边各算各的，板面那份拿到的是**没解析过的原始条目**，
+ * 于是管辖名单算成空的，直通一条也投不出去（2026-11-01 上岗验收时真机抓到）。
+ *
  * @returns {Promise<Array<object>>}
  */
 async function managedList() {
-  const entries = await managed.list();
-  const projects = store.listProjects();
-  return entries.map((entry) => {
-    const resolved = resolveProject(entry.name, projects);
-    return {
-      ...entry,
-      matched: resolved.project !== null,
-      projectId: resolved.project?.id ?? entry.projectId ?? null,
-      projectName: resolved.project?.name ?? null,
-      path: resolved.project?.path ?? entry.path ?? null,
-    };
-  });
+  return resolveManagedEntries(await managed.list(), store.listProjects());
 }
 
 function extractQuestion(requestJson) {
