@@ -48,7 +48,6 @@
 import { join, resolve } from 'node:path';
 
 import { readJsonFile, withFileLock, writeJsonAtomic } from './json-ledger.mjs';
-
 /** store 的版本号。结构变了就 +1，迁移代码按它决定怎么读老数据。 */
 export const BOARD_STATE_VERSION = 1;
 
@@ -93,6 +92,34 @@ const SECTION_SHAPES = {
  * 键是段名，值是「哪份老文件读不出来、报了什么」。
  */
 const DAMAGED_KEY = 'damaged';
+
+/**
+ * 过渡期：老文件还写不写？
+ *
+ * **写。** 镜像是给**回退**用的：万一这套收口后来被否掉了，旧代码（它只读老文件）得读到
+ * **最新的**数据，而不是迁移那一刻的快照。
+ *
+ * 镜像是**派生出来的，不是真相**——真相只有 store 一份，代码读的一直是 store。
+ * 过渡期结束（收口被确认是对的方向）之后，用 `MIMIC_TEAR_MIRROR_LEGACY=off` 关掉它，
+ * 老文件就只是历史快照。
+ */
+function mirrorEnabled() {
+  return process.env.MIMIC_TEAR_MIRROR_LEGACY !== 'off';
+}
+
+/**
+ * 把一段写回它的老文件。
+ *
+ * @param {string} dir
+ * @param {string} name
+ * @param {any} value
+ * @returns {Promise<void>}
+ */
+async function writeLegacySection(dir, name, value) {
+  const file = LEGACY_FILES[name];
+  if (!file) return;
+  await writeJsonAtomic(join(dir, file), value);
+}
 
 /**
  * @typedef {{
@@ -249,8 +276,40 @@ export class BoardStateStore {
       next.version = BOARD_STATE_VERSION;
       next.updatedAt = Date.now();
       await writeJsonAtomic(this.path, next);
+
+      // 过渡期：把改动的那几段**镜像**回老文件（回退时老代码读它们）。
+      // 镜像写失败**不影响**这次写：真相在 store，镜像只是给回退用的。
+      if (mirrorEnabled()) {
+        for (const name of Object.keys(SECTION_SHAPES)) {
+          if (next[name] === current[name]) continue;
+          await writeLegacySection(this.dataDir, name, next[name]).catch(() => undefined);
+        }
+      }
       return next;
     });
+  }
+
+  /**
+   * 把 store 的内容**显式**写回老文件。
+   *
+   * 过渡期的保险：万一镜像写失败过、或者要回退，先跑一次这个，老文件就是齐的。
+   * 回退是**显式动作**，不是自愈。
+   *
+   * @returns {Promise<{written:string[], failed:string[]}>}
+   */
+  async exportLegacy() {
+    const state = await this.read();
+    const written = [];
+    const failed = [];
+    for (const name of Object.keys(SECTION_SHAPES)) {
+      try {
+        await writeLegacySection(this.dataDir, name, state[name]);
+        written.push(name);
+      } catch {
+        failed.push(name);
+      }
+    }
+    return { written, failed };
   }
 
   /**

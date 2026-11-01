@@ -58,6 +58,43 @@ test('迁移只发生一次：store 在了就直接用它', async () => {
   }
 });
 
+test('过渡期：改动的那几段会镜像回老文件（回退时老代码读得懂）', async () => {
+  const dir = tmpDir();
+  try {
+    const store = new BoardStateStore(dir);
+    await store.update((state) => ({ ...state, acks: ['item-1'] }));
+
+    // 镜像写出来了，内容一致——**镜子不是真相，但镜子不能是陈旧的**：
+    // 万一这套收口后来被否掉，老代码（它只读老文件）读到的是最新的。
+    const legacy = JSON.parse(readFileSync(join(dir, 'acks.json'), 'utf8'));
+    assert.deepEqual(legacy, ['item-1'], '老文件要跟着更新');
+  } finally {
+    cleanupDir(dir);
+  }
+});
+
+test('回退是显式动作：export-legacy 把老文件补齐', async () => {
+  const dir = tmpDir();
+  try {
+    const store = new BoardStateStore(dir);
+    await store.update((state) => ({ ...state, acks: ['item-1'] }));
+
+    // 有人把老文件改了（或者删了）。
+    writeFileSync(join(dir, 'acks.json'), '[]', 'utf8');
+    const result = await store.exportLegacy();
+    assert.deepEqual(result.failed, [], '不该有段写不回去');
+    assert.ok(result.written.includes('acks'));
+
+    assert.deepEqual(
+      JSON.parse(readFileSync(join(dir, 'acks.json'), 'utf8')),
+      ['item-1'],
+      '显式导出后老文件是齐的',
+    );
+  } finally {
+    cleanupDir(dir);
+  }
+});
+
 test('老账坏了：那一段读不出来，但别的段照常', async () => {
   const dir = tmpDir();
   try {

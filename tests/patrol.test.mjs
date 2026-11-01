@@ -450,6 +450,33 @@ test('patrol', async (t) => {
     }
   });
 
+  await t.test('CLI 的 export-legacy：回退是显式动作，老文件能补齐', () => {
+    const dir = tmpDir();
+    const dbPath = makeRuntimeDb(dir);
+    const dataDir = join(dir, 'data');
+    try {
+      const reportFile = join(dir, 'report.json');
+      writeFileSync(reportFile, JSON.stringify({
+        findings: [{ projectName: 'alpha', severity: 'high', title: '一条结论', body: '需要你处理' }],
+        answered: [],
+      }), 'utf8');
+      runCli(dbPath, dataDir, ['report', '--file', reportFile]);
+
+      // 有人把老文件改了——回退前要能补齐。
+      writeFileSync(join(dataDir, 'patrol.json'), '[]', 'utf8');
+
+      const result = runCli(dbPath, dataDir, ['export-legacy']);
+      assert.equal(result.ok, true, '导出不该有段失败');
+      assert.ok(result.written.includes('findings'));
+
+      const findings = JSON.parse(readFileSync(join(dataDir, 'patrol.json'), 'utf8'));
+      assert.equal(findings.length, 1, '老文件补齐后结论还在');
+      assert.equal(findings[0].title, '一条结论');
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
   await t.test('大哥回复无法解析时也不静默', async () => {
     const { service, store, dir } = makeService({ text: '完全不符合格式的一段话' });
     try {

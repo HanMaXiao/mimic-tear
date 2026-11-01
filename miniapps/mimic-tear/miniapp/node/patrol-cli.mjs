@@ -1057,7 +1057,21 @@ if (command === 'answer') {
   process.exit(0);
 }
 
-process.stderr.write(`未知命令：${command}\n可用：facts / report / answer / withdraw / dismiss / archive / gap / manage / duty-cron / paths\n`);
+if (command === 'export-legacy') {
+  // 把 store 的内容**显式**写回老文件。
+  //
+  // 过渡期的保险：万一这套收口后来被否掉了、或者镜像写失败过、或者 store 文件丢了，
+  // 老代码（它只读老文件）得能读到**最新的**数据，而不是迁移那一刻的快照。
+  //
+  // **回退是显式动作，不是自愈**——所以它是一条命令，不是一个后台任务。
+  const { BoardStateStore } = await import('./board-state.mjs');
+  const result = await new BoardStateStore(dataDir).exportLegacy();
+  print({ ok: result.failed.length === 0, written: result.written, failed: result.failed });
+  store.close();
+  process.exit(result.failed.length === 0 ? 0 : 1);
+}
+
+process.stderr.write(`未知命令：${command}\n可用：facts / report / answer / withdraw / dismiss / archive / gap / manage / duty-cron / paths / export-legacy\n`);
 store.close();
 process.exit(2);
 
