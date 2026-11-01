@@ -15,6 +15,7 @@ import {
 } from '../miniapps/mimic-tear/miniapp/node/watchdog-rules.mjs';
 import { buildToastXml } from '../miniapps/mimic-tear/miniapp/node/toast.mjs';
 import { runWatchdog } from '../miniapps/mimic-tear/miniapp/node/watchdog.mjs';
+import { PatrolStore } from '../miniapps/mimic-tear/miniapp/node/patrol-store.mjs';
 import { tmpDir, cleanupDir } from './helpers/fixture.mjs';
 
 const MINUTE = 60_000;
@@ -139,13 +140,13 @@ test('端到端：健康 → 掉线 → 恢复，各发一条', async () => {
   try {
     const dataDir = join(dir, 'data');
     mkdirSync(dataDir, { recursive: true });
-    const configPath = join(dataDir, 'patrol-config.json');
-    const write = (minutes) => writeFileSync(
-      configPath,
-      JSON.stringify(configWithLastRun(minutes)),
-      'utf8',
-    );
-    write(5);
+    // 交班戳住在板面状态的单一 store 里（`config` 段）——看门狗读的就是那一份，
+    // 所以「把交班时间拨老」也得走 store（老文件只在第一次访问时被读一次）。
+    const patrol = new PatrolStore(dataDir);
+    const write = async (minutes) => {
+      await patrol.setConfig(configWithLastRun(minutes));
+    };
+    await write(5);
 
     const sent = [];
     const deliver = async (message) => { sent.push(message); return { ok: true }; };
@@ -153,7 +154,7 @@ test('端到端：健康 → 掉线 → 恢复，各发一条', async () => {
     await runWatchdog({ dataDir, now: NOW, deliver });
     assert.equal(sent.length, 0, '健康时不打扰');
 
-    write(60);
+    await write(60);
     await runWatchdog({ dataDir, now: NOW + MINUTE, deliver });
     assert.equal(sent.length, 1, '掉线时发一条');
     assert.match(sent[0].title, /掉线/);
@@ -161,7 +162,7 @@ test('端到端：健康 → 掉线 → 恢复，各发一条', async () => {
     await runWatchdog({ dataDir, now: NOW + 2 * MINUTE, deliver });
     assert.equal(sent.length, 1, '持续掉线不重复发');
 
-    write(1);
+    await write(1);
     await runWatchdog({ dataDir, now: NOW + 3 * MINUTE, deliver });
     assert.equal(sent.length, 2, '恢复时发一条');
     assert.match(sent[1].title, /归位|恢复/);

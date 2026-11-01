@@ -41,7 +41,7 @@ function runGuard(files) {
 const PROMPT = 'state/cron-prompt-duty-canonical.txt';
 const SKILL = 'skills/mimic-tear-boss/SKILL.md';
 
-const FULL = 'triggers.candidates recall delivered threads';
+const FULL = 'triggers.candidates recall delivered threads patrol-cli answer';
 
 test('两份文本都提到关键概念 → 通过', () => {
   const result = runGuard({ [PROMPT]: FULL, [SKILL]: FULL });

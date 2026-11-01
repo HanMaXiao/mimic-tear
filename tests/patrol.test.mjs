@@ -158,7 +158,7 @@ test('patrol', async (t) => {
 
       // And the next write cleans the file instead of carrying the residue forward.
       await patrol.setConfig({ lastRunAt: 1234 });
-      const raw = JSON.parse(readFileSync(configPath, 'utf8'));
+      const raw = readBoardSection(join(dir, 'data'), 'config');
       assert.equal('autoDispatch' in raw, false, '写回去的时候要把废键清掉');
       assert.equal(raw.lastRunAt, 1234, '真字段不能被清掉');
     } finally {
@@ -323,7 +323,7 @@ test('patrol', async (t) => {
       assert.equal(typeof config.lastRunAt, 'number', '值班交班时间戳不能被覆盖掉');
       assert.equal(typeof config.lastBoardPatrolAt, 'number', '看板自己的时间戳也不能被覆盖掉');
       // The file itself must still be readable JSON — a half-written file would break the board.
-      const raw = JSON.parse(readFileSync(join(dataDir, 'patrol-config.json'), 'utf8'));
+      const raw = readBoardSection(dataDir, 'config');
       assert.equal(typeof raw.lastRunAt, 'number');
     } finally {
       cleanupDir(dir);
@@ -411,6 +411,45 @@ test('patrol', async (t) => {
     }
   });
 
+  await t.test('CLI 的 answer 能代答一张卡：只记答案，不打交班戳', () => {
+    const dir = tmpDir();
+    const dbPath = makeRuntimeDb(dir);
+    const dataDir = join(dir, 'data');
+    try {
+      const result = runCli(dbPath, dataDir, [
+        'answer', 'req-001', '--answer', '同意，先做 A', '--rationale', '风险可逆', '--session-id', 'sess-alpha-lead',
+      ]);
+      assert.equal(result.ok, true);
+      assert.equal(result.requestId, 'req-001');
+
+      const answered = readBoardSection(dataDir, 'answered');
+      assert.equal(answered.length, 1, '答案要记进账');
+      assert.equal(answered[0].answer, '同意，先做 A');
+      assert.equal(answered[0].sessionId, 'sess-alpha-lead');
+      assert.match(answered[0].rationale, /风险可逆/);
+
+      // **不打交班戳**：代答一张卡不是交班。戳是值班大哥的。
+      const config = readBoardSection(dataDir, 'config');
+      assert.equal(config.lastRunAt ?? null, null, '代答不许刷新交班戳');
+      assert.equal(readBoardSection(dataDir, 'findings').length, 0, '代答不写结论');
+
+      // 幂等：同一张卡记两次，账上还是一条。
+      runCli(dbPath, dataDir, ['answer', 'req-001', '--answer', '同意，先做 A']);
+      assert.equal(readBoardSection(dataDir, 'answered').length, 1, '同一张卡不能记成两次');
+
+      // 少给答案要被拒绝（exit 2）。
+      let rejected = false;
+      try {
+        runCli(dbPath, dataDir, ['answer', 'req-002']);
+      } catch (error) {
+        rejected = error.status === 2;
+      }
+      assert.equal(rejected, true, '没有答案内容必须被拒绝');
+    } finally {
+      cleanupDir(dir);
+    }
+  });
+
   await t.test('大哥回复无法解析时也不静默', async () => {
     const { service, store, dir } = makeService({ text: '完全不符合格式的一段话' });
     try {
@@ -423,7 +462,7 @@ test('patrol', async (t) => {
     }
   });
 
-  await t.test('CLI 的 facts 带出值班状态：大哥能看出上一轮有没有交班', () => {
+  await t.test('CLI 的 facts 带出值班状态：大哥能看出上一轮有没有交班', async () => {
     const dir = tmpDir();
     const dbPath = makeRuntimeDb(dir);
     const dataDir = join(dir, 'data');
@@ -447,10 +486,8 @@ test('patrol', async (t) => {
       assert.ok(handed.duty.lastRunAt > 0, '交班时间戳必须落盘');
 
       // Now age the clock: a round was interrupted and never handed over.
-      const configPath = join(dataDir, 'patrol-config.json');
-      const aged = JSON.parse(readFileSync(configPath, 'utf8'));
-      aged.lastRunAt = Date.now() - 70 * 60_000;
-      writeFileSync(configPath, JSON.stringify(aged), 'utf8');
+      // 交班戳住在板面状态的 store 里（`config` 段），所以「把时间拨老」得走 store。
+      await new PatrolStore(dataDir).setConfig({ lastRunAt: Date.now() - 70 * 60_000 });
 
       const gapped = runCli(dbPath, dataDir);
       assert.ok(gapped.duty.missedRounds >= 1, '漏了一轮以上，大哥必须能从事实表里看出来');
@@ -820,7 +857,7 @@ test('patrol', async (t) => {
       }), 'utf8');
       runCli(dbPath, dataDir, ['report', '--file', reportFile, '--duty-stamp']);
 
-      const findings = JSON.parse(readFileSync(join(dataDir, 'patrol.json'), 'utf8'));
+      const findings = readBoardSection(dataDir, 'findings');
       assert.equal(findings.length, 1);
       assert.equal(findings[0].source, 'duty', '值班路径写出来的结论必须带 duty 来源');
 

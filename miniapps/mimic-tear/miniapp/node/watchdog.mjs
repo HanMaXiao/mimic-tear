@@ -42,6 +42,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { sendToast } from './toast.mjs';
 import { computeDutyEvidence } from './view-model.mjs';
 import { RuntimeStore } from './runtime-store.mjs';
+import { BoardStateStore } from './board-state.mjs';
 import { appendAlert, buildBoardNotice, buildDutyTruthLine, publishBoardNotice } from './watchdog-alerts.mjs';
 import { DUTY_CRON_SEED, readDutyChain } from './duty-chain.mjs';
 import { decideNextCheckAt } from './watchdog-schedule.mjs';
@@ -100,7 +101,6 @@ const launchedByTask = process.env.MIMIC_WATCHDOG_LAUNCHED === '1';
 /** An explicit opt-out, for a caller that wants a check without touching the schedule. */
 const noRearm = args.includes('--no-rearm');
 
-const CONFIG_FILE = 'patrol-config.json';
 const INTENT_FILE = 'duty-intent.json';
 const STATE_FILE = 'watchdog-state.json';
 
@@ -158,7 +158,7 @@ async function readEvidence(input) {
   let store = null;
   try {
     store = RuntimeStore.open(input.dbPath);
-    const config = input.dir ? await readJson(join(input.dir, CONFIG_FILE), {}) : {};
+    const config = input.dir ? await new BoardStateStore(input.dir).section('config') : {};
     // The pin (the user's decision) and the seed (the built-in family hint) are separate
     // channels: a pinned id that has been deleted is a misconfiguration, not a hint.
     const pinnedCronId = typeof config?.dutyCronId === 'string' && config.dutyCronId.trim()
@@ -234,7 +234,7 @@ export async function runWatchdog(options = {}) {
       : sendToast);
   const dbPath = options.dbPath ?? runtimeDbPath;
 
-  const config = await readJson(join(dir, CONFIG_FILE), {});
+  const config = await new BoardStateStore(dir).section('config');
   // The duty intent: was the boss explicitly told to rest? A missing file means "no
   // decision", which means on duty — never an excuse to stay quiet about a dead boss.
   const intent = await readJson(join(dir, INTENT_FILE), null);
@@ -362,7 +362,7 @@ export async function runWatchdog(options = {}) {
  * @returns {Promise<any>}
  */
 export async function inspect() {
-  const config = await readJson(join(dataDir, CONFIG_FILE), {});
+  const config = await new BoardStateStore(dataDir).section('config');
   const intent = await readJson(join(dataDir, INTENT_FILE), null);
   const state = await readJson(join(dataDir, STATE_FILE), emptyWatchdogState());
   const now = Date.now();

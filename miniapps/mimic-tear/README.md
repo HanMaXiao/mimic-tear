@@ -24,10 +24,9 @@
 
 | 文件 | 内容 |
 | --- | --- |
-| `board-state.json` | 板面自己的账：**派工记录、已确认的收件箱条目、大哥会话 id**（收口进一个带版本的 store：一个文件、一把锁、一条写路径） |
+| `board-state.json` | 板面自己的**全部状态**（收口进一个带版本的 store：一个文件、一把锁、一条写路径）：**派工记录、已确认的收件箱条目、大哥会话 id、被排除的收件箱条目、巡检结论、已代答的问卷、归档的结论、巡检配置（含交班戳）** |
+| `duty-intent.json` | 值班意图 |
 | `managed-projects.json` | 大哥管辖的项目名单 |
-| `duty-intent.json` / `patrol.json` / `patrol-config.json` | 值班意图、巡检结论与巡检配置 |
-| `patrol-answered.json` / `patrol-archive.json` | 已代答的问卷、归档的结论 |
 | `skill-library.json` / `thread-subscriptions.json` | 可复用技能库、线的订阅表 |
 | `watchdog-state.json` / `watchdog-notices.json` / `watchdog-alert.log` | 看门狗自己的状态与告警流水 |
 

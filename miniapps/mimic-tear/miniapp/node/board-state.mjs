@@ -58,14 +58,41 @@ export const BOARD_STATE_FILE = 'board-state.json';
 /**
  * 段 → 老文件。
  *
- * 只有**老文件在、store 里还没有**时才会读它们（一次性迁移）。
+ * 只有**老文件在、store 里还没有这一段**时才会读它们（一次性迁移）。
  */
 const LEGACY_FILES = {
   dispatches: 'dispatches.json',
   acks: 'acks.json',
   dismissed: 'dismissed.json',
   bossSession: 'boss-session.json',
+  findings: 'patrol.json',
+  answered: 'patrol-answered.json',
+  archive: 'patrol-archive.json',
+  config: 'patrol-config.json',
 };
+
+/** 每一段的形状。`array` 的段读出来永远是数组，其余按各自的形状归一。 */
+const SECTION_SHAPES = {
+  dispatches: 'array',
+  acks: 'array',
+  dismissed: 'array',
+  findings: 'array',
+  answered: 'array',
+  bossSession: 'session',
+  archive: 'archive',
+  config: 'config',
+};
+
+/**
+ * 读不出来的段，**记住它读不出来**，而不是把它当成空段。
+ *
+ * 一段账坏了，只有那一段坏：别的段照常读写。收口之前就是这样——派工账坏了不会让
+ * 「代答」记不进去（那条路径写的是另一本账，坏的那本只影响它自己）。
+ * 收口到一个文件之后，这个性质得**显式保住**，否则一份坏账会连累整个 store。
+ *
+ * 键是段名，值是「哪份老文件读不出来、报了什么」。
+ */
+const DAMAGED_KEY = 'damaged';
 
 /**
  * @typedef {{
@@ -75,6 +102,10 @@ const LEGACY_FILES = {
  *   acks:string[],
  *   dismissed:any[],
  *   bossSession:{sessionId:string, agent:string}|null,
+ *   findings:any[],
+ *   answered:any[],
+ *   archive:{version:number, updatedAt:number, total:number, batches:any[]},
+ *   config:any,
  * }} BoardState
  */
 
@@ -89,12 +120,27 @@ const LEGACY_FILES = {
  * @returns {any}
  */
 function normalizeSection(name, value) {
-  if (name === 'bossSession') {
+  const shape = SECTION_SHAPES[name] ?? 'array';
+  if (shape === 'session') {
     if (!value) return null;
     // 早版本写的是裸字符串。
     if (typeof value === 'string') return { sessionId: value, agent: 'boss' };
     if (typeof value.sessionId !== 'string') return null;
     return { sessionId: value.sessionId, agent: typeof value.agent === 'string' ? value.agent : 'boss' };
+  }
+  if (shape === 'archive') {
+    if (!value || typeof value !== 'object') {
+      return { version: 1, updatedAt: 0, total: 0, batches: [] };
+    }
+    return {
+      version: Number(value.version) || 1,
+      updatedAt: Number(value.updatedAt) || 0,
+      total: Number(value.total) || 0,
+      batches: Array.isArray(value.batches) ? value.batches : [],
+    };
+  }
+  if (shape === 'config') {
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   }
   return Array.isArray(value) ? value : [];
 }
@@ -107,13 +153,16 @@ function normalizeSection(name, value) {
  */
 function normalizeState(value) {
   const state = value && typeof value === 'object' ? value : {};
+  const damaged = state[DAMAGED_KEY] && typeof state[DAMAGED_KEY] === 'object'
+    ? { ...state[DAMAGED_KEY] }
+    : {};
   return {
     version: Number(state.version) || BOARD_STATE_VERSION,
     updatedAt: Number(state.updatedAt) || 0,
-    dispatches: normalizeSection('dispatches', state.dispatches),
-    acks: normalizeSection('acks', state.acks),
-    dismissed: normalizeSection('dismissed', state.dismissed),
-    bossSession: normalizeSection('bossSession', state.bossSession),
+    ...Object.fromEntries(
+      Object.keys(SECTION_SHAPES).map((name) => [name, normalizeSection(name, state[name])]),
+    ),
+    [DAMAGED_KEY]: damaged,
   };
 }
 
@@ -130,14 +179,51 @@ export class BoardStateStore {
   }
 
   /**
-   * 读整个 store。**不写盘**（除非需要一次性迁移）。
+   * 读整个 store。**不写盘**（除非需要一次性迁移或补齐新段）。
    *
    * @returns {Promise<BoardState>}
    */
   async read() {
     const value = await readJsonFile(this.path, null);
-    if (value && typeof value === 'object') return normalizeState(value);
-    return this.#migrate();
+    if (!value || typeof value !== 'object') return this.#migrate();
+    // store 在、但**新加的段还没有**（升级到更多段的机器）：把那些段从老文件补进来。
+    const missing = Object.keys(SECTION_SHAPES).filter((name) => value[name] === undefined);
+    if (!missing.length) return normalizeState(value);
+    return this.#upgrade(value, missing);
+  }
+
+  /**
+   * 把新加的段从老文件补进来。
+   *
+   * **在锁里做**，而且**在锁里再查一次**：另一个进程可能已经补好了。
+   *
+   * @param {any} raw
+   * @param {string[]} missing
+   * @returns {Promise<BoardState>}
+   */
+  async #upgrade(raw, missing) {
+    return withFileLock(this.path, async () => {
+      const value = await readJsonFile(this.path, null);
+      if (!value || typeof value !== 'object') return this.#migrateLocked();
+      const stillMissing = missing.filter((name) => value[name] === undefined);
+      if (!stillMissing.length) return normalizeState(value);
+      const next = { ...value };
+      const damaged = { ...(value[DAMAGED_KEY] ?? {}) };
+      for (const name of stillMissing) {
+        try {
+          const legacy = await readJsonFile(join(this.dataDir, LEGACY_FILES[name]), null);
+          next[name] = normalizeSection(name, legacy);
+        } catch (error) {
+          damaged[name] = `${LEGACY_FILES[name]} 里的内容不是合法 JSON：${error?.message ?? error}`;
+          next[name] = normalizeSection(name, null);
+        }
+      }
+      next[DAMAGED_KEY] = damaged;
+      next.version = BOARD_STATE_VERSION;
+      next.updatedAt = Date.now();
+      await writeJsonAtomic(this.path, next);
+      return normalizeState(next);
+    });
   }
 
   /**
@@ -153,6 +239,13 @@ export class BoardStateStore {
         ? normalizeState(value)
         : await this.#migrateLocked();
       const next = normalizeState(await mutate({ ...current }));
+      // 有一段读不出来的时候，**不许写那一段**：把它当成空账写下去，就是
+      // 「记录明明在、读回来像没有」的老毛病。别的段照写（一条坏账只坏一段）。
+      for (const [name, why] of Object.entries(next[DAMAGED_KEY] ?? {})) {
+        if (next[name] !== current[name]) {
+          throw new Error(`板面状态的「${name}」这一段读不出来（${why}）：不能当成空账写下去`);
+        }
+      }
       next.version = BOARD_STATE_VERSION;
       next.updatedAt = Date.now();
       await writeJsonAtomic(this.path, next);
@@ -163,11 +256,16 @@ export class BoardStateStore {
   /**
    * 读一段。
    *
-   * @param {'dispatches'|'acks'|'dismissed'|'bossSession'} name
+   * @param {'dispatches'|'acks'|'dismissed'|'findings'|'answered'|'bossSession'|'archive'|'config'} name
    * @returns {Promise<any>}
    */
   async section(name) {
-    return (await this.read())[name];
+    const state = await this.read();
+    const why = state[DAMAGED_KEY]?.[name];
+    if (why) {
+      throw new Error(`板面状态的「${name}」这一段读不出来（${why}）：不能当成空账`);
+    }
+    return state[name];
   }
 
   /**
@@ -206,11 +304,20 @@ export class BoardStateStore {
   async #migrateLocked() {
     /** @type {any} */
     const state = { version: BOARD_STATE_VERSION, updatedAt: Date.now() };
+    /** @type {Record<string,string>} */
+    const damaged = {};
     for (const [name, file] of Object.entries(LEGACY_FILES)) {
-      const value = await readJsonFile(join(this.dataDir, file), null);
-      state[name] = normalizeSection(name, value);
+      try {
+        const value = await readJsonFile(join(this.dataDir, file), null);
+        state[name] = normalizeSection(name, value);
+      } catch (error) {
+        // 这一段读不出来：**记住它读不出来**，而不是当成空段。
+        // 一份坏账只坏它自己——别的段照常读写（收口之前就是这个性质）。
+        damaged[name] = `${file} 里的内容不是合法 JSON：${error?.message ?? error}`;
+        state[name] = normalizeSection(name, null);
+      }
     }
+    state[DAMAGED_KEY] = damaged;
     await writeJsonAtomic(this.path, state);
     return normalizeState(state);
-  }
-}
+  }}

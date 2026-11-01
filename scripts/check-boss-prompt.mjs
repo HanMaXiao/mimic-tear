@@ -76,6 +76,10 @@ const CLAIMS = [
     term: 'threads',
     why: '归属表：哪条线有负责会话',
   },
+  {
+    term: 'patrol-cli answer',
+    why: '代答走命令、不再手写 `patrol-answered.json`——那份账已收进单一 store，手写的板面读不到',
+  },
 ];
 
 function printHelp() {

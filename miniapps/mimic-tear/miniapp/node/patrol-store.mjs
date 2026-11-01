@@ -1,9 +1,7 @@
-import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 import { normalizeConclusionSource } from './view-model.mjs';
 import { BoardStateStore } from './board-state.mjs';
-import { writeJsonAtomic } from './json-ledger.mjs';
 import {
   assertConclusionBandwidth,
   assignDesk,
@@ -80,17 +78,8 @@ export class PatrolStore {
   /** @param {string} dataDir */
   constructor(dataDir) {
     this.dataDir = resolve(dataDir);
-    this.findingsPath = join(this.dataDir, 'patrol.json');
-    this.configPath = join(this.dataDir, 'patrol-config.json');
-    this.answeredPath = join(this.dataDir, 'patrol-answered.json');
-    // 归档账：退场的结论搬到这里。**一条都不删**——归档是搬家，不是销毁。
-    this.archivePath = join(this.dataDir, 'patrol-archive.json');
-    // The dispatch ledger is the BOARD's file (the board path writes it), but the duty
-    // path writes into it too — that is the whole point of the ledger: both bosses'
-    // deliveries end up in one place instead of two private histories.
-    //
-    // **收口**：派工账现在住在板面状态的单一 store 里（`board-state.mjs`），和看板那边
-    // 的写路径共用一个文件、一把锁。老的 `dispatches.json` 只在第一次访问时被读一次
+    // 结论账、归档账、已答项、巡检配置**都在板面状态的单一 store 里**
+    // （`board-state.mjs`）——一个文件一把锁一条写路径。老文件只在第一次访问时被读一次
     // （一次性迁移），之后不再被读。
     this.state = new BoardStateStore(this.dataDir);
   }
@@ -137,7 +126,7 @@ export class PatrolStore {
   /** @param {PatrolFinding[]} findings */
   async save(findings) {
     const assigned = assignDesk(findings ?? [], deskLimitFrom(await this.getConfig()));
-    await writeJson(this.findingsPath, assigned);
+    await this.state.update((state) => ({ ...state, findings: assigned }));
     return assigned;
   }
 
@@ -149,8 +138,7 @@ export class PatrolStore {
    * @returns {Promise<PatrolFinding[]>}
    */
   async #readFindings() {
-    const value = await readJson(this.findingsPath, []);
-    return Array.isArray(value) ? value : [];
+    return this.state.section('findings');
   }
 
   /**
@@ -175,33 +163,39 @@ export class PatrolStore {
   async add(input) {
     // 带宽纪律：超限的结论进不来账。抛错，不是静默丢弃——被拒绝的理由必须说得清。
     assertConclusionBandwidth(input);
+    const deskLimit = deskLimitFrom(await this.getConfig());
     return this.enqueue(async () => {
-      const findings = await this.#readFindings();
-      const finding = {
-        id: `patrol_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
-        createdAt: Date.now(),
-        acknowledged: false,
-        acknowledgedBy: null,
-        note: '',
-        ...input,
-        source: normalizeConclusionSource(input?.source, 'duty'),
-      };
+      /** @type {any} */
+      let stored = null;
+      // 读-改-写**一次做完**（store 的锁内）：两个进程同时报一条时，
+      // 后一个看见的是前一个写进去的账，不会把它挤掉。
+      await this.state.update((state) => {
+        const findings = [...state.findings];
+        const finding = {
+          id: `patrol_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+          createdAt: Date.now(),
+          acknowledged: false,
+          acknowledgedBy: null,
+          note: '',
+          ...input,
+          source: normalizeConclusionSource(input?.source, 'duty'),
+        };
 
-      // 同类合并。账是新的在前，所以第一个命中的就是**最近**的那条同键未确认结论。
-      // 已确认的不参与合并：确认过的问题又冒出来，那是新的一件事。
-      const key = mergeKey(finding);
-      const target = findings.find((item) => !item?.acknowledged && mergeKey(item) === key);
-      let stored;
-      if (target) {
-        stored = mergeConclusion(target, finding);
-        findings[findings.indexOf(target)] = stored;
-      } else {
-        findings.unshift(finding);
-        stored = finding;
-      }
+        // 同类合并。账是新的在前，所以第一个命中的就是**最近**的那条同键未确认结论。
+        // 已确认的不参与合并：确认过的问题又冒出来，那是新的一件事。
+        const key = mergeKey(finding);
+        const target = findings.find((item) => !item?.acknowledged && mergeKey(item) === key);
+        if (target) {
+          stored = mergeConclusion(target, finding);
+          findings[findings.indexOf(target)] = stored;
+        } else {
+          findings.unshift(finding);
+          stored = finding;
+        }
 
-      // Keep the history bounded; the board only ever shows the recent tail.
-      await this.save(findings.slice(0, 100));
+        // Keep the history bounded; the board only ever shows the recent tail.
+        return { ...state, findings: assignDesk(findings.slice(0, 100), deskLimit) };
+      });
       return stored;
     });
   }
@@ -209,8 +203,11 @@ export class PatrolStore {
   /**
    * 把账上的结论搬进归档账，然后清空账本。
    *
-   * **一条都不删**：退场的结论连同原文搬进 `patrol-archive.json`，并附上这次归档的元数据
-   * （什么时候、谁、为什么、多少条）。先写归档，再清账本——归档写不进去时账本原封不动。
+   * **一条都不删**：退场的结论连同原文搬进归档账，并附上这次归档的元数据
+   * （什么时候、谁、为什么、多少条）。
+   *
+   * 收口之后这一步是**一次原子写**：搬走和清账本在同一个 store 更新里，要么都成，要么都不成。
+   * （以前是两个文件、两次写——「先写归档，再清账本」，中间崩了就两本账对不上。）
    *
    * @param {{ reason?:string, by?:string }} [options]
    * @returns {Promise<{ archived:number, reason:string, archivedBy:string, archivedAt:number }>}
@@ -222,21 +219,27 @@ export class PatrolStore {
     }
     const archivedBy = String(options?.by ?? 'boss');
     return this.enqueue(async () => {
-      const findings = await this.#readFindings();
-      const archivedAt = Date.now();
-      const batch = { archivedAt, archivedBy, reason, count: findings.length, findings };
-
-      const archive = await this.#readArchive();
-      await writeJson(this.archivePath, {
-        version: 1,
-        updatedAt: archivedAt,
-        total: (archive.total ?? 0) + findings.length,
-        batches: [batch, ...(archive.batches ?? [])],
+      /** @type {any} */
+      let result = null;
+      await this.state.update((state) => {
+        const findings = state.findings;
+        const archivedAt = Date.now();
+        const batch = { archivedAt, archivedBy, reason, count: findings.length, findings };
+        const archive = state.archive;
+        result = { archived: findings.length, reason, archivedBy, archivedAt };
+        return {
+          ...state,
+          // 账本清空——桌面腾干净了，但内容全在归档账里。
+          findings: [],
+          archive: {
+            version: archive.version ?? 1,
+            updatedAt: archivedAt,
+            total: (archive.total ?? 0) + findings.length,
+            batches: [batch, ...(archive.batches ?? [])],
+          },
+        };
       });
-
-      // 账本清空——桌面腾干净了，但内容全在归档账里。
-      await writeJson(this.findingsPath, []);
-      return { archived: findings.length, reason, archivedBy, archivedAt };
+      return result;
     });
   }
 
@@ -271,16 +274,7 @@ export class PatrolStore {
 
   /** @returns {Promise<any>} */
   async #readArchive() {
-    const value = await readJson(this.archivePath, null);
-    if (!value || typeof value !== 'object') {
-      return { version: 1, updatedAt: 0, total: 0, batches: [] };
-    }
-    return {
-      version: Number(value.version) || 1,
-      updatedAt: Number(value.updatedAt) || 0,
-      total: Number(value.total) || 0,
-      batches: Array.isArray(value.batches) ? value.batches : [],
-    };
+    return this.state.section('archive');
   }
 
   /**
@@ -331,8 +325,7 @@ export class PatrolStore {
    * @returns {Promise<{ requestId: string, sessionId: string, answeredAt: number, answer: string, rationale: string }[]>}
    */
   async listAnswered() {
-    const value = await readJson(this.answeredPath, []);
-    return Array.isArray(value) ? value : [];
+    return this.state.section('answered');
   }
 
   /**
@@ -340,17 +333,29 @@ export class PatrolStore {
    */
   async markAnswered(entry) {
     return this.enqueue(async () => {
-      const answered = await this.listAnswered();
-      if (answered.some((item) => item.requestId === entry.requestId)) return answered;
-      answered.unshift({
-        requestId: entry.requestId,
-        sessionId: entry.sessionId,
-        answeredAt: Date.now(),
-        answer: entry.answer ?? '',
-        rationale: entry.rationale ?? '',
-        optionIds: entry.optionIds ?? [],
+      /** @type {any[]} */
+      let answered = [];
+      /** @type {boolean} */
+      let recorded = false;
+      await this.state.update((state) => {
+        const current = [...state.answered];
+        // 幂等：同一个 requestId 只记一次。
+        if (!current.some((item) => item.requestId === entry.requestId)) {
+          current.unshift({
+            requestId: entry.requestId,
+            sessionId: entry.sessionId,
+            answeredAt: Date.now(),
+            answer: entry.answer ?? '',
+            rationale: entry.rationale ?? '',
+            optionIds: entry.optionIds ?? [],
+          });
+          recorded = true;
+        }
+        answered = current.slice(0, 200);
+        return { ...state, answered: answered };
       });
-      await writeJson(this.answeredPath, answered.slice(0, 200));
+      // 记过的那张卡**不再记一次投递**——否则同一张卡会在派工账里出现两条。
+      if (!recorded) return answered;
 
       // Answering a card on the boss's behalf IS a delivery: the duty boss sends its
       // conclusion to the owner session with the runtime's `session send`. That is a
@@ -445,8 +450,7 @@ export class PatrolStore {
 
   /** @returns {Promise<PatrolConfig>} */
   async getConfig() {
-    const value = await readJson(this.configPath, {});
-    const stored = value && typeof value === 'object' ? value : {};
+    const stored = await this.state.section('config');
     // Only the fields this config actually has. A key left over from a removed feature
     // (`autoDispatch` was one — the boss decides for itself now) must not ride along in the
     // live state file forever: it reads like a switch that still does something.
@@ -465,7 +469,8 @@ export class PatrolStore {
    * Only the fields this call actually sets are written. The duty path writes `lastRunAt`
    * and the board writes `lastBoardPatrolAt` + `lastSignature` — they are different fields,
    * so a whole-file overwrite that re-stamps the other writer's fields would drop them.
-   * The file is therefore re-read immediately before writing, and only the patch rides on top.
+   * The store therefore re-reads inside the lock immediately before writing, and only the
+   * patch rides on top.
    *
    * **没传的字段不动。** 调用方只说「把桌面上界改成 30」，不该顺手把巡检开关关掉——
    * `undefined` 会被 `Boolean(undefined)` 变成 `false`，那是一次没人要求的改动。
@@ -490,40 +495,21 @@ export class PatrolStore {
       }
     }
     return this.enqueue(async () => {
-      // Re-read right before writing so a concurrent writer's fields survive.
-      const latest = await this.getConfig();
-      const next = { ...latest, ...changes };
-      await writeJson(this.configPath, next);
+      let next = {};
+      await this.state.update((state) => {
+        // 锁内重读：并发的另一个写者的字段不能被这次补丁盖掉。
+        const latest = { ...DEFAULT_CONFIG };
+        for (const key of Object.keys(DEFAULT_CONFIG)) {
+          if (state.config[key] !== undefined) latest[key] = state.config[key];
+        }
+        next = { ...latest, ...changes };
+        // 桌面上界归一后**再写**：配置文件里手改的字符串，写回去的是一个合法的数。
+        next.deskLimit = deskLimitFrom(next);
+        return { ...state, config: next };
+      });
       return next;
     });
   }
-}
-
-async function readJson(path, fallback) {
-  try {
-    const raw = await readFile(path, 'utf8');
-    if (!raw.trim()) return fallback;
-    return JSON.parse(raw);
-  } catch {
-    return fallback;
-  }
-}
-
-/**
- * Write JSON atomically.
- *
- * The temporary file name must be UNIQUE per write. Two writers share this file: the duty
- * path runs as its own process (`patrol-cli report`) and the board is a long-running Node
- * process. With a fixed `<path>.tmp` name, one writer's rename moves the file out from under
- * the other and the rename fails — and a failed write in the duty path means the handover
- * timestamp is silently lost, so the board reports a duty boss that actually handed over.
- *
- * The implementation now lives in `json-ledger.mjs`, shared with `persistence.mjs` — the
- * other writer of the dispatch ledger — so there is one discipline rather than two that
- * can drift apart.
- */
-async function writeJson(path, value) {
-  await writeJsonAtomic(path, value);
 }
 
 /**

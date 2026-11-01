@@ -58,23 +58,29 @@ test('迁移只发生一次：store 在了就直接用它', async () => {
   }
 });
 
-test('老账坏了：迁移要报错，不能搬出一份空账', async () => {
+test('老账坏了：那一段读不出来，但别的段照常', async () => {
   const dir = tmpDir();
   try {
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'dispatches.json'), '[{"id":"dsp-1",', 'utf8');
+    writeFileSync(join(dir, 'acks.json'), JSON.stringify(['item-1']), 'utf8');
 
     const store = new BoardStateStore(dir);
+    const state = await store.read();
+
+    // 坏的那一段**记住它坏**，不是当成空段。
+    assert.deepEqual(state.acks, ['item-1'], '别的段照常搬进来');
+    assert.ok(state.damaged?.dispatches, '坏的那段被标记出来');
+    assert.match(String(state.damaged.dispatches), /JSON/, '标记里说清是哪个文件、报了什么');
+
+    // 读那一段要报错——当成空账就等于「记录明明在、读回来像没有」。
     await assert.rejects(
-      () => store.read(),
-      /不是合法 JSON|读不了|损坏/,
-      '读不出来的老账必须报错——当成空账就等于把一份还在的账读成没有',
+      () => store.section('dispatches'),
+      /读不出来/,
+      '读不出来的账必须报错，不能当成空账',
     );
-    assert.equal(
-      existsSync(join(dir, BOARD_STATE_FILE)),
-      false,
-      '迁移没成功就不该留下 store 文件——那会让下一轮以为「本来就没有记录」',
-    );
+    // 别的段不受牵连。
+    assert.deepEqual(await store.section('acks'), ['item-1']);
   } finally {
     cleanupDir(dir);
   }

@@ -35,6 +35,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { appendAlert } from './watchdog-alerts.mjs';
+import { BoardStateStore } from './board-state.mjs';
 import { computeDutyEvidence, DEFAULT_DUTY_INTERVAL_MINUTES } from './view-model.mjs';
 import { DUTY_CRON_SEED, readDutyChain } from './duty-chain.mjs';
 import { computeDutyGap, describeDuration, resolveNow } from './duty-gap.mjs';
@@ -62,7 +63,6 @@ export const RUNTIME_IDLE_GRACE_MS = 292_000;
 export const HEARTBEAT_CHECK_INTERVAL_MS = 60_000;
 
 const STATE_FILE = 'duty-heartbeat.json';
-const CONFIG_FILE = 'patrol-config.json';
 
 /**
  * What the heartbeat asks the boss to do.
@@ -142,8 +142,9 @@ export async function writeHeartbeatState(dataDir, state) {
  */
 export async function readDutyConfig(dataDir) {
   try {
-    const raw = await readFile(join(dataDir, CONFIG_FILE), 'utf8');
-    const value = JSON.parse(raw);
+    // 配置住在板面状态的单一 store 里（`board-state.mjs`）——心跳是**独立进程**，
+    // 它读的是同一个 store 的同一段，不是另一个文件。
+    const value = await new BoardStateStore(dataDir).section('config');
     const minutes = Number(value?.dutyIntervalMinutes);
     const pinned = typeof value?.dutyCronId === 'string' ? value.dutyCronId.trim() : '';
     return {

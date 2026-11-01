@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { appendAlert, buildDutyTruthLine } from '../miniapps/mimic-tear/miniapp/node/watchdog-alerts.mjs';
 import { runWatchdog } from '../miniapps/mimic-tear/miniapp/node/watchdog.mjs';
 import { PatrolStore } from '../miniapps/mimic-tear/miniapp/node/patrol-store.mjs';
-import { tmpDir, cleanupDir } from './helpers/fixture.mjs';
+import { readBoardSection, tmpDir, cleanupDir } from './helpers/fixture.mjs';
 
 const MINUTE = 60_000;
 const NOW = Date.parse('2026-10-20T12:00:00Z');
@@ -91,7 +91,9 @@ test('app 关着也能落盘——写的是板面自己的数据目录', async (
     // Nothing here needs a Mini App runtime: the watchdog is a separate process and the
     // board's data directory is all it writes to. That is the whole point of this path.
     await appendAlert(dir, record({ identity: 'stale:999' }));
-    assert.ok(existsSync(join(dir, 'patrol.json')), 'patrol.json 必须被写出来');
+    // 结论账住在板面状态的单一 store 里（`board-state.json`）——app 关着也一样落盘。
+    const findings = readBoardSection(dir, 'findings');
+    assert.equal(findings.length, 1, '结论必须写进板面自己的数据目录');
     assert.ok(existsSync(join(dir, 'watchdog-alert.log')), '告警日志也要写');
   } finally {
     cleanupDir(dir);

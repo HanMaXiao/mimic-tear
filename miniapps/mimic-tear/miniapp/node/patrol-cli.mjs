@@ -45,12 +45,28 @@ const flag = (name, fallback) => {
   return index === -1 ? fallback : args[index + 1];
 };
 
+/**
+ * All the values of a flag that may appear more than once.
+ *
+ * @param {string} name
+ * @returns {string[]}
+ */
+const allFlags = (name) => args
+  .reduce((values, arg, index) => {
+    if (arg === `--${name}` && args[index + 1]) values.push(args[index + 1]);
+    return values;
+  }, [])
+  .filter(Boolean);
+
 const dataDir = resolve(flag('data-dir', join(homedir(), '.minimax', 'v2', 'plugin-data', 'liveboards', 'mimic-tear')));
 const dbPath = resolve(flag('db', process.env.MIMIC_RUNTIME_DB
   ?? join(homedir(), '.minimax', 'v2', 'sqlite', 'runtime-state.sqlite')));
 
 /** Flags that take a value; the value must not be mistaken for a positional argument. */
-const VALUE_FLAGS = new Set(['--data-dir', '--db', '--file', '--scope']);
+const VALUE_FLAGS = new Set([
+  '--data-dir', '--db', '--file', '--scope',
+  '--answer', '--rationale', '--session-id', '--option-id',
+]);
 
 /**
  * The positional arguments only.
@@ -75,10 +91,7 @@ if (command === 'paths') {
   print({
     dataDir,
     dbPath,
-    findings: patrol.findingsPath,
-    answered: patrol.answeredPath,
-    config: patrol.configPath,
-    // 板面自己的那几本账（派工 / 确认 / 排除 / 大哥会话）收口进这一个 store。
+    // 结论账、已答项、归档账、巡检配置都在板面状态的**单一 store** 里。
     state: patrol.state.path,
     managed: managed.path,
     dutyIntent: dutyIntent.path,
@@ -673,9 +686,9 @@ if (command === 'facts') {
     scope,
     fullScopeRequested: wantRaw,
     paths: {
-      report: join(dataDir, 'patrol.json'),
-      answered: join(dataDir, 'patrol-answered.json'),
-      archive: join(dataDir, 'patrol-archive.json'),
+      // 结论账、已答项、归档账、巡检配置都在板面状态的**单一 store** 里
+      // （`board-state.json`）。老文件只在第一次访问时被读一次，之后不再被读。
+      state: patrol.state.path,
       db: dbPath,
     },
     // Which projects the boss is allowed to manage. The user grants this explicitly; the
@@ -1001,7 +1014,50 @@ if (command === 'archive') {
   process.exit(0);
 }
 
-process.stderr.write(`未知命令：${command}\n可用：facts / report / withdraw / dismiss / archive / gap / manage / duty-cron / paths\n`);
+if (command === 'answer') {
+  // 大哥替大老板回答一张待答的卡。
+  //
+  // **这条命令存在的理由是「大哥不再手写账」。** 在它之前，代答是往
+  // `patrol-answered.json` 里手写 JSON——那个文件一旦被收进板面状态 store，大哥再手写，
+  // 板面就再也读不到了（代答会**静默失效**：大老板以为有人替他答了，其实没有）。
+  // 给它一条命令，手和账就脱钩了。
+  //
+  // **只记答案**：不写结论、**不打交班戳**。交班戳是值班大哥的（见 `report` 里的说明），
+  // 代答一张卡不是交班。
+  //
+  // 幂等：同一个 `requestId` 记过一次就不再记（`markAnswered` 自己判）。
+  const positional = positionalArgs();
+  const [, requestId] = positional;
+  const answer = flag('answer', '');
+  const rationale = flag('rationale', '');
+  const sessionId = flag('session-id', '');
+  const optionIds = allFlags('option-id');
+  if (!requestId || !answer) {
+    process.stderr.write('用法：answer <requestId> --answer "<选项>" [--rationale "<理由>"] [--session-id <会话id>] [--option-id <id>]\n');
+    store.close();
+    process.exit(2);
+  }
+  const answered = await patrol.markAnswered({
+    requestId,
+    sessionId,
+    answer,
+    rationale,
+    optionIds,
+  });
+  print({
+    ok: true,
+    requestId,
+    sessionId,
+    answer,
+    rationale,
+    optionIds,
+    answered: answered.length,
+  });
+  store.close();
+  process.exit(0);
+}
+
+process.stderr.write(`未知命令：${command}\n可用：facts / report / answer / withdraw / dismiss / archive / gap / manage / duty-cron / paths\n`);
 store.close();
 process.exit(2);
 
