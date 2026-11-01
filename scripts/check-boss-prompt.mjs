@@ -88,6 +88,14 @@ const CLAIMS = [
     term: 'bossSuggestion',
     why: '待答清单里每张卡带 `bossSuggestion`——给过建议的卡仍在清单里，它还卡着、还没人点',
   },
+  {
+    term: 'ownerAgent',
+    why: '归属表说明这条线由谁承接（`ownerAgent`）、那个负责会话是不是仿身泪滴自己建的（`owned`）',
+  },
+  {
+    term: '有归属的事件不归你管',
+    why: '直通真的投出去了：有归属的事件由程序直接投给负责会话，大哥只管没有归属的事',
+  },
 ];
 
 function printHelp() {
