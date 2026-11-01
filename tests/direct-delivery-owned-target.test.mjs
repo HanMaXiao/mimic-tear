@@ -43,6 +43,7 @@ function fakeAgent(options = {}) {
     async create(input) {
       calls.push({ op: 'create', ...input });
       if (options.failCreate) throw new Error('create failed');
+      if (options.createReturnsEmpty) return { sessionId: '' };
       return { sessionId: options.sessionId ?? 'mvs-owned-created' };
     },
     async run(input) {
@@ -354,6 +355,36 @@ test('建会话失败：既不写会话也不记账', async () => {
     assert.equal(agent.calls.filter((call) => call.op === 'run').length, 0, '会话没建出来就不该投递');
     const entry = (await subscriptions.list()).find((item) => item.projectName === 'alpha');
     assert.equal(entry.ownerSessionId, null, '没建出话就不能写回一个假的 sessionId');
+    assert.equal(entry.delivered.length, 0);
+  } finally {
+    store?.close();
+    cleanupDir(dir);
+  }
+});
+
+test('建出来的会话没有 id：这一轮不算数，也不写回', async () => {
+  const dir = tmpDir();
+  let store = null;
+  try {
+    const dataDir = join(dir, 'data');
+    const managed = new ManagedProjects(dataDir);
+    const subscriptions = new ThreadSubscriptions(dataDir);
+    const patrol = new PatrolStore(dataDir);
+
+    await managed.add('alpha', '大老板点名要盯这个');
+    await subscriptions.add('alpha', null, '大老板拍板：这条线改由 Mini App 自建负责会话', {
+      projectId: 1,
+      ownerAgent: 'mavis',
+    });
+
+    const agent = fakeAgent({ createReturnsEmpty: true });
+    store = RuntimeStore.open(makeRuntimeDb(dir));
+    const { outcome } = await runRound({ store, patrol, managed, subscriptions, agent });
+
+    assert.equal(outcome.delivered, 0, '没有会话可投，就不算投出去了');
+    assert.equal(agent.calls.filter((call) => call.op === 'run').length, 0, '不许拿一个不存在的会话去投');
+    const entry = (await subscriptions.list()).find((item) => item.projectName === 'alpha');
+    assert.equal(entry.ownerSessionId, null);
     assert.equal(entry.delivered.length, 0);
   } finally {
     store?.close();
