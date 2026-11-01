@@ -80,6 +80,14 @@ const CLAIMS = [
     term: 'patrol-cli answer',
     why: '代答走命令、不再手写 `patrol-answered.json`——那份账已收进单一 store，手写的板面读不到',
   },
+  {
+    term: 'hostStatus',
+    why: '「卡开没开」只认运行时：建议记了不等于卡翻了，`hostStatus` 才是那张卡的开合状态',
+  },
+  {
+    term: 'bossSuggestion',
+    why: '待答清单里每张卡带 `bossSuggestion`——给过建议的卡仍在清单里，它还卡着、还没人点',
+  },
 ];
 
 function printHelp() {

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -41,7 +41,22 @@ function runGuard(files) {
 const PROMPT = 'state/cron-prompt-duty-canonical.txt';
 const SKILL = 'skills/mimic-tear-boss/SKILL.md';
 
-const FULL = 'triggers.candidates recall delivered threads patrol-cli answer';
+/**
+ * 约定的那些词，**直接从守卫脚本里读出来**。
+ *
+ * 以前这里是手写的一串字，于是「加了新约定」这件事必须记得回来改这个假文本——
+ * 2026-11-01 就漏了一次：守卫加了 `hostStatus` / `bossSuggestion` 两条约定，
+ * 假文本没跟上，契约测试当场变红。**假样本必须从契约本身长出来**，不能手抄。
+ */
+const CLAIM_TERMS = [...readFileSync(SCRIPT, 'utf8').matchAll(/term:\s*'([^']+)'/g)]
+  .map((match) => match[1]);
+
+const FULL = CLAIM_TERMS.join(' ');
+
+test('约定的词必须真的读到了（假文本不是空的）', () => {
+  assert.ok(CLAIM_TERMS.length >= 5, `从守卫里读到的约定只有 ${CLAIM_TERMS.length} 条——读法坏了`);
+  assert.ok(FULL.includes('patrol-cli answer'), '假文本里必须含多词的约定');
+});
 
 test('两份文本都提到关键概念 → 通过', () => {
   const result = runGuard({ [PROMPT]: FULL, [SKILL]: FULL });
